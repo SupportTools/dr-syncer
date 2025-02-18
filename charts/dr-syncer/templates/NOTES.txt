@@ -1,0 +1,99 @@
+Thank you for installing {{ .Chart.Name }}.
+
+The DR Syncer controller has been deployed to your cluster. To verify the installation:
+
+1. Check the controller deployment:
+   kubectl get deployment {{ include "dr-syncer.fullname" . }} -n {{ .Release.Namespace }}
+
+2. Check the controller logs:
+   kubectl logs -f deployment/{{ include "dr-syncer.fullname" . }} -n {{ .Release.Namespace }}
+
+To set up disaster recovery replication:
+
+1. Create a Secret with the kubeconfig for your remote cluster:
+
+   kubectl create secret generic remote-cluster-kubeconfig \
+     --from-file=kubeconfig=/path/to/remote-cluster-kubeconfig
+
+2. Create a RemoteCluster resource:
+
+   apiVersion: dr-syncer.io/v1alpha1
+   kind: RemoteCluster
+   metadata:
+     name: remote-cluster
+     namespace: dr-syncer
+   spec:
+     kubeconfigSecretRef:
+       name: remote-cluster-kubeconfig
+       namespace: dr-syncer
+     defaultSchedule: "*/15 * * * *"  # Every 15 minutes
+     defaultResourceTypes:
+       - configmaps
+       - secrets
+       - deployments
+       - services
+       - ingresses
+
+3. Create Replication resources:
+
+   apiVersion: dr-syncer.io/v1alpha1
+   kind: Replication
+   metadata:
+     name: hello-world
+     namespace: dr-syncer
+   spec:
+     sourceCluster: dr-syncer-nyc3
+     destinationCluster: dr-syncer-sfo3
+     sourceNamespace: hello-world-production
+     destinationNamespace: hello-world-dr
+     schedule: "*/5 * * * *"  # Run every 5 minutes
+     resourceTypes:
+       - configmaps
+       - secrets
+       - deployments
+       - services
+       - ingresses
+
+The controller will automatically:
+- Validate and maintain connection to the remote cluster
+- Create destination namespaces as needed
+- Synchronize resources according to the replication configuration
+- Scale down deployments in the DR cluster (unless overridden)
+- Automatically resync based on the configured schedules
+
+Special Features:
+
+1. Exclude Resources from Replication:
+   Add the label 'dr-syncer.io/ignore: "true"' to any resource you want to exclude from replication:
+
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: local-only-config
+     labels:
+       dr-syncer.io/ignore: "true"
+   data:
+     key: value
+
+2. Control DR Deployment Scaling:
+   By default, deployments are scaled to 0 replicas in DR clusters. Override this behavior with the 'dr-syncer.io/scale-override' label:
+
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: critical-service
+     labels:
+       dr-syncer.io/scale-override: "2"  # Maintain 2 replicas in DR
+   spec:
+     replicas: 3  # Production replicas
+
+Monitoring and Troubleshooting:
+- Check replication status:
+  kubectl get replications -n {{ .Release.Namespace }}
+- View sync logs:
+  kubectl logs -f deployment/{{ include "dr-syncer.fullname" . }} -n {{ .Release.Namespace }}
+- Monitor metrics:
+  The controller exposes Prometheus metrics on :8080/metrics
+
+For more information and examples, visit:
+https://github.com/supporttools/dr-syncer

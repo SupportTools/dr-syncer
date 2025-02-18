@@ -1,0 +1,128 @@
+# DR Syncer Controller Project Rules
+
+## Project Patterns
+
+1. Code Organization
+   - Go package structure follows domain-driven design
+   - Controllers in controllers/ directory
+   - API types in api/v1alpha1/
+   - Shared utilities in pkg/
+   - Helm charts in charts/
+
+2. Implementation Patterns
+   - Use controller-runtime framework patterns
+   - Follow Kubernetes operator best practices
+   - Implement reconciliation loops for resources
+   - Handle errors with proper logging and status updates
+
+3. Resource Handling
+   - Zero replicas for deployments in DR clusters
+   - Preserve metadata with annotations
+   - Handle service recreation carefully
+   - Manage resource versions properly
+
+## Development Workflow
+
+1. Code Changes
+   - Update CRDs when modifying API types
+   - Run tests before committing
+   - Update documentation for API changes
+   - Follow Go code style guidelines
+
+2. Testing
+   - Write unit tests for business logic
+   - Include integration tests for controllers
+   - Test Helm chart modifications
+   - Verify CRD generation
+
+3. Documentation
+   - Keep API documentation current
+   - Update examples for new features
+   - Maintain troubleshooting guides
+   - Document configuration options
+
+## Project Intelligence
+
+1. Critical Paths
+   - Resource synchronization logic in controllers/sync/
+   - CRD definitions in api/v1alpha1/
+   - Helm chart configuration in charts/dr-syncer/
+   - Main controller setup in main.go
+
+2. Key Considerations
+   - Resource version handling is critical
+   - Leader election must be properly configured
+   - RBAC permissions are essential
+   - Resource filtering needs careful handling
+
+3. Common Challenges
+   - Resource version conflicts
+   - Network connectivity issues
+   - Memory usage during large syncs
+   - Service recreation timing
+
+4. Best Practices
+   - Use proper error handling
+   - Implement thorough logging
+   - Maintain clear status updates
+   - Follow controller-runtime patterns
+
+## Tool Usage
+
+1. Development Tools
+   - Use controller-gen for CRD generation
+   - Employ go test for testing
+   - Utilize kubectl for deployment
+   - Use Helm for packaging
+
+2. Build Process
+   - Generate CRDs before building
+   - Run tests after changes
+   - Update Helm chart versions
+   - Document API modifications
+
+3. Deployment
+   - Verify RBAC configuration
+   - Check CRD installation
+   - Validate Helm values
+   - Monitor resource usage
+
+## Project Evolution
+
+1. Version Control
+   - Follow semantic versioning
+   - Update CRD versions appropriately
+   - Maintain changelog
+   - Tag releases properly
+
+2. Feature Development
+   - Plan for backward compatibility
+   - Consider upgrade paths
+   - Document breaking changes
+   - Test migration scenarios
+
+3. Performance Considerations
+   - Monitor memory usage
+   - Track reconciliation times
+   - Optimize resource filtering
+   - Handle large-scale deployments
+
+## Maintenance Guidelines
+
+1. Regular Tasks
+   - Update dependencies
+   - Review error patterns
+   - Monitor resource usage
+   - Update documentation
+
+2. Troubleshooting
+   - Check controller logs
+   - Verify RBAC permissions
+   - Validate CRD installation
+   - Monitor sync status
+
+3. Updates
+   - Test CRD migrations
+   - Verify Helm upgrades
+   - Update documentation
+   - Check compatibility

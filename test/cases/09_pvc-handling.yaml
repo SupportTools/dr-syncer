@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pvc-test
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: standard-pvc
+  namespace: pvc-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: custom-pvc
+  namespace: pvc-test
+  labels:
+    # Override storage class for this specific PVC
+    dr-syncer.io/storage-class: "fast-storage"
+    # Override access mode for this specific PVC
+    dr-syncer.io/access-mode: "ReadWriteMany"
+    # Force PV sync for this specific PVC (requires storage class support)
+    dr-syncer.io/sync-pv: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-test-replication
+  namespace: pvc-test
+spec:
+  sourceCluster: source
+  destinationCluster: destination
+  sourceNamespace: pvc-test
+  destinationNamespace: pvc-test-dr
+  resourceTypes:
+    - persistentvolumeclaims
+  pvcConfig:
+    # By default, don't sync PVs (clone PVC with new PV)
+    syncPersistentVolumes: false
+    # Map storage classes between clusters
+    storageClassMappings:
+      - from: "standard"
+        to: "standard-dr"
+      - from: "fast-storage"
+        to: "fast-storage-dr"
+    # Map access modes between clusters
+    accessModeMappings:
+      - from: "ReadWriteOnce"
+        to: "ReadWriteOnce"
+      - from: "ReadWriteMany"
+        to: "ReadWriteMany"

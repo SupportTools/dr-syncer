@@ -1,0 +1,249 @@
+{{- if .Values.crds.install }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: remoteclusters.dr-syncer.io
+  annotations:
+    {{- if .Values.crds.keepOnUninstall }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    "meta.helm.sh/release-name": {{ .Release.Name }}
+    "meta.helm.sh/release-namespace": {{ .Release.Namespace }}
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+    "app.kubernetes.io/managed-by": "Helm"
+spec:
+  group: dr-syncer.io
+  names:
+    kind: RemoteCluster
+    listKind: RemoteClusterList
+    plural: remoteclusters
+    singular: remotecluster
+    shortNames:
+      - rc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - jsonPath: .status.health
+          name: Health
+          type: string
+          description: "Health status of the remote cluster connection"
+        - jsonPath: .status.lastSyncTime
+          name: Last Sync
+          type: date
+          description: "Time of last successful synchronization"
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: ["kubeconfigSecretRef"]
+              properties:
+                kubeconfigSecretRef:
+                  type: object
+                  required: ["name", "namespace"]
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    key:
+                      type: string
+                defaultSchedule:
+                  type: string
+                defaultResourceTypes:
+                  type: array
+                  items:
+                    type: string
+            status:
+              type: object
+              properties:
+                lastSyncTime:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: ["type", "status"]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: namespacereplications.dr-syncer.io
+  annotations:
+    {{- if .Values.crds.keepOnUninstall }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    "meta.helm.sh/release-name": {{ .Release.Name }}
+    "meta.helm.sh/release-namespace": {{ .Release.Namespace }}
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+    "app.kubernetes.io/managed-by": "Helm"
+spec:
+  group: dr-syncer.io
+  names:
+    kind: NamespaceReplication
+    listKind: NamespaceReplicationList
+    plural: namespacereplications
+    singular: namespacereplication
+    shortNames:
+      - nsrep
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - jsonPath: .spec.sourceNamespace
+          name: Source
+          type: string
+        - jsonPath: .spec.destinationNamespace
+          name: Destination
+          type: string
+        - jsonPath: .spec.sourceCluster
+          name: Source Cluster
+          type: string
+        - jsonPath: .spec.destinationCluster
+          name: Destination Cluster
+          type: string
+        - jsonPath: .spec.schedule
+          name: Schedule
+          type: string
+        - jsonPath: .status.lastSyncTime
+          name: Last Sync
+          type: date
+        - jsonPath: .status.nextSyncTime
+          name: Next Sync
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: ["sourceCluster", "destinationCluster", "sourceNamespace", "destinationNamespace"]
+              properties:
+                sourceCluster:
+                  type: string
+                destinationCluster:
+                  type: string
+                sourceNamespace:
+                  type: string
+                destinationNamespace:
+                  type: string
+                schedule:
+                  type: string
+                  description: "Crontab format schedule for replication (e.g. '*/5 * * * *' for every 5 minutes). If not specified, uses the cluster's default schedule."
+                  pattern: '^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|(\*/([1-9]|[1-5][0-9])))\s+(\*|([0-9]|1[0-9]|2[0-3])|(\*/([1-9]|1[0-9]|2[0-3])))\s+(\*|([1-9]|[12][0-9]|3[01])|(\*/([1-9]|1[0-9]|2[0-9]|3[01])))\s+(\*|([1-9]|1[0-2])|(\*/([1-9]|1[0-2])))\s+(\*|([0-6])|(\*/[1-7]))$'
+                resourceTypes:
+                  type: array
+                  items:
+                    type: string
+                scaleToZero:
+                  type: boolean
+                  description: "Whether to scale deployments to zero replicas in the destination cluster. Defaults to true if not specified."
+                  default: true
+                namespaceScopedResources:
+                  type: array
+                  description: "List of namespace scoped resources to replicate. Use '*' to replicate all namespace scoped resources, or specify individual resources in the format 'resource.group' (e.g. 'widgets.example.com')"
+                  items:
+                    type: string
+                pvcConfig:
+                  type: object
+                  description: "Configuration for PVC replication"
+                  properties:
+                    syncPersistentVolumes:
+                      type: boolean
+                      description: "Whether to sync PVs when StorageClass supports multi-cluster attachment. Defaults to false."
+                      default: false
+                    storageClassMappings:
+                      type: array
+                      description: "Mappings to convert storage classes between clusters"
+                      items:
+                        type: object
+                        required: ["from", "to"]
+                        properties:
+                          from:
+                            type: string
+                            description: "Source cluster storage class name"
+                          to:
+                            type: string
+                            description: "Destination cluster storage class name"
+                    accessModeMappings:
+                      type: array
+                      description: "Mappings to convert access modes between clusters"
+                      items:
+                        type: object
+                        required: ["from", "to"]
+                        properties:
+                          from:
+                            type: string
+                            description: "Source cluster access mode (e.g. ReadWriteOnce)"
+                          to:
+                            type: string
+                            description: "Destination cluster access mode"
+            status:
+              type: object
+              properties:
+                lastSyncTime:
+                  type: string
+                  format: date-time
+                nextSyncTime:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: ["type", "status"]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+      subresources:
+        status: {}
+{{- end }}

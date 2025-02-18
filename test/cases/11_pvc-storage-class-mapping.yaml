@@ -1,0 +1,76 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-storage-class-mapping
+  namespace: dr-sync-test-case11
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case11
+  destinationNamespace: dr-sync-test-case11
+  resourceTypes:
+    - PersistentVolumeClaims
+  pvcConfig:
+    storageClassMappings:
+      - from: "standard"
+        to: "premium-rwo"
+      - from: "local-storage"
+        to: "local-premium"
+---
+# Test standard storage class mapping
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-standard
+  namespace: dr-sync-test-case11
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+# Test local storage class mapping
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-local
+  namespace: dr-sync-test-case11
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-storage
+---
+# Test unmapped storage class (should use original)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-unmapped
+  namespace: dr-sync-test-case11
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: fast-storage
+---
+# Test storage class override via label
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-override
+  namespace: dr-sync-test-case11
+  labels:
+    dr-syncer.io/storage-class: "high-performance"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard

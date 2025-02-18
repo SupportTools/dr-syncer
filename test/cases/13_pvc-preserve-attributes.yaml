@@ -1,0 +1,78 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-preserve-attributes
+  namespace: dr-sync-test-case13
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case13
+  destinationNamespace: dr-sync-test-case13
+  resourceTypes:
+    - PersistentVolumeClaims
+  pvcConfig:
+    preserveVolumeAttributes: true
+---
+# Test PVC with filesystem attributes
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-fs-attrs
+  namespace: dr-sync-test-case13
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+---
+# Test PVC with block volume attributes
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-block
+  namespace: dr-sync-test-case13
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: standard
+  volumeMode: Block
+---
+# Test PVC with mount options
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-mount-opts
+  namespace: dr-sync-test-case13
+  annotations:
+    volume.beta.kubernetes.io/mount-options: "rw,nfsvers=4.1,hard"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-storage
+---
+# Test PVC with volume attributes
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-volume-attrs
+  namespace: dr-sync-test-case13
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+  volumeAttributes:
+    iops: "5000"
+    throughput: "125"
+    encrypted: "true"

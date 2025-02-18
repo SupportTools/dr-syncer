@@ -1,0 +1,126 @@
+# Active Context: DR Syncer Controller
+
+## Current State
+
+### Implementation Status
+1. Core Controller
+   - Manager implementation complete
+   - Reconciler patterns established
+   - Resource handling implemented
+   - Health checks integrated
+
+2. Custom Resources
+   - RemoteCluster CRD implemented
+   - NamespaceReplication CRD implemented
+   - NamespaceMapping CRD implemented
+   - Resource definitions validated
+
+3. Synchronization
+   - Resource type filtering working
+   - Deployment handling implemented
+   - Service/Ingress management functional
+   - Scheduling system operational
+
+### Active Development Areas
+
+1. Resource Synchronization
+   - Current Focus: Resource type handling
+   - Status: Implementing core sync logic
+   - Priority: High
+   - Next Steps: Testing and validation
+
+2. Controller Logic
+   - Current Focus: Reconciliation patterns
+   - Status: Core implementation complete
+   - Priority: Medium
+   - Next Steps: Optimization and error handling
+
+3. Deployment
+   - Current Focus: Helm chart development
+   - Status: Basic chart implemented
+   - Priority: Medium
+   - Next Steps: Chart testing and documentation
+
+## Recent Changes
+
+1. Core Features
+   - Added resource ignore label feature
+   - Added deployment scale override feature
+   - Implemented leader election
+   - Added health/readiness probes
+   - Integrated metrics server
+   - Enhanced error handling
+
+2. Resource Management
+   - Added deployment replica handling
+   - Implemented service recreation
+   - Enhanced resource filtering
+   - Added exclusion capabilities
+
+3. Documentation
+   - Updated API documentation
+   - Enhanced deployment guides
+   - Added troubleshooting section
+   - Improved examples
+
+## Active Decisions
+
+1. Architecture
+   - Using controller-runtime framework
+   - Implementing custom reconcilers
+   - Leveraging Kubernetes native patterns
+   - Following operator best practices
+
+2. Implementation
+   - Go as primary language
+   - CRDs for configuration
+   - Helm for deployment
+   - Prometheus for metrics
+
+3. Resource Handling
+   - Zero replicas in DR clusters (with label override support)
+   - Preserving deployment metadata
+   - Managing service recreation
+   - Handling ingress configuration
+   - Scale override via 'dr-syncer.io/scale-override' label
+   - Resource exclusion via 'dr-syncer.io/ignore' label
+
+## Current Considerations
+
+1. Technical
+   - Performance optimization
+   - Resource usage monitoring
+   - Error handling improvements
+   - Testing coverage
+
+2. Operational
+   - Deployment strategies
+   - Monitoring setup
+   - Backup procedures
+   - Upgrade processes
+
+3. Documentation
+   - API reference updates
+   - Example enhancements
+   - Troubleshooting guides
+   - Best practices
+
+## Next Steps
+
+1. Short Term
+   - Complete resource sync testing
+   - Enhance error handling
+   - Update documentation
+   - Implement monitoring
+
+2. Medium Term
+   - Optimize performance
+   - Enhance Helm chart
+   - Add advanced features
+   - Improve user guides
+
+3. Long Term
+   - Scale testing
+   - Security enhancements
+   - Feature expansion
+   - Community engagement

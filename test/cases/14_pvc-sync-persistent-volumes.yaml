@@ -1,0 +1,74 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-sync-persistent-volumes
+  namespace: dr-sync-test-case14
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case14
+  destinationNamespace: dr-sync-test-case14
+  resourceTypes:
+    - PersistentVolumeClaims
+  pvcConfig:
+    syncPersistentVolumes: true
+---
+# Test basic PVC with PV sync
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-pv-sync
+  namespace: dr-sync-test-case14
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-multi-attach
+---
+# Test PVC with PV sync disabled via label
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-no-pv-sync
+  namespace: dr-sync-test-case14
+  labels:
+    dr-syncer.io/sync-pv: "false"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-multi-attach
+---
+# Test PVC with non-multi-attach storage class (should create new PV)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-standard
+  namespace: dr-sync-test-case14
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+# Test PVC with PV sync enabled via label (overrides default)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-force-pv-sync
+  namespace: dr-sync-test-case14
+  labels:
+    dr-syncer.io/sync-pv: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard

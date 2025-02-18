@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dr-syncer.fullname" . }}
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "dr-syncer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "dr-syncer.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "dr-syncer.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.controller.logLevel | quote }}
+            - name: METRICS_ADDR
+              value: {{ .Values.controller.metricsAddr | quote }}
+            - name: PROBE_ADDR
+              value: {{ .Values.controller.probeAddr | quote }}
+            - name: ENABLE_LEADER_ELECTION
+              value: {{ .Values.controller.enableLeaderElection | quote }}
+            - name: LEADER_ELECTION_ID
+              value: {{ .Values.controller.leaderElectionID | quote }}
+            - name: SYNC_INTERVAL
+              value: {{ .Values.controller.syncInterval | quote }}
+            - name: RESYNC_PERIOD
+              value: {{ .Values.controller.resyncPeriod | quote }}
+            - name: IGNORE_CERT
+              value: {{ .Values.controller.ignoreCert | quote }}
+          ports:
+            - name: metrics
+              containerPort: {{ trimPrefix ":" .Values.controller.metricsAddr }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ trimPrefix ":" .Values.controller.probeAddr }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,34 @@
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: Cluster
+metadata:
+  name: dr-syncer-nyc3
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-nyc3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - configmaps
+    - secrets
+    - deployments
+    - services
+    - ingresses
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: Cluster
+metadata:
+  name: dr-syncer-sfo3
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-sfo3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - configmaps
+    - secrets
+    - deployments
+    - services
+    - ingresses
+---
+

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: dr-syncer
+description: A Kubernetes controller for managing disaster recovery synchronization between clusters
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - disaster-recovery
+  - replication
+maintainers:
+  - name: Support Tools
+    url: https://github.com/supporttools

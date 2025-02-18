@@ -1,0 +1,61 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: service-recreation-test
+  namespace: dr-sync-test-case06
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case06
+  destinationNamespace: dr-sync-test-case06
+  resourceTypes:
+    - services
+    - deployments
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  namespace: dr-sync-test-case06
+  labels:
+    app: test-app
+    environment: production
+    team: platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case06
+  labels:
+    app: test-app
+    environment: production
+    team: platform
+  annotations:
+    service.beta.kubernetes.io/description: "Test service for metadata preservation"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "80"
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP

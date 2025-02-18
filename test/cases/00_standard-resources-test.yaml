@@ -1,0 +1,96 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: standard-resources-test
+  namespace: dr-sync-test-case00
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case00
+  destinationNamespace: dr-sync-test-case00
+  resourceTypes:
+    - ConfigMaps
+    - Secrets
+    - Deployments
+    - Services
+    - Ingresses
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case00
+data:
+  key1: value1
+  key2: value2
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+  namespace: dr-sync-test-case00
+type: Opaque
+data:
+  username: dXNlcm5hbWU= # base64 encoded "username"
+  password: cGFzc3dvcmQ= # base64 encoded "password"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case00
+  labels:
+    app: test-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case00
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress
+  namespace: dr-sync-test-case00
+spec:
+  rules:
+    - host: dr-sync-test-case00.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 80
