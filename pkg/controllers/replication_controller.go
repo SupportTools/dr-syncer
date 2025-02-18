@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/sync"
+	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -151,7 +151,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Ensure destination namespace exists
-	if err := sync.EnsureNamespaceExists(ctx, destClient, dstNamespace, replication.Spec.SourceNamespace); err != nil {
+	if err := syncer.EnsureNamespaceExists(ctx, destClient, dstNamespace, replication.Spec.SourceNamespace); err != nil {
 		log.Error(err, "failed to ensure namespace exists", "namespace", dstNamespace)
 		return ctrl.Result{}, err
 	}
@@ -172,7 +172,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Sync resources
-	deploymentScales, err := sync.SyncNamespaceResources(ctx, sourceClient, destClient, replication.Spec.SourceNamespace, dstNamespace, resourceTypes, scaleToZero, replication.Spec.NamespaceScopedResources, replication.Spec.PVCConfig)
+	deploymentScales, err := syncer.SyncNamespaceResources(ctx, sourceClient, destClient, r.Client, replication.Spec.SourceNamespace, dstNamespace, resourceTypes, scaleToZero, replication.Spec.NamespaceScopedResources, replication.Spec.PVCConfig, replication.Spec.ImmutableResourceConfig)
 	if err != nil {
 		log.Error(err, "failed to sync namespace resources",
 			"sourceNamespace", replication.Spec.SourceNamespace,
@@ -185,7 +185,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	replication.Status.LastSyncTime = &now
 	replication.Status.DeploymentScales = make([]drv1alpha1.DeploymentScale, len(deploymentScales))
 	for i, scale := range deploymentScales {
-		syncTime := metav1.NewTime(scale.SyncTime)
+		syncTime := scale.SyncTime
 		replication.Status.DeploymentScales[i] = drv1alpha1.DeploymentScale{
 			Name:             scale.Name,
 			OriginalReplicas: scale.Replicas,

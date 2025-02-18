@@ -2,8 +2,6 @@ module github.com/supporttools/dr-syncer
 
 go 1.23.0
 
-toolchain go1.23.5
-
 require (
 	github.com/go-logr/logr v1.4.2
 	github.com/robfig/cron/v3 v3.0.1

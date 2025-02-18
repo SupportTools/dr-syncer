@@ -125,6 +125,46 @@ func (in *PVCConfig) DeepCopy() *PVCConfig {
 	return out
 }
 
+// ImmutableResourceHandling defines how to handle immutable resources
+// +kubebuilder:validation:Enum=NoChange;Recreate;RecreateWithPodDrain;PartialUpdate;ForceUpdate
+type ImmutableResourceHandling string
+
+const (
+	// NoChange skips updating immutable resources and logs a warning
+	NoChange ImmutableResourceHandling = "NoChange"
+	// Recreate deletes and recreates the resource with new values
+	Recreate ImmutableResourceHandling = "Recreate"
+	// RecreateWithPodDrain safely drains pods before recreating the resource
+	RecreateWithPodDrain ImmutableResourceHandling = "RecreateWithPodDrain"
+	// PartialUpdate applies only mutable field changes
+	PartialUpdate ImmutableResourceHandling = "PartialUpdate"
+	// ForceUpdate force deletes (with cascading) and recreates the resource
+	ForceUpdate ImmutableResourceHandling = "ForceUpdate"
+)
+
+// ImmutableResourceConfig defines configuration for handling immutable resources
+type ImmutableResourceConfig struct {
+	// DefaultHandling determines how immutable resources are handled by default
+	// +optional
+	// +kubebuilder:default=NoChange
+	DefaultHandling ImmutableResourceHandling `json:"defaultHandling,omitempty"`
+
+	// ResourceOverrides allows specifying handling for specific resource types
+	// Format: "resource.group" (e.g. "statefulsets.apps")
+	// +optional
+	ResourceOverrides map[string]ImmutableResourceHandling `json:"resourceOverrides,omitempty"`
+
+	// DrainTimeout specifies how long to wait for pod draining when using RecreateWithPodDrain
+	// +optional
+	// +kubebuilder:default="5m"
+	DrainTimeout *metav1.Duration `json:"drainTimeout,omitempty"`
+
+	// ForceDeleteTimeout specifies how long to wait for force deletion to complete
+	// +optional
+	// +kubebuilder:default="2m"
+	ForceDeleteTimeout *metav1.Duration `json:"forceDeleteTimeout,omitempty"`
+}
+
 type ReplicationSpec struct {
 	// SourceCluster is the name of the source cluster
 	SourceCluster string `json:"sourceCluster"`
@@ -160,6 +200,42 @@ type ReplicationSpec struct {
 	// PVCConfig defines configuration for PVC replication
 	// +optional
 	PVCConfig *PVCConfig `json:"pvcConfig,omitempty"`
+
+	// ImmutableResourceConfig defines how to handle immutable resources
+	// +optional
+	ImmutableResourceConfig *ImmutableResourceConfig `json:"immutableResourceConfig,omitempty"`
+}
+
+// DeepCopyInto copies ImmutableResourceConfig into out
+func (in *ImmutableResourceConfig) DeepCopyInto(out *ImmutableResourceConfig) {
+	*out = *in
+	if in.ResourceOverrides != nil {
+		in, out := &in.ResourceOverrides, &out.ResourceOverrides
+		*out = make(map[string]ImmutableResourceHandling, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
+	if in.DrainTimeout != nil {
+		in, out := &in.DrainTimeout, &out.DrainTimeout
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.ForceDeleteTimeout != nil {
+		in, out := &in.ForceDeleteTimeout, &out.ForceDeleteTimeout
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of ImmutableResourceConfig
+func (in *ImmutableResourceConfig) DeepCopy() *ImmutableResourceConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(ImmutableResourceConfig)
+	in.DeepCopyInto(out)
+	return out
 }
 
 // DeepCopyInto copies ReplicationSpec into out
@@ -183,6 +259,11 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 	if in.PVCConfig != nil {
 		in, out := &in.PVCConfig, &out.PVCConfig
 		*out = new(PVCConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.ImmutableResourceConfig != nil {
+		in, out := &in.ImmutableResourceConfig, &out.ImmutableResourceConfig
+		*out = new(ImmutableResourceConfig)
 		(*in).DeepCopyInto(*out)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 )
 
 const (
@@ -53,14 +54,14 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 	}
 
 	for _, pvc := range pvcs.Items {
-		if shouldIgnoreResource(&pvc) {
+		if utils.ShouldIgnoreResource(&pvc) {
 			continue
 		}
 
 		// Create a copy of the PVC for destination
 		destPVC := pvc.DeepCopy()
 		destPVC.Namespace = dstNamespace
-		sanitizeMetadata(destPVC)
+		utils.SanitizeMetadata(destPVC)
 
 		// Handle storage class mapping
 		srcStorageClass := pvc.Spec.StorageClassName
@@ -154,7 +155,7 @@ func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernet
 
 	// Create a copy of the PV for destination
 	destPV := pv.DeepCopy()
-	sanitizeMetadata(destPV)
+	utils.SanitizeMetadata(destPV)
 
 	// Create or update PV in destination
 	existing, err := destClient.CoreV1().PersistentVolumes().Get(ctx, destPV.Name, metav1.GetOptions{})
