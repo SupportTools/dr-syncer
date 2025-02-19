@@ -40,65 +40,96 @@ spec:
           type: date
       schema:
         openAPIV3Schema:
-          type: object
-          required: ["spec"]
+          description: RemoteCluster is the Schema for the remote clusters API
           properties:
             apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation
+                of an object. Servers should convert recognized schemas to the latest
+                internal value, and may reject unrecognized values.'
               type: string
             kind:
+              description: 'Kind is a string value representing the REST resource this
+                object represents.'
               type: string
             metadata:
               type: object
             spec:
-              type: object
-              required: ["kubeconfigSecretRef"]
               properties:
                 kubeconfigSecretRef:
-                  type: object
-                  required: ["name", "namespace"]
+                  description: KubeconfigSecretRef references a secret containing the kubeconfig for this cluster
                   properties:
+                    key:
+                      description: Key is the key in the secret containing the kubeconfig
+                      type: string
                     name:
+                      description: Name is the name of the secret
                       type: string
                     namespace:
+                      description: Namespace is the namespace of the secret
                       type: string
-                    key:
-                      type: string
+                  required:
+                  - name
+                  - namespace
+                  type: object
                 defaultSchedule:
+                  description: DefaultSchedule is the default schedule for replications using this cluster
                   type: string
                 defaultResourceTypes:
-                  type: array
+                  description: DefaultResourceTypes is the default list of resource types to replicate
                   items:
                     type: string
-            status:
-              type: object
-              properties:
-                lastSyncTime:
-                  type: string
-                  format: date-time
-                conditions:
                   type: array
+              required:
+              - kubeconfigSecretRef
+              type: object
+            status:
+              properties:
+                health:
+                  description: Health represents the current health status of the remote cluster connection
+                  type: string
+                lastSyncTime:
+                  description: LastSyncTime is the last time the cluster was synced
+                  format: date-time
+                  type: string
+                conditions:
+                  description: Conditions represent the latest available observations of the cluster's state
                   items:
-                    type: object
-                    required: ["type", "status"]
+                    description: "Condition contains details for one aspect of the current state of this API Resource."
                     properties:
-                      type:
-                        type: string
-                      status:
-                        type: string
-                      reason:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        format: date-time
                         type: string
                       message:
+                        description: message is a human readable message indicating details about the transition.
                         type: string
-                      lastTransitionTime:
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        format: int64
+                        type: integer
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
                         type: string
-                        format: date-time
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                      type:
+                        description: type of condition in CamelCase.
+                        type: string
+                    required:
+                    - status
+                    - type
+                    type: object
+                  type: array
+              type: object
+          type: object
       subresources:
         status: {}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: namespacereplications.dr-syncer.io
+  name: replications.dr-syncer.io
   annotations:
     {{- if .Values.crds.keepOnUninstall }}
     "helm.sh/resource-policy": keep
@@ -111,12 +142,10 @@ metadata:
 spec:
   group: dr-syncer.io
   names:
-    kind: NamespaceReplication
-    listKind: NamespaceReplicationList
-    plural: namespacereplications
-    singular: namespacereplication
-    shortNames:
-      - nsrep
+    kind: Replication
+    listKind: ReplicationList
+    plural: replications
+    singular: replication
   scope: Namespaced
   versions:
     - name: v1alpha1
@@ -135,9 +164,15 @@ spec:
         - jsonPath: .spec.destinationCluster
           name: Destination Cluster
           type: string
-        - jsonPath: .spec.schedule
-          name: Schedule
+        - jsonPath: .status.phase
+          name: Phase
           type: string
+        - jsonPath: .status.syncStats.successfulSyncs
+          name: Synced
+          type: integer
+        - jsonPath: .status.syncStats.failedSyncs
+          name: Failed
+          type: integer
         - jsonPath: .status.lastSyncTime
           name: Last Sync
           type: date
@@ -146,104 +181,286 @@ spec:
           type: date
       schema:
         openAPIV3Schema:
-          type: object
-          required: ["spec"]
+          description: Replication defines a namespace replication configuration
           properties:
             apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation
+                of an object. Servers should convert recognized schemas to the latest
+                internal value, and may reject unrecognized values.'
               type: string
             kind:
+              description: 'Kind is a string value representing the REST resource this
+                object represents.'
               type: string
             metadata:
               type: object
             spec:
-              type: object
-              required: ["sourceCluster", "destinationCluster", "sourceNamespace", "destinationNamespace"]
               properties:
+                replicationMode:
+                  description: ReplicationMode defines how replication should be performed
+                  enum:
+                  - Scheduled
+                  - Continuous
+                  - Manual
+                  type: string
+                  default: Scheduled
+                continuous:
+                  description: Continuous configuration for continuous replication mode
+                  properties:
+                    watchResources:
+                      description: WatchResources enables real-time resource watching
+                      type: boolean
+                      default: true
+                    backgroundSyncInterval:
+                      description: BackgroundSyncInterval defines the interval for full sync
+                      type: string
+                      pattern: ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+                      default: "1h"
+                  type: object
                 sourceCluster:
+                  description: SourceCluster is the name of the source cluster
                   type: string
                 destinationCluster:
+                  description: DestinationCluster is the name of the destination cluster
                   type: string
                 sourceNamespace:
+                  description: SourceNamespace is the namespace to replicate from
                   type: string
                 destinationNamespace:
+                  description: DestinationNamespace is the namespace to replicate to
                   type: string
                 schedule:
+                  description: Schedule is the crontab schedule for replication
                   type: string
-                  description: "Crontab format schedule for replication (e.g. '*/5 * * * *' for every 5 minutes). If not specified, uses the cluster's default schedule."
-                  pattern: '^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|(\*/([1-9]|[1-5][0-9])))\s+(\*|([0-9]|1[0-9]|2[0-3])|(\*/([1-9]|1[0-9]|2[0-3])))\s+(\*|([1-9]|[12][0-9]|3[01])|(\*/([1-9]|1[0-9]|2[0-9]|3[01])))\s+(\*|([1-9]|1[0-2])|(\*/([1-9]|1[0-2])))\s+(\*|([0-6])|(\*/[1-7]))$'
+                  pattern: ^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*/[0-9]+|\*\/[1-5][0-9])\s+(\*|([0-9]|1[0-9]|2[0-3])|\*/[0-9]+)\s+(\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*/[0-9]+)\s+(\*|([1-9]|1[0-2])|\*/[0-9]+)\s+(\*|([0-6])|\*/[0-9]+)$
                 resourceTypes:
-                  type: array
+                  description: ResourceTypes is the list of resource types to replicate
                   items:
                     type: string
+                  type: array
                 scaleToZero:
+                  description: ScaleToZero determines whether deployments should be scaled to zero replicas in the destination cluster
                   type: boolean
-                  description: "Whether to scale deployments to zero replicas in the destination cluster. Defaults to true if not specified."
                   default: true
                 namespaceScopedResources:
-                  type: array
-                  description: "List of namespace scoped resources to replicate. Use '*' to replicate all namespace scoped resources, or specify individual resources in the format 'resource.group' (e.g. 'widgets.example.com')"
+                  description: NamespaceScopedResources is a list of namespace scoped resources to replicate
                   items:
                     type: string
+                  type: array
                 pvcConfig:
-                  type: object
-                  description: "Configuration for PVC replication"
+                  description: PVCConfig defines configuration for PVC replication
                   properties:
                     syncPersistentVolumes:
+                      description: SyncPersistentVolumes determines whether to sync PVs when StorageClass supports multi-cluster attachment
                       type: boolean
-                      description: "Whether to sync PVs when StorageClass supports multi-cluster attachment. Defaults to false."
                       default: false
                     storageClassMappings:
-                      type: array
-                      description: "Mappings to convert storage classes between clusters"
+                      description: StorageClassMappings defines mappings to convert storage classes between clusters
                       items:
-                        type: object
-                        required: ["from", "to"]
                         properties:
                           from:
+                            description: From is the source cluster storage class name
                             type: string
-                            description: "Source cluster storage class name"
                           to:
+                            description: To is the destination cluster storage class name
                             type: string
-                            description: "Destination cluster storage class name"
+                        required:
+                        - from
+                        - to
+                        type: object
+                      type: array
                     accessModeMappings:
-                      type: array
-                      description: "Mappings to convert access modes between clusters"
+                      description: AccessModeMappings defines mappings to convert access modes between clusters
                       items:
-                        type: object
-                        required: ["from", "to"]
                         properties:
                           from:
+                            description: From is the source cluster access mode
                             type: string
-                            description: "Source cluster access mode (e.g. ReadWriteOnce)"
                           to:
+                            description: To is the destination cluster access mode
                             type: string
-                            description: "Destination cluster access mode"
-            status:
+                        required:
+                        - from
+                        - to
+                        type: object
+                      type: array
+                    preserveVolumeAttributes:
+                      description: PreserveVolumeAttributes determines whether to preserve volume attributes when creating new PVs
+                      type: boolean
+                      default: false
+                  type: object
+                immutableResourceConfig:
+                  description: ImmutableResourceConfig defines how to handle immutable resources
+                  properties:
+                    defaultHandling:
+                      description: DefaultHandling determines how immutable resources are handled by default
+                      enum:
+                      - NoChange
+                      - Recreate
+                      - RecreateWithPodDrain
+                      - PartialUpdate
+                      - ForceUpdate
+                      type: string
+                      default: NoChange
+                    resourceOverrides:
+                      additionalProperties:
+                        enum:
+                        - NoChange
+                        - Recreate
+                        - RecreateWithPodDrain
+                        - PartialUpdate
+                        - ForceUpdate
+                        type: string
+                      description: ResourceOverrides allows specifying handling for specific resource types
+                      type: object
+                    drainTimeout:
+                      description: DrainTimeout specifies how long to wait for pod draining when using RecreateWithPodDrain
+                      type: string
+                      default: "5m"
+                    forceDeleteTimeout:
+                      description: ForceDeleteTimeout specifies how long to wait for force deletion to complete
+                      type: string
+                      default: "2m"
+                  type: object
+              required:
+              - sourceCluster
+              - destinationCluster
+              - sourceNamespace
+              - destinationNamespace
               type: object
+            status:
               properties:
+                phase:
+                  description: Phase represents the current phase of the replication (Pending, Running, Completed, Failed)
+                  type: string
+                  enum:
+                  - Pending
+                  - Running
+                  - Completed
+                  - Failed
                 lastSyncTime:
-                  type: string
+                  description: LastSyncTime is the last time the replication was synced
                   format: date-time
+                  type: string
                 nextSyncTime:
-                  type: string
+                  description: NextSyncTime is the next scheduled sync time (Scheduled mode only)
                   format: date-time
-                conditions:
-                  type: array
+                  type: string
+                lastWatchEvent:
+                  description: LastWatchEvent is the last time a watch event was processed (Continuous mode only)
+                  format: date-time
+                  type: string
+                syncStats:
+                  description: SyncStats provides statistics about the last sync operation
+                  properties:
+                    totalResources:
+                      description: Total number of resources processed
+                      type: integer
+                    successfulSyncs:
+                      description: Number of resources successfully synced
+                      type: integer
+                    failedSyncs:
+                      description: Number of resources that failed to sync
+                      type: integer
+                    lastSyncDuration:
+                      description: Duration of the last sync operation
+                      type: string
+                  type: object
+                resourceStatus:
+                  description: ResourceStatus tracks the sync status of individual resources
                   items:
-                    type: object
-                    required: ["type", "status"]
                     properties:
-                      type:
+                      kind:
+                        description: Kind of the resource
+                        type: string
+                      name:
+                        description: Name of the resource
+                        type: string
+                      namespace:
+                        description: Namespace of the resource
                         type: string
                       status:
+                        description: Current sync status (Pending, InProgress, Synced, Failed)
                         type: string
-                      reason:
+                      lastSyncTime:
+                        description: Time of last sync attempt
+                        format: date-time
+                        type: string
+                      error:
+                        description: Error message if sync failed
+                        type: string
+                    required:
+                    - kind
+                    - name
+                    - status
+                    type: object
+                  type: array
+                lastError:
+                  description: Details of the last error encountered during sync
+                  properties:
+                    message:
+                      description: Error message
+                      type: string
+                    time:
+                      description: Time when the error occurred
+                      format: date-time
+                      type: string
+                    resource:
+                      description: Resource that caused the error (if applicable)
+                      type: string
+                  type: object
+                conditions:
+                  description: Conditions represent the latest available observations of the replication's state
+                  items:
+                    description: "Condition contains details for one aspect of the current state of this API Resource."
+                    properties:
+                      lastTransitionTime:
+                        description: lastTransitionTime is the last time the condition transitioned from one status to another.
+                        format: date-time
                         type: string
                       message:
+                        description: message is a human readable message indicating details about the transition.
                         type: string
-                      lastTransitionTime:
+                      observedGeneration:
+                        description: observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        format: int64
+                        type: integer
+                      reason:
+                        description: reason contains a programmatic identifier indicating the reason for the condition's last transition.
                         type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        type: string
+                      type:
+                        description: type of condition in CamelCase.
+                        type: string
+                    required:
+                    - status
+                    - type
+                    type: object
+                  type: array
+                deploymentScales:
+                  description: DeploymentScales stores the original scale values of deployments
+                  items:
+                    properties:
+                      name:
+                        description: Name is the name of the deployment
+                        type: string
+                      originalReplicas:
+                        description: OriginalReplicas is the number of replicas in the source cluster
+                        type: integer
+                        format: int32
+                      lastSyncedAt:
+                        description: LastSyncedAt is when the scale was last synced
                         format: date-time
+                        type: string
+                    required:
+                    - name
+                    - originalReplicas
+                    type: object
+                  type: array
+              type: object
+          type: object
       subresources:
         status: {}
 {{- end }}

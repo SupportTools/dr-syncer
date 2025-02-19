@@ -3,27 +3,25 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/robfig/cron/v3"
+	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ReplicationReconciler reconciles a Replication object
 type ReplicationReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	modeHandler  *modes.ModeReconciler
 }
 
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications,verbs=get;list;watch;create;update;patch;delete
@@ -36,6 +34,7 @@ type ReplicationReconciler struct {
 //+kubebuilder:rbac:groups="networking.k8s.io",resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch
 
 // Reconcile handles the reconciliation loop for Replication resources
 func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -51,174 +50,161 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Get source client
-	var sourceClient kubernetes.Interface
+	// Initialize clients if not already done
+	if r.modeHandler == nil {
 
-	// Fetch the source Cluster instance
-	var sourceCluster drv1alpha1.RemoteCluster
-	if err := r.Get(ctx, client.ObjectKey{
-		Name:      replication.Spec.SourceCluster,
-		Namespace: replication.ObjectMeta.Namespace,
-	}, &sourceCluster); err != nil {
-		log.Error(err, "unable to fetch source RemoteCluster")
-		return ctrl.Result{}, err
-	}
-
-	// Get the source kubeconfig secret
-	var sourceKubeconfigSecret corev1.Secret
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: sourceCluster.Spec.KubeconfigSecretRef.Namespace,
-		Name:      sourceCluster.Spec.KubeconfigSecretRef.Name,
-	}, &sourceKubeconfigSecret); err != nil {
-		log.Error(err, "unable to fetch source kubeconfig secret")
-		return ctrl.Result{}, err
-	}
-
-	// Get the source kubeconfig data
-	sourceKubeconfigKey := sourceCluster.Spec.KubeconfigSecretRef.Key
-	if sourceKubeconfigKey == "" {
-		sourceKubeconfigKey = "kubeconfig"
-	}
-	sourceKubeconfigData, ok := sourceKubeconfigSecret.Data[sourceKubeconfigKey]
-	if !ok {
-		err := fmt.Errorf("kubeconfig key %s not found in source secret", sourceKubeconfigKey)
-		log.Error(err, "invalid source kubeconfig secret")
-		return ctrl.Result{}, err
-	}
-
-	// Create source cluster client
-	sourceConfig, err := clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
-	if err != nil {
-		log.Error(err, "unable to create source REST config from kubeconfig")
-		return ctrl.Result{}, err
-	}
-
-	sourceClient, err = kubernetes.NewForConfig(sourceConfig)
-	if err != nil {
-		log.Error(err, "unable to create source Kubernetes client")
-		return ctrl.Result{}, err
-	}
-
-	// Fetch the destination Cluster instance
-	var destCluster drv1alpha1.RemoteCluster
-	if err := r.Get(ctx, client.ObjectKey{
-		Name:      replication.Spec.DestinationCluster,
-		Namespace: replication.ObjectMeta.Namespace,
-	}, &destCluster); err != nil {
-		log.Error(err, "unable to fetch destination RemoteCluster")
-		return ctrl.Result{}, err
-	}
-
-	// Get the destination kubeconfig secret
-	var destKubeconfigSecret corev1.Secret
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
-		Name:      destCluster.Spec.KubeconfigSecretRef.Name,
-	}, &destKubeconfigSecret); err != nil {
-		log.Error(err, "unable to fetch destination kubeconfig secret")
-		return ctrl.Result{}, err
-	}
-
-	// Get the destination kubeconfig data
-	destKubeconfigKey := destCluster.Spec.KubeconfigSecretRef.Key
-	if destKubeconfigKey == "" {
-		destKubeconfigKey = "kubeconfig"
-	}
-	destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
-	if !ok {
-		err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
-		log.Error(err, "invalid destination kubeconfig secret")
-		return ctrl.Result{}, err
-	}
-
-	// Create destination cluster client
-	destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
-	if err != nil {
-		log.Error(err, "unable to create destination REST config from kubeconfig")
-		return ctrl.Result{}, err
-	}
-
-	destClient, err := kubernetes.NewForConfig(destConfig)
-	if err != nil {
-		log.Error(err, "unable to create destination Kubernetes client")
-		return ctrl.Result{}, err
-	}
-
-	// Determine destination namespace
-	dstNamespace := replication.Spec.DestinationNamespace
-	if dstNamespace == "" {
-		dstNamespace = replication.Spec.SourceNamespace
-	}
-
-	// Ensure destination namespace exists
-	if err := syncer.EnsureNamespaceExists(ctx, destClient, dstNamespace, replication.Spec.SourceNamespace); err != nil {
-		log.Error(err, "failed to ensure namespace exists", "namespace", dstNamespace)
-		return ctrl.Result{}, err
-	}
-
-	// Determine resource types to sync
-	resourceTypes := replication.Spec.ResourceTypes
-	if len(resourceTypes) == 0 {
-		resourceTypes = destCluster.Spec.DefaultResourceTypes
-	}
-	if len(resourceTypes) == 0 {
-		resourceTypes = []string{"configmaps", "secrets", "deployments", "services", "ingresses"}
-	}
-
-	// Determine if deployments should be scaled to zero
-	scaleToZero := true // default to true
-	if replication.Spec.ScaleToZero != nil {
-		scaleToZero = *replication.Spec.ScaleToZero
-	}
-
-	// Sync resources
-	deploymentScales, err := syncer.SyncNamespaceResources(ctx, sourceClient, destClient, r.Client, replication.Spec.SourceNamespace, dstNamespace, resourceTypes, scaleToZero, replication.Spec.NamespaceScopedResources, replication.Spec.PVCConfig, replication.Spec.ImmutableResourceConfig)
-	if err != nil {
-		log.Error(err, "failed to sync namespace resources",
-			"sourceNamespace", replication.Spec.SourceNamespace,
-			"destinationNamespace", dstNamespace)
-		return ctrl.Result{}, err
-	}
-
-	// Update status with deployment scales and sync time
-	now := metav1.Now()
-	replication.Status.LastSyncTime = &now
-	replication.Status.DeploymentScales = make([]drv1alpha1.DeploymentScale, len(deploymentScales))
-	for i, scale := range deploymentScales {
-		syncTime := scale.SyncTime
-		replication.Status.DeploymentScales[i] = drv1alpha1.DeploymentScale{
-			Name:             scale.Name,
-			OriginalReplicas: scale.Replicas,
-			LastSyncedAt:     &syncTime,
+		// Fetch the source Cluster instance
+		var sourceCluster drv1alpha1.RemoteCluster
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      replication.Spec.SourceCluster,
+			Namespace: replication.ObjectMeta.Namespace,
+		}, &sourceCluster); err != nil {
+			log.Error(err, "unable to fetch source RemoteCluster")
+			return ctrl.Result{}, err
 		}
+
+		// Get the source kubeconfig secret
+		var sourceKubeconfigSecret corev1.Secret
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: sourceCluster.Spec.KubeconfigSecretRef.Namespace,
+			Name:      sourceCluster.Spec.KubeconfigSecretRef.Name,
+		}, &sourceKubeconfigSecret); err != nil {
+			log.Error(err, "unable to fetch source kubeconfig secret")
+			return ctrl.Result{}, err
+		}
+
+		// Get the source kubeconfig data
+		sourceKubeconfigKey := sourceCluster.Spec.KubeconfigSecretRef.Key
+		if sourceKubeconfigKey == "" {
+			sourceKubeconfigKey = "kubeconfig"
+		}
+		sourceKubeconfigData, ok := sourceKubeconfigSecret.Data[sourceKubeconfigKey]
+		if !ok {
+			err := fmt.Errorf("kubeconfig key %s not found in source secret", sourceKubeconfigKey)
+			log.Error(err, "invalid source kubeconfig secret")
+			return ctrl.Result{}, err
+		}
+
+		// Create source cluster clients
+		sourceConfig, err := clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
+		if err != nil {
+			log.Error(err, "unable to create source REST config from kubeconfig")
+			return ctrl.Result{}, err
+		}
+
+		sourceClient, err := kubernetes.NewForConfig(sourceConfig)
+		if err != nil {
+			log.Error(err, "unable to create source Kubernetes client")
+			return ctrl.Result{}, err
+		}
+
+		sourceDynamicClient, err := dynamic.NewForConfig(sourceConfig)
+		if err != nil {
+			log.Error(err, "unable to create source dynamic client")
+			return ctrl.Result{}, err
+		}
+
+		// Fetch the destination Cluster instance
+		var destCluster drv1alpha1.RemoteCluster
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      replication.Spec.DestinationCluster,
+			Namespace: replication.ObjectMeta.Namespace,
+		}, &destCluster); err != nil {
+			log.Error(err, "unable to fetch destination RemoteCluster")
+			return ctrl.Result{}, err
+		}
+
+		// Get the destination kubeconfig secret
+		var destKubeconfigSecret corev1.Secret
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
+			Name:      destCluster.Spec.KubeconfigSecretRef.Name,
+		}, &destKubeconfigSecret); err != nil {
+			log.Error(err, "unable to fetch destination kubeconfig secret")
+			return ctrl.Result{}, err
+		}
+
+		// Get the destination kubeconfig data
+		destKubeconfigKey := destCluster.Spec.KubeconfigSecretRef.Key
+		if destKubeconfigKey == "" {
+			destKubeconfigKey = "kubeconfig"
+		}
+		destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
+		if !ok {
+			err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
+			log.Error(err, "invalid destination kubeconfig secret")
+			return ctrl.Result{}, err
+		}
+
+		// Create destination cluster clients
+		destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
+		if err != nil {
+			log.Error(err, "unable to create destination REST config from kubeconfig")
+			return ctrl.Result{}, err
+		}
+
+		destClient, err := kubernetes.NewForConfig(destConfig)
+		if err != nil {
+			log.Error(err, "unable to create destination Kubernetes client")
+			return ctrl.Result{}, err
+		}
+
+		destDynamicClient, err := dynamic.NewForConfig(destConfig)
+		if err != nil {
+			log.Error(err, "unable to create destination dynamic client")
+			return ctrl.Result{}, err
+		}
+
+		// Initialize mode handler
+		r.modeHandler = modes.NewModeReconciler(
+			r.Client,
+			sourceDynamicClient,
+			destDynamicClient,
+			sourceClient,
+			destClient,
+		)
 	}
 
-	// Calculate next sync time based on schedule
-	schedule := replication.Spec.Schedule
-	if schedule == "" {
-		schedule = destCluster.Spec.DefaultSchedule
-	}
-	if schedule == "" {
-		schedule = "*/5 * * * *" // Default to every 5 minutes
+	// Handle reconciliation based on replication mode
+	var result ctrl.Result
+	var err error
+
+	switch replication.Spec.ReplicationMode {
+	case drv1alpha1.ContinuousMode:
+		result, err = r.modeHandler.ReconcileContinuous(ctx, &replication)
+	case drv1alpha1.ManualMode:
+		result, err = r.modeHandler.ReconcileManual(ctx, &replication)
+	default: // Scheduled mode is the default
+		result, err = r.modeHandler.ReconcileScheduled(ctx, &replication)
 	}
 
-	cronSchedule, err := cron.ParseStandard(schedule)
 	if err != nil {
-		log.Error(err, "invalid schedule", "schedule", schedule)
+		log.Error(err, "failed to reconcile replication")
 		return ctrl.Result{}, err
 	}
 
-	nextRun := cronSchedule.Next(time.Now())
-	nextRunTime := metav1.NewTime(nextRun)
-	replication.Status.NextSyncTime = &nextRunTime
+	// Get the latest version of the Replication object before updating status
+	var latestReplication drv1alpha1.Replication
+	if err := r.Get(ctx, req.NamespacedName, &latestReplication); err != nil {
+		log.Error(err, "unable to fetch latest Replication")
+		return ctrl.Result{}, err
+	}
 
-	if err := r.Status().Update(ctx, &replication); err != nil {
+	// Copy the status from our working copy to the latest version
+	latestReplication.Status = replication.Status
+
+	// Update status on the latest version
+	if err := r.Status().Update(ctx, &latestReplication); err != nil {
+		if apierrors.IsConflict(err) {
+			// If we hit a conflict, requeue to try again
+			log.Info("conflict updating status, will retry")
+			return ctrl.Result{Requeue: true}, nil
+		}
 		log.Error(err, "unable to update Replication status")
 		return ctrl.Result{}, err
 	}
 
-	// Requeue at the next scheduled time
-	return ctrl.Result{RequeueAfter: time.Until(nextRun)}, nil
+	return result, nil
 }
 
 // SetupWithManager sets up the controller with the Manager

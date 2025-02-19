@@ -1,19 +1,12 @@
-apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+---
+apiVersion: v1
+kind: Namespace
 metadata:
-  name: standard-resources-test
-  namespace: dr-sync-test-case02
-spec:
-  sourceCluster: source-cluster
-  destinationCluster: dest-cluster
-  sourceNamespace: dr-sync-test-case02
-  destinationNamespace: dr-sync-test-case02
-  resourceTypes:
-    - ConfigMaps
-    - Secrets
-    - Deployments
-    - Services
-    - Ingresses
+  name: dr-sync-test-case02
+  labels:
+    dr-syncer.io/test-case: "02"
+    dr-syncer.io/test-name: "ignore-label"
+    dr-syncer.io/test: "true"
 ---
 apiVersion: v1
 kind: ConfigMap

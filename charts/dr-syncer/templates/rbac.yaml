@@ -21,21 +21,9 @@ rules:
   - replications
   - replications/status
   - replications/finalizers
-  - clusters
-  - clusters/status
-  - clusters/finalizers
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - ""
-  resources:
-  - leases
+  - remoteclusters
+  - remoteclusters/status
+  - remoteclusters/finalizers
   verbs:
   - get
   - list
@@ -68,6 +56,7 @@ subjects:
   name: {{ include "dr-syncer.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
 ---
+{{- if .Values.namespaceRBAC.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -80,7 +69,20 @@ rules:
   - ""
   resources:
   - secrets
+  - events
   verbs:
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - "coordination.k8s.io"
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
   - create
   - update
   - patch
@@ -101,4 +103,5 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "dr-syncer.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

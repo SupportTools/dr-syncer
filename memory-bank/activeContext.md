@@ -44,12 +44,12 @@
 ## Recent Changes
 
 1. Core Features
-   - Added resource ignore label feature
-   - Added deployment scale override feature
-   - Implemented leader election
-   - Added health/readiness probes
-   - Integrated metrics server
-   - Enhanced error handling
+   - Enhanced Replication CRD with comprehensive status fields
+   - Added phase tracking (Pending, Running, Completed, Failed)
+   - Added sync statistics tracking
+   - Added per-resource status tracking
+   - Added detailed error reporting
+   - Improved kubectl visibility with new columns
 
 2. Resource Management
    - Added deployment replica handling
@@ -62,6 +62,13 @@
    - Enhanced deployment guides
    - Added troubleshooting section
    - Improved examples
+   - Documented CRD update process
+
+4. CRD Management
+   - Established CRD update workflow
+   - Documented all CRD locations
+   - Added automation tools usage
+   - Created validation checklist
 
 ## Active Decisions
 
@@ -104,6 +111,12 @@
    - Example enhancements
    - Troubleshooting guides
    - Best practices
+
+4. CRD Updates
+   - Maintain CRD sync across locations
+   - Automate CRD generation where possible
+   - Validate CRDs before deployment
+   - Keep documentation current with changes
 
 ## Next Steps
 

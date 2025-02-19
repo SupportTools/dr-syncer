@@ -51,7 +51,22 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if _, err := cron.ParseStandard(cluster.Spec.DefaultSchedule); err != nil {
 			logger.Error(err, "invalid default schedule", "schedule", cluster.Spec.DefaultSchedule)
 			setRemoteClusterCondition(&cluster, "ScheduleValid", metav1.ConditionFalse, "InvalidSchedule", err.Error())
-			_ = r.Status().Update(ctx, &cluster)
+			// Get latest version before updating status
+			var latest drv1alpha1.RemoteCluster
+			if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
+				logger.Error(err, "unable to fetch latest RemoteCluster")
+				return ctrl.Result{}, err
+			}
+			latest.Status = cluster.Status
+			if err := r.Status().Update(ctx, &latest); err != nil {
+				if apierrors.IsConflict(err) {
+					logger.Info("conflict updating status, will retry")
+					return ctrl.Result{Requeue: true}, nil
+				}
+				logger.Error(err, "unable to update RemoteCluster status")
+				return ctrl.Result{}, err
+			}
+			cluster.Status = latest.Status
 			return ctrl.Result{RequeueAfter: time.Minute}, err
 		}
 		setRemoteClusterCondition(&cluster, "ScheduleValid", metav1.ConditionTrue, "ScheduleValidated", "Default schedule is valid")
@@ -65,7 +80,22 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}, &kubeconfigSecret); err != nil {
 		logger.Error(err, "unable to fetch kubeconfig secret")
 		setRemoteClusterCondition(&cluster, "KubeconfigAvailable", metav1.ConditionFalse, "KubeconfigSecretNotFound", err.Error())
-		_ = r.Status().Update(ctx, &cluster)
+		// Get latest version before updating status
+		var latest drv1alpha1.RemoteCluster
+		if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
+			logger.Error(err, "unable to fetch latest RemoteCluster")
+			return ctrl.Result{}, err
+		}
+		latest.Status = cluster.Status
+		if err := r.Status().Update(ctx, &latest); err != nil {
+			if apierrors.IsConflict(err) {
+				logger.Info("conflict updating status, will retry")
+				return ctrl.Result{Requeue: true}, nil
+			}
+			logger.Error(err, "unable to update RemoteCluster status")
+			return ctrl.Result{}, err
+		}
+		cluster.Status = latest.Status
 		return ctrl.Result{RequeueAfter: time.Minute}, err
 	}
 
@@ -165,10 +195,22 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	setRemoteClusterCondition(&cluster, "ClusterAvailable", metav1.ConditionTrue, "ConnectionSuccessful", "Successfully connected to remote cluster")
 	cluster.Status.LastSyncTime = &metav1.Time{Time: time.Now()}
 
-	if err := r.Status().Update(ctx, &cluster); err != nil {
+	// Get latest version before updating final status
+	var latest drv1alpha1.RemoteCluster
+	if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
+		logger.Error(err, "unable to fetch latest RemoteCluster")
+		return ctrl.Result{}, err
+	}
+	latest.Status = cluster.Status
+	if err := r.Status().Update(ctx, &latest); err != nil {
+		if apierrors.IsConflict(err) {
+			logger.Info("conflict updating status, will retry")
+			return ctrl.Result{Requeue: true}, nil
+		}
 		logger.Error(err, "unable to update RemoteCluster status")
 		return ctrl.Result{}, err
 	}
+	cluster.Status = latest.Status
 
 	// Requeue after 5 minutes to validate connection and schedule again
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil

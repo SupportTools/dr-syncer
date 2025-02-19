@@ -11,7 +11,9 @@ import (
 // +kubebuilder:printcolumn:name="Destination",type="string",JSONPath=".spec.destinationNamespace"
 // +kubebuilder:printcolumn:name="Source Cluster",type="string",JSONPath=".spec.sourceCluster"
 // +kubebuilder:printcolumn:name="Destination Cluster",type="string",JSONPath=".spec.destinationCluster"
-// +kubebuilder:printcolumn:name="Schedule",type="string",JSONPath=".spec.schedule"
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Synced",type="integer",JSONPath=".status.syncStats.successfulSyncs"
+// +kubebuilder:printcolumn:name="Failed",type="integer",JSONPath=".status.syncStats.failedSyncs"
 // +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSyncTime"
 // +kubebuilder:printcolumn:name="Next Sync",type="date",JSONPath=".status.nextSyncTime"
 type Replication struct {
@@ -165,7 +167,42 @@ type ImmutableResourceConfig struct {
 	ForceDeleteTimeout *metav1.Duration `json:"forceDeleteTimeout,omitempty"`
 }
 
+// ReplicationMode defines the type of replication
+type ReplicationMode string
+
+const (
+	// ScheduledMode uses cron schedule for replication
+	ScheduledMode ReplicationMode = "Scheduled"
+	// ContinuousMode uses watchers and background sync
+	ContinuousMode ReplicationMode = "Continuous"
+	// ManualMode requires manual trigger via CRD updates
+	ManualMode ReplicationMode = "Manual"
+)
+
+// ContinuousConfig defines configuration for continuous replication mode
+type ContinuousConfig struct {
+	// WatchResources enables real-time resource watching
+	// +optional
+	// +kubebuilder:default=true
+	WatchResources *bool `json:"watchResources,omitempty"`
+
+	// BackgroundSyncInterval defines the interval for full sync
+	// +optional
+	// +kubebuilder:default="1h"
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+	BackgroundSyncInterval string `json:"backgroundSyncInterval,omitempty"`
+}
+
 type ReplicationSpec struct {
+	// ReplicationMode defines how replication should be performed
+	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
+	// +kubebuilder:default=Scheduled
+	ReplicationMode ReplicationMode `json:"replicationMode,omitempty"`
+
+	// Continuous configuration for continuous replication mode
+	// +optional
+	Continuous *ContinuousConfig `json:"continuous,omitempty"`
+
 	// SourceCluster is the name of the source cluster
 	SourceCluster string `json:"sourceCluster"`
 
@@ -309,14 +346,149 @@ func (in *DeploymentScale) DeepCopy() *DeploymentScale {
 	return out
 }
 
+// SyncPhase represents the current phase of replication
+type SyncPhase string
+
+const (
+	// SyncPhasePending indicates the replication is pending
+	SyncPhasePending SyncPhase = "Pending"
+	// SyncPhaseRunning indicates the replication is running
+	SyncPhaseRunning SyncPhase = "Running"
+	// SyncPhaseCompleted indicates the replication completed successfully
+	SyncPhaseCompleted SyncPhase = "Completed"
+	// SyncPhaseFailed indicates the replication failed
+	SyncPhaseFailed SyncPhase = "Failed"
+)
+
+// SyncStats provides statistics about the sync operation
+type SyncStats struct {
+	// TotalResources is the total number of resources processed
+	TotalResources int32 `json:"totalResources"`
+
+	// SuccessfulSyncs is the number of resources successfully synced
+	SuccessfulSyncs int32 `json:"successfulSyncs"`
+
+	// FailedSyncs is the number of resources that failed to sync
+	FailedSyncs int32 `json:"failedSyncs"`
+
+	// LastSyncDuration is the duration of the last sync operation
+	LastSyncDuration string `json:"lastSyncDuration"`
+}
+
+// DeepCopyInto copies SyncStats into out
+func (in *SyncStats) DeepCopyInto(out *SyncStats) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of SyncStats
+func (in *SyncStats) DeepCopy() *SyncStats {
+	if in == nil {
+		return nil
+	}
+	out := new(SyncStats)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// ResourceStatus tracks the sync status of individual resources
+type ResourceStatus struct {
+	// Kind of the resource
+	Kind string `json:"kind"`
+
+	// Name of the resource
+	Name string `json:"name"`
+
+	// Namespace of the resource
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Status of the sync operation
+	Status string `json:"status"`
+
+	// LastSyncTime is the time of last sync attempt
+	// +optional
+	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
+
+	// Error message if sync failed
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
+// DeepCopyInto copies ResourceStatus into out
+func (in *ResourceStatus) DeepCopyInto(out *ResourceStatus) {
+	*out = *in
+	if in.LastSyncTime != nil {
+		in, out := &in.LastSyncTime, &out.LastSyncTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+// DeepCopy creates a deep copy of ResourceStatus
+func (in *ResourceStatus) DeepCopy() *ResourceStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ResourceStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// SyncError contains details about a sync error
+type SyncError struct {
+	// Message is the error message
+	Message string `json:"message"`
+
+	// Time when the error occurred
+	Time metav1.Time `json:"time"`
+
+	// Resource that caused the error (if applicable)
+	// +optional
+	Resource string `json:"resource,omitempty"`
+}
+
+// DeepCopyInto copies SyncError into out
+func (in *SyncError) DeepCopyInto(out *SyncError) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of SyncError
+func (in *SyncError) DeepCopy() *SyncError {
+	if in == nil {
+		return nil
+	}
+	out := new(SyncError)
+	in.DeepCopyInto(out)
+	return out
+}
+
 type ReplicationStatus struct {
+	// Phase represents the current phase of the replication
+	// +optional
+	Phase SyncPhase `json:"phase,omitempty"`
+
 	// LastSyncTime is the last time the replication was synced
 	// +optional
 	LastSyncTime *metav1.Time `json:"lastSyncTime,omitempty"`
 
-	// NextSyncTime is the next scheduled sync time
+	// NextSyncTime is the next scheduled sync time (Scheduled mode only)
 	// +optional
 	NextSyncTime *metav1.Time `json:"nextSyncTime,omitempty"`
+
+	// LastWatchEvent is the last time a watch event was processed (Continuous mode only)
+	// +optional
+	LastWatchEvent *metav1.Time `json:"lastWatchEvent,omitempty"`
+
+	// SyncStats provides statistics about the last sync operation
+	// +optional
+	SyncStats *SyncStats `json:"syncStats,omitempty"`
+
+	// ResourceStatus tracks the sync status of individual resources
+	// +optional
+	ResourceStatus []ResourceStatus `json:"resourceStatus,omitempty"`
+
+	// LastError contains details about the last error encountered
+	// +optional
+	LastError *SyncError `json:"lastError,omitempty"`
 
 	// Conditions represent the latest available observations of the replication's state
 	// +optional
@@ -337,6 +509,27 @@ func (in *ReplicationStatus) DeepCopyInto(out *ReplicationStatus) {
 	if in.NextSyncTime != nil {
 		in, out := &in.NextSyncTime, &out.NextSyncTime
 		*out = (*in).DeepCopy()
+	}
+	if in.LastWatchEvent != nil {
+		in, out := &in.LastWatchEvent, &out.LastWatchEvent
+		*out = (*in).DeepCopy()
+	}
+	if in.SyncStats != nil {
+		in, out := &in.SyncStats, &out.SyncStats
+		*out = new(SyncStats)
+		**out = **in
+	}
+	if in.ResourceStatus != nil {
+		in, out := &in.ResourceStatus, &out.ResourceStatus
+		*out = make([]ResourceStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.LastError != nil {
+		in, out := &in.LastError, &out.LastError
+		*out = new(SyncError)
+		**out = **in
 	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions

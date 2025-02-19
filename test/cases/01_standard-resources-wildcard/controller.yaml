@@ -1,0 +1,16 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: standard-resources-wildcard
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "01"
+    dr-syncer.io/test-name: "standard-resources-wildcard"
+    dr-syncer.io/test: "true"
+spec:
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case01
+  destinationNamespace: dr-sync-test-case01
+  resourceTypes:
+    - "*" # Wildcard to replicate all resources

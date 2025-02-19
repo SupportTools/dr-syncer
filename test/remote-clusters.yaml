@@ -1,6 +1,6 @@
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Cluster
+kind: RemoteCluster
 metadata:
   name: dr-syncer-nyc3
 spec:
@@ -16,7 +16,7 @@ spec:
     - ingresses
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Cluster
+kind: RemoteCluster
 metadata:
   name: dr-syncer-sfo3
 spec:
@@ -31,4 +31,3 @@ spec:
     - services
     - ingresses
 ---
-

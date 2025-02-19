@@ -58,15 +58,41 @@ controller:
   # Health probe bind address
   probeAddr: ":8081"
   # Enable leader election
-  enableLeaderElection: false
+  enableLeaderElection: true
   # Leader election ID
   leaderElectionID: "dr-syncer.io"
   # Sync interval between operations
   syncInterval: "5m"
   # Period for full resync of resources
   resyncPeriod: "1h"
-  # ignoreCert
+  # Ignore certificate verification for remote clusters
   ignoreCert: true
+
+  # Watch configuration for continuous mode
+  watch:
+    # Buffer size for watch events
+    bufferSize: 1024
+    # Maximum number of concurrent reconciles
+    maxConcurrentReconciles: 5
+    # Default background sync interval for continuous mode
+    backgroundSyncInterval: "1h"
+
+  # Default replication mode configuration
+  replication:
+    # Default replication mode (Scheduled, Continuous, Manual)
+    defaultMode: "Scheduled"
+    # Default schedule for scheduled mode (cron format)
+    defaultSchedule: "*/5 * * * *"
+    # Default scale to zero behavior
+    defaultScaleToZero: true
+    # Default resource types to sync
+    defaultResourceTypes:
+      - configmaps
+      - secrets
+      - deployments
+      - services
+      - ingresses
+      - persistentvolumeclaims
 
 # CRDs configuration
 crds:
@@ -76,5 +102,9 @@ crds:
   keepOnUninstall: true
 
 rbac:
-  # Create RBAC resources
+  # Create cluster-wide RBAC resources (ClusterRole & ClusterRoleBinding)
+  create: true
+
+namespaceRBAC:
+  # Create namespace-scoped RBAC resources (Role & RoleBinding)
   create: true

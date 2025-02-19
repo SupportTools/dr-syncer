@@ -149,3 +149,41 @@
    - Event recording
    - Status conditions
    - Logging levels
+
+## CRD Management
+
+1. CRD Locations
+   - Primary CRD: config/crd/bases/dr-syncer.io_*.yaml
+   - Helm Chart CRD: charts/dr-syncer/templates/crds.yaml
+   - API Types: pkg/api/v1alpha1/types.go
+
+2. Update Process
+   - Start with API types in types.go
+   - Add new fields with proper JSON tags and validation
+   - Implement DeepCopy methods for new types
+   - Update CRD in config/crd/bases/
+   - Sync changes to Helm chart CRD
+
+3. Automation Tools
+   - controller-gen for generating CRDs from Go types
+   - kubebuilder markers for validation and printer columns
+   - make manifests to regenerate CRDs
+
+4. Validation Steps
+   - Verify OpenAPI schema matches types
+   - Check printer columns configuration
+   - Test CRD installation via Helm
+   - Validate with kubectl explain
+
+5. Common Changes
+   - Status fields for better monitoring
+   - Printer columns for kubectl output
+   - Validation rules and defaults
+   - New spec fields for features
+
+6. Best Practices
+   - Keep CRDs in sync across all locations
+   - Document all validation rules
+   - Use consistent naming patterns
+   - Include clear field descriptions
+   - Add examples in CRD documentation

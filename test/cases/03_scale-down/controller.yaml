@@ -1,0 +1,12 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: scale-down
+  namespace: dr-syncer
+spec:
+  sourceCluster: source-cluster
+  destinationCluster: dest-cluster
+  sourceNamespace: dr-sync-test-case03
+  destinationNamespace: dr-sync-test-case03
+  resourceTypes:
+    - "*" # Wildcard to replicate all resources

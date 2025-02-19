@@ -1,0 +1,16 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: ignore-label
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "02"
+    dr-syncer.io/test-name: "ignore-label"
+    dr-syncer.io/test: "true"
+spec:
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case02
+  destinationNamespace: dr-sync-test-case02
+  resourceTypes:
+    - "*" # Wildcard to replicate all resources

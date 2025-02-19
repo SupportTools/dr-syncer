@@ -8,7 +8,6 @@ import (
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,32 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
-
-// EnsureNamespaceExists ensures that a namespace exists in the cluster
-func EnsureNamespaceExists(ctx context.Context, client *kubernetes.Clientset, namespace, srcNamespace string) error {
-	_, err := client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			ns := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: namespace,
-					Labels: map[string]string{
-						"dr-syncer.io":      "true",
-						"dr-syncer.io/type": "destination",
-					},
-				},
-			}
-			_, err = client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to create namespace %s: %v", namespace, err)
-			}
-			log.FromContext(ctx).Info("Created namespace", "namespace", namespace)
-		} else {
-			return fmt.Errorf("failed to get namespace %s: %v", namespace, err)
-		}
-	}
-	return nil
-}
 
 // DeploymentScale represents the scale of a deployment
 type DeploymentScale struct {
@@ -102,7 +75,13 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 			if err != nil {
 				log.Error(err, "Failed to sync Deployments")
 			} else {
-				deploymentScales = scales
+				for _, scale := range scales {
+					deploymentScales = append(deploymentScales, DeploymentScale{
+						Name:     scale.Name,
+						Replicas: scale.Replicas,
+						SyncTime: scale.SyncTime,
+					})
+				}
 			}
 		case "services":
 			if err := syncServices(ctx, syncer, sourceClient, srcNamespace, dstNamespace, immutableConfig); err != nil {

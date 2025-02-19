@@ -31,23 +31,6 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            - name: LOG_LEVEL
-              value: {{ .Values.controller.logLevel | quote }}
-            - name: METRICS_ADDR
-              value: {{ .Values.controller.metricsAddr | quote }}
-            - name: PROBE_ADDR
-              value: {{ .Values.controller.probeAddr | quote }}
-            - name: ENABLE_LEADER_ELECTION
-              value: {{ .Values.controller.enableLeaderElection | quote }}
-            - name: LEADER_ELECTION_ID
-              value: {{ .Values.controller.leaderElectionID | quote }}
-            - name: SYNC_INTERVAL
-              value: {{ .Values.controller.syncInterval | quote }}
-            - name: RESYNC_PERIOD
-              value: {{ .Values.controller.resyncPeriod | quote }}
-            - name: IGNORE_CERT
-              value: {{ .Values.controller.ignoreCert | quote }}
           ports:
             - name: metrics
               containerPort: {{ trimPrefix ":" .Values.controller.metricsAddr }}
@@ -68,7 +51,57 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
+            {{- if .Values.resources }}
             {{- toYaml .Values.resources | nindent 12 }}
+            {{- else }}
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            {{- end }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.controller.logLevel | quote }}
+            - name: METRICS_ADDR
+              value: {{ .Values.controller.metricsAddr | quote }}
+            - name: PROBE_ADDR
+              value: {{ .Values.controller.probeAddr | quote }}
+            - name: ENABLE_LEADER_ELECTION
+              value: {{ .Values.controller.enableLeaderElection | quote }}
+            - name: LEADER_ELECTION_ID
+              value: {{ .Values.controller.leaderElectionID | quote }}
+            - name: SYNC_INTERVAL
+              value: {{ .Values.controller.syncInterval | quote }}
+            - name: RESYNC_PERIOD
+              value: {{ .Values.controller.resyncPeriod | quote }}
+            - name: IGNORE_CERT
+              value: {{ .Values.controller.ignoreCert | quote }}
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: dr-syncer
+            - name: WATCH_BUFFER_SIZE
+              value: {{ .Values.controller.watch.bufferSize | quote }}
+            - name: MAX_CONCURRENT_RECONCILES
+              value: {{ .Values.controller.watch.maxConcurrentReconciles | quote }}
+            - name: DEFAULT_REPLICATION_MODE
+              value: {{ .Values.controller.replication.defaultMode | quote }}
+            - name: DEFAULT_SCHEDULE
+              value: {{ .Values.controller.replication.defaultSchedule | quote }}
+            - name: DEFAULT_SCALE_TO_ZERO
+              value: {{ .Values.controller.replication.defaultScaleToZero | quote }}
+            - name: DEFAULT_BACKGROUND_SYNC_INTERVAL
+              value: {{ .Values.controller.watch.backgroundSyncInterval | quote }}
+            - name: DEFAULT_RESOURCE_TYPES
+              value: {{ join "," .Values.controller.replication.defaultResourceTypes | quote }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
