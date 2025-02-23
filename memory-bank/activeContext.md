@@ -10,10 +10,9 @@
    - Health checks integrated
 
 2. Custom Resources
-   - RemoteCluster CRD implemented
-   - NamespaceReplication CRD implemented
-   - NamespaceMapping CRD implemented
-   - Resource definitions validated
+   - RemoteCluster CRD implemented and validated
+   - Replication CRD implemented and validated
+   - Resource definitions streamlined and optimized
 
 3. Synchronization
    - Resource type filtering working
@@ -44,7 +43,9 @@
 ## Recent Changes
 
 1. Core Features
+   - Simplified CRD architecture to two core CRDs
    - Enhanced Replication CRD with comprehensive status fields
+   - Integrated namespace mapping into Replication CRD
    - Added phase tracking (Pending, Running, Completed, Failed)
    - Added sync statistics tracking
    - Added per-resource status tracking
@@ -65,10 +66,11 @@
    - Documented CRD update process
 
 4. CRD Management
-   - Established CRD update workflow
-   - Documented all CRD locations
-   - Added automation tools usage
-   - Created validation checklist
+   - Streamlined CRD management with automated sync
+   - Established Go types as single source of truth
+   - Enhanced Helm chart CRD integration
+   - Automated CRD sync via `make manifests`
+   - Reduced CRD complexity by maintaining only remoteclusters and replications
 
 ## Active Decisions
 
@@ -113,10 +115,10 @@
    - Best practices
 
 4. CRD Updates
-   - Maintain CRD sync across locations
-   - Automate CRD generation where possible
-   - Validate CRDs before deployment
-   - Keep documentation current with changes
+   - Go types are now single source of truth
+   - CRDs automatically sync to Helm chart
+   - Helm templating automatically applied
+   - Only two CRDs maintained: remoteclusters and replications
 
 ## Next Steps
 

@@ -18,9 +18,8 @@
 ### Resource Handling
 
 1. Custom Resources
-   - RemoteCluster: Defines remote cluster configuration
-   - NamespaceReplication: Defines sync configuration
-   - NamespaceMapping: Maps source to destination namespaces
+   - RemoteCluster: Defines remote cluster configuration and authentication
+   - Replication: Defines synchronization configuration and resource filtering
 
 2. Resource Processing
    - Resource filtering based on type
@@ -74,8 +73,8 @@
    - Manages metrics server
 
 2. Reconcilers
-   - RemoteClusterReconciler
-   - NamespaceReplicationReconciler
+   - RemoteClusterReconciler: Manages remote cluster connections
+   - ReplicationReconciler: Handles resource synchronization
    - Resource synchronization logic
    - Status management
 
@@ -152,17 +151,19 @@
 
 ## CRD Management
 
-1. CRD Locations
-   - Primary CRD: config/crd/bases/dr-syncer.io_*.yaml
-   - Helm Chart CRD: charts/dr-syncer/templates/crds.yaml
-   - API Types: pkg/api/v1alpha1/types.go
+1. CRD Locations and Flow
+   - Source of Truth: Go types in pkg/api/v1alpha1/types.go
+   - Generated CRDs: config/crd/bases/dr-syncer.io_{remoteclusters,replications}.yaml
+   - Helm Chart CRDs: charts/dr-syncer/crds/*.yaml
+   - Automated sync via `make manifests`
 
 2. Update Process
    - Start with API types in types.go
    - Add new fields with proper JSON tags and validation
    - Implement DeepCopy methods for new types
-   - Update CRD in config/crd/bases/
-   - Sync changes to Helm chart CRD
+   - Run `make manifests` to:
+     * Generate CRDs in config/crd/bases/
+     * Automatically sync to Helm chart with templating
 
 3. Automation Tools
    - controller-gen for generating CRDs from Go types

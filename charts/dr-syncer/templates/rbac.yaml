@@ -1,13 +1,14 @@
-{{- if .Values.serviceAccount.create }}
+{{- if .Values.serviceAccount.create -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "dr-syncer.serviceAccountName" . }}
+  name: {{ .Values.serviceAccount.name | default (include "dr-syncer.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "dr-syncer.labels" . | nindent 4 }}
 {{- end }}
 ---
-{{- if .Values.rbac.create }}
+{{- if .Values.rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -33,6 +34,83 @@ rules:
   - patch
   - delete
 - apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - configmaps
+  - secrets
+  - services
+  - persistentvolumeclaims
+  - events
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - get
+  - list
+  - watch
+- nonResourceURLs:
+  - "/api"
+  - "/api/*"
+  - "/apis"
+  - "/apis/*"
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "dr-syncer.fullname" . }}-watcher-role
+  namespace: {{ .Values.sourceNamespace | default .Release.Namespace }}
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+rules:
+- apiGroups:
   - ""
   resources:
   - secrets
@@ -53,55 +131,22 @@ roleRef:
   name: {{ include "dr-syncer.fullname" . }}-manager-role
 subjects:
 - kind: ServiceAccount
-  name: {{ include "dr-syncer.serviceAccountName" . }}
+  name: {{ .Values.serviceAccount.name | default (include "dr-syncer.fullname" .) }}
   namespace: {{ .Release.Namespace }}
----
-{{- if .Values.namespaceRBAC.create }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "dr-syncer.fullname" . }}-namespace-role
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "dr-syncer.labels" . | nindent 4 }}
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  - events
-  verbs:
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - "coordination.k8s.io"
-  resources:
-  - leases
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "dr-syncer.fullname" . }}-namespace-rolebinding
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "dr-syncer.fullname" . }}-watcher-rolebinding
+  namespace: {{ .Values.sourceNamespace | default .Release.Namespace }}
   labels:
     {{- include "dr-syncer.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "dr-syncer.fullname" . }}-namespace-role
+  name: {{ include "dr-syncer.fullname" . }}-watcher-role
 subjects:
 - kind: ServiceAccount
-  name: {{ include "dr-syncer.serviceAccountName" . }}
+  name: {{ .Values.serviceAccount.name | default (include "dr-syncer.fullname" .) }}
   namespace: {{ .Release.Namespace }}
-{{- end }}
 {{- end }}

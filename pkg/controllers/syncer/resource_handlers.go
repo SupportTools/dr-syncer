@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +14,11 @@ import (
 
 // syncConfigMaps synchronizes ConfigMaps between namespaces
 func syncConfigMaps(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing configmaps",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace)
+
 	configMaps, err := sourceClient.CoreV1().ConfigMaps(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list ConfigMaps: %w", err)
@@ -32,6 +38,11 @@ func syncConfigMaps(ctx context.Context, syncer *ResourceSyncer, sourceClient ku
 
 // syncSecrets synchronizes Secrets between namespaces
 func syncSecrets(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing secrets",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace)
+
 	secrets, err := sourceClient.CoreV1().Secrets(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list Secrets: %w", err)
@@ -52,6 +63,12 @@ func syncSecrets(ctx context.Context, syncer *ResourceSyncer, sourceClient kuber
 // syncDeployments synchronizes Deployments between namespaces
 func syncDeployments(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, scaleToZero bool, config *drv1alpha1.ImmutableResourceConfig) ([]DeploymentScale, error) {
 	var scales []DeploymentScale
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing deployments",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace,
+		"scaleToZero", scaleToZero)
+
 	deployments, err := sourceClient.AppsV1().Deployments(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Deployments: %w", err)
@@ -102,6 +119,11 @@ func syncDeployments(ctx context.Context, syncer *ResourceSyncer, sourceClient k
 
 // syncServices synchronizes Services between namespaces
 func syncServices(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing services",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace)
+
 	services, err := sourceClient.CoreV1().Services(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list Services: %w", err)
@@ -123,6 +145,11 @@ func syncServices(ctx context.Context, syncer *ResourceSyncer, sourceClient kube
 
 // syncIngresses synchronizes Ingresses between namespaces
 func syncIngresses(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing ingresses",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace)
+
 	ingresses, err := sourceClient.NetworkingV1().Ingresses(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list Ingresses: %w", err)
@@ -142,6 +169,12 @@ func syncIngresses(ctx context.Context, syncer *ResourceSyncer, sourceClient kub
 
 // syncPersistentVolumeClaims synchronizes PVCs between namespaces
 func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig, config *drv1alpha1.ImmutableResourceConfig) error {
+	log := log.FromContext(ctx)
+	log.V(1).Info("syncing persistent volume claims",
+		"sourceNS", srcNamespace,
+		"destNS", dstNamespace,
+		"config", fmt.Sprintf("%+v", pvcConfig))
+
 	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list PVCs: %w", err)

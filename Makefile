@@ -16,14 +16,15 @@ SHELL = /bin/bash
 all: build
 
 .PHONY: deploy-local
-deploy-local: ## Build, push image, install CRDs, and deploy to current cluster with correct image tag
+deploy-local: manifests ## Build, push image, install CRDs, and deploy to current cluster with correct image tag
 	@export LOG_LEVEL=debug
 	$(eval DEPLOY_TIMESTAMP := $(shell date +%Y%m%d%H%M%S))
 	docker build -t supporttools/dr-syncer:$(DEPLOY_TIMESTAMP) .
 	docker push supporttools/dr-syncer:$(DEPLOY_TIMESTAMP)
-	helm upgrade --install dr-syncer charts/dr-syncer \
+	KUBECONFIG=/home/mmattox/.kube/mattox/a1-rancher-prd_fqdn helm upgrade --install dr-syncer charts/dr-syncer \
 		--namespace dr-syncer \
 		--create-namespace \
+		--set crds.install=true \
 		--set image.repository=supporttools/dr-syncer \
 		--set image.tag=$(DEPLOY_TIMESTAMP)
 	@echo "Deployed dr-syncer to current cluster with image: $(IMG)"
@@ -83,8 +84,14 @@ undeploy: ## Undeploy controller from the K8s cluster with Helm
 ##@ Generate
 
 .PHONY: manifests
-manifests: controller-gen ## Generate CRDs
+manifests: controller-gen ## Generate CRDs and sync to Helm chart
 	$(CONTROLLER_GEN) crd paths="./..." output:crd:artifacts:config=config/crd/bases
+	# Sync CRDs to Helm chart
+	for f in config/crd/bases/*.yaml; do \
+		echo '{{- if .Values.crds.install }}' > charts/dr-syncer/crds/$$(basename $$f); \
+		cat $$f >> charts/dr-syncer/crds/$$(basename $$f); \
+		echo '{{- end }}' >> charts/dr-syncer/crds/$$(basename $$f); \
+	done
 
 .PHONY: generate
 generate: controller-gen ## Generate code

@@ -95,7 +95,7 @@ setup() {
 
 # Test case 00
 test_case_00() {
-    print_header "Testing Basic Resource Synchronization (Case 00)"
+    print_header "Running test case 00"
     
     # Export required variables for test script
     export CONTROLLER_KUBECONFIG DR_KUBECONFIG PROD_KUBECONFIG
@@ -483,7 +483,6 @@ main() {
             ;;            
         *)
             # Run all tests
-            deploy_case_00
             test_case_00
             deploy_case_01
             test_case_01

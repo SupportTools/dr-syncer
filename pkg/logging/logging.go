@@ -141,11 +141,22 @@ entry *logrus.Entry
 func (l *logrusAdapter) Init(info logr.RuntimeInfo) {}
 
 func (l *logrusAdapter) Enabled(level int) bool {
-return l.entry.Logger.IsLevelEnabled(logrus.Level(level))
+	// Map logr verbosity levels to logrus levels
+	// level 0 is base info level
+	// level 1+ are debug levels with increasing verbosity
+	if level > 0 {
+		return l.entry.Logger.IsLevelEnabled(logrus.DebugLevel)
+	}
+	return l.entry.Logger.IsLevelEnabled(logrus.InfoLevel)
 }
 
 func (l *logrusAdapter) Info(level int, msg string, keysAndValues ...interface{}) {
-l.entry.WithFields(convertToLogrusFields(keysAndValues...)).Info(msg)
+	entry := l.entry.WithFields(convertToLogrusFields(keysAndValues...))
+	if level > 0 {
+		entry.Debug(msg) // Use Debug for higher verbosity levels
+	} else {
+		entry.Info(msg)
+	}
 }
 
 func (l *logrusAdapter) Error(err error, msg string, keysAndValues ...interface{}) {

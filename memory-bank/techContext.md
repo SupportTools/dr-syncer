@@ -58,7 +58,7 @@
    # Install controller-gen
    go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 
-   # Generate CRDs
+   # Generate CRDs (remoteclusters and replications)
    controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
    ```
 
@@ -90,7 +90,9 @@
    │   ├── _helpers.tpl
    │   ├── deployment.yaml
    │   ├── rbac.yaml
-   │   └── crds.yaml
+   └── crds/
+       ├── dr-syncer.io_remoteclusters.yaml
+       └── dr-syncer.io_replications.yaml
    ```
 
 2. Configuration Options
@@ -149,13 +151,16 @@
 1. Code Organization
    ```
    ├── api/
-   │   └── v1alpha1/
+   │   └── v1alpha1/          # CRD type definitions
    ├── controllers/
-   │   └── sync/
+   │   ├── remotecluster/     # RemoteCluster controller
+   │   └── replication/       # Replication controller
    ├── pkg/
    │   ├── config/
    │   └── logging/
    └── charts/
+       └── dr-syncer/
+           └── crds/          # Generated CRDs
    ```
 
 2. Testing Strategy

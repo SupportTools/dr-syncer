@@ -193,6 +193,58 @@ type ContinuousConfig struct {
 	BackgroundSyncInterval string `json:"backgroundSyncInterval,omitempty"`
 }
 
+// RetryConfig defines configuration for retry behavior
+type RetryConfig struct {
+	// MaxRetries is the maximum number of retries before giving up
+	// +optional
+	// +kubebuilder:default=5
+	MaxRetries *int32 `json:"maxRetries,omitempty"`
+
+	// InitialBackoff is the initial backoff duration after first failure
+	// +optional
+	// +kubebuilder:default="5s"
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+	InitialBackoff string `json:"initialBackoff,omitempty"`
+
+	// MaxBackoff is the maximum backoff duration
+	// +optional
+	// +kubebuilder:default="5m"
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+	MaxBackoff string `json:"maxBackoff,omitempty"`
+
+	// BackoffMultiplier is the multiplier for backoff duration after each failure (as percentage)
+	// +optional
+	// +kubebuilder:default=200
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:Maximum=1000
+	BackoffMultiplier *int32 `json:"backoffMultiplier,omitempty"`
+}
+
+// DeepCopyInto copies RetryConfig into out
+func (in *RetryConfig) DeepCopyInto(out *RetryConfig) {
+	*out = *in
+	if in.MaxRetries != nil {
+		in, out := &in.MaxRetries, &out.MaxRetries
+		*out = new(int32)
+		**out = **in
+	}
+	if in.BackoffMultiplier != nil {
+		in, out := &in.BackoffMultiplier, &out.BackoffMultiplier
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of RetryConfig
+func (in *RetryConfig) DeepCopy() *RetryConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(RetryConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
 type ReplicationSpec struct {
 	// ReplicationMode defines how replication should be performed
 	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
@@ -202,6 +254,10 @@ type ReplicationSpec struct {
 	// Continuous configuration for continuous replication mode
 	// +optional
 	Continuous *ContinuousConfig `json:"continuous,omitempty"`
+
+	// RetryConfig defines retry behavior for failed operations
+	// +optional
+	RetryConfig *RetryConfig `json:"retryConfig,omitempty"`
 
 	// SourceCluster is the name of the source cluster
 	SourceCluster string `json:"sourceCluster"`
@@ -347,6 +403,7 @@ func (in *DeploymentScale) DeepCopy() *DeploymentScale {
 }
 
 // SyncPhase represents the current phase of replication
+// +kubebuilder:validation:Enum=Pending;Running;Completed;Failed
 type SyncPhase string
 
 const (
@@ -360,18 +417,213 @@ const (
 	SyncPhaseFailed SyncPhase = "Failed"
 )
 
+// SyncProgress tracks the progress of a sync operation
+type SyncProgress struct {
+	// PercentComplete indicates the percentage of completion for the current sync
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	PercentComplete int32 `json:"percentComplete"`
+
+	// EstimatedTimeRemaining is the estimated time until sync completion
+	// +optional
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+	EstimatedTimeRemaining string `json:"estimatedTimeRemaining,omitempty"`
+
+	// CurrentOperation describes the current sync operation being performed
+	// +optional
+	CurrentOperation string `json:"currentOperation,omitempty"`
+
+	// ResourcesRemaining is the count of resources still pending sync
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ResourcesRemaining int32 `json:"resourcesRemaining,omitempty"`
+}
+
+// DeepCopyInto copies SyncProgress into out
+func (in *SyncProgress) DeepCopyInto(out *SyncProgress) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of SyncProgress
+func (in *SyncProgress) DeepCopy() *SyncProgress {
+	if in == nil {
+		return nil
+	}
+	out := new(SyncProgress)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// ResourceGroupStatus provides status information for a group of resources
+type ResourceGroupStatus struct {
+	// GroupKind is the group/kind of the resources (e.g. "apps/Deployment")
+	GroupKind string `json:"groupKind"`
+
+	// TotalCount is the total number of resources in this group
+	// +kubebuilder:validation:Minimum=0
+	TotalCount int32 `json:"totalCount"`
+
+	// SyncedCount is the number of successfully synced resources
+	// +kubebuilder:validation:Minimum=0
+	SyncedCount int32 `json:"syncedCount"`
+
+	// FailedCount is the number of resources that failed to sync
+	// +kubebuilder:validation:Minimum=0
+	FailedCount int32 `json:"failedCount"`
+
+	// PendingCount is the number of resources waiting to be synced
+	// +kubebuilder:validation:Minimum=0
+	PendingCount int32 `json:"pendingCount"`
+}
+
+// DeepCopyInto copies ResourceGroupStatus into out
+func (in *ResourceGroupStatus) DeepCopyInto(out *ResourceGroupStatus) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of ResourceGroupStatus
+func (in *ResourceGroupStatus) DeepCopy() *ResourceGroupStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ResourceGroupStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DetailedResourceStatus provides detailed status for a specific resource
+type DetailedResourceStatus struct {
+	// Name of the resource
+	Name string `json:"name"`
+
+	// Version of the resource
+	Version string `json:"version"`
+
+	// SyncState represents the current state of sync (Pending, InProgress, Synced, Failed)
+	// +kubebuilder:validation:Enum=Pending;InProgress;Synced;Failed
+	SyncState string `json:"syncState"`
+
+	// Dependencies tracks the status of resource dependencies
+	// +optional
+	Dependencies []ResourceDependency `json:"dependencies,omitempty"`
+
+	// LastAttempt contains information about the last sync attempt
+	// +optional
+	LastAttempt *SyncAttempt `json:"lastAttempt,omitempty"`
+}
+
+// ResourceDependency tracks dependency information
+type ResourceDependency struct {
+	// Kind of the dependent resource
+	Kind string `json:"kind"`
+
+	// Name of the dependent resource
+	Name string `json:"name"`
+
+	// Status of the dependency
+	// +kubebuilder:validation:Enum=Pending;InProgress;Synced;Failed
+	Status string `json:"status"`
+}
+
+// SyncAttempt contains information about a sync attempt
+type SyncAttempt struct {
+	// Time of the attempt
+	Time metav1.Time `json:"time"`
+
+	// Result of the attempt
+	// +kubebuilder:validation:Enum=Success;Failed;Skipped;Retrying
+	Result string `json:"result"`
+}
+
+// DeepCopyInto copies DetailedResourceStatus into out
+func (in *DetailedResourceStatus) DeepCopyInto(out *DetailedResourceStatus) {
+	*out = *in
+	if in.Dependencies != nil {
+		in, out := &in.Dependencies, &out.Dependencies
+		*out = make([]ResourceDependency, len(*in))
+		copy(*out, *in)
+	}
+	if in.LastAttempt != nil {
+		in, out := &in.LastAttempt, &out.LastAttempt
+		*out = new(SyncAttempt)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of DetailedResourceStatus
+func (in *DetailedResourceStatus) DeepCopy() *DetailedResourceStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(DetailedResourceStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// ErrorCategory tracks errors by category
+type ErrorCategory struct {
+	// Category of the error
+	// +kubebuilder:validation:MinLength=1
+	Category string `json:"category"`
+
+	// Count of errors in this category
+	// +kubebuilder:validation:Minimum=0
+	Count int32 `json:"count"`
+
+	// LastOccurred is when the error last happened
+	LastOccurred metav1.Time `json:"lastOccurred"`
+}
+
+// RetryStatus tracks retry information
+type RetryStatus struct {
+	// NextRetryTime is when the next retry will occur
+	// +optional
+	NextRetryTime *metav1.Time `json:"nextRetryTime,omitempty"`
+
+	// RetriesRemaining is the number of retries left
+	// +kubebuilder:validation:Minimum=0
+	RetriesRemaining int32 `json:"retriesRemaining"`
+
+	// BackoffDuration is the current backoff duration
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
+	BackoffDuration string `json:"backoffDuration"`
+}
+
+// DeepCopyInto copies RetryStatus into out
+func (in *RetryStatus) DeepCopyInto(out *RetryStatus) {
+	*out = *in
+	if in.NextRetryTime != nil {
+		in, out := &in.NextRetryTime, &out.NextRetryTime
+		*out = (*in).DeepCopy()
+	}
+}
+
+// DeepCopy creates a deep copy of RetryStatus
+func (in *RetryStatus) DeepCopy() *RetryStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(RetryStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
 // SyncStats provides statistics about the sync operation
 type SyncStats struct {
 	// TotalResources is the total number of resources processed
+	// +kubebuilder:validation:Minimum=0
 	TotalResources int32 `json:"totalResources"`
 
 	// SuccessfulSyncs is the number of resources successfully synced
+	// +kubebuilder:validation:Minimum=0
 	SuccessfulSyncs int32 `json:"successfulSyncs"`
 
 	// FailedSyncs is the number of resources that failed to sync
+	// +kubebuilder:validation:Minimum=0
 	FailedSyncs int32 `json:"failedSyncs"`
 
 	// LastSyncDuration is the duration of the last sync operation
+	// +kubebuilder:validation:Pattern=^([0-9]+h)?([0-9]+m)?([0-9]+s)?$
 	LastSyncDuration string `json:"lastSyncDuration"`
 }
 
@@ -403,6 +655,7 @@ type ResourceStatus struct {
 	Namespace string `json:"namespace,omitempty"`
 
 	// Status of the sync operation
+	// +kubebuilder:validation:Enum=Pending;InProgress;Synced;Failed
 	Status string `json:"status"`
 
 	// LastSyncTime is the time of last sync attempt
@@ -478,9 +731,29 @@ type ReplicationStatus struct {
 	// +optional
 	LastWatchEvent *metav1.Time `json:"lastWatchEvent,omitempty"`
 
+	// SyncProgress tracks the current progress of the sync operation
+	// +optional
+	SyncProgress *SyncProgress `json:"syncProgress,omitempty"`
+
 	// SyncStats provides statistics about the last sync operation
 	// +optional
 	SyncStats *SyncStats `json:"syncStats,omitempty"`
+
+	// ResourceGroups provides status information grouped by resource type
+	// +optional
+	ResourceGroups []ResourceGroupStatus `json:"resourceGroups,omitempty"`
+
+	// DetailedStatus provides detailed status for specific resources
+	// +optional
+	DetailedStatus []DetailedResourceStatus `json:"detailedStatus,omitempty"`
+
+	// ErrorCategories tracks errors by category
+	// +optional
+	ErrorCategories []ErrorCategory `json:"errorCategories,omitempty"`
+
+	// RetryStatus tracks retry information for failed operations
+	// +optional
+	RetryStatus *RetryStatus `json:"retryStatus,omitempty"`
 
 	// ResourceStatus tracks the sync status of individual resources
 	// +optional
@@ -514,10 +787,39 @@ func (in *ReplicationStatus) DeepCopyInto(out *ReplicationStatus) {
 		in, out := &in.LastWatchEvent, &out.LastWatchEvent
 		*out = (*in).DeepCopy()
 	}
+	if in.SyncProgress != nil {
+		in, out := &in.SyncProgress, &out.SyncProgress
+		*out = new(SyncProgress)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.SyncStats != nil {
 		in, out := &in.SyncStats, &out.SyncStats
 		*out = new(SyncStats)
 		**out = **in
+	}
+	if in.ResourceGroups != nil {
+		in, out := &in.ResourceGroups, &out.ResourceGroups
+		*out = make([]ResourceGroupStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.DetailedStatus != nil {
+		in, out := &in.DetailedStatus, &out.DetailedStatus
+		*out = make([]DetailedResourceStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.ErrorCategories != nil {
+		in, out := &in.ErrorCategories, &out.ErrorCategories
+		*out = make([]ErrorCategory, len(*in))
+		copy(*out, *in)
+	}
+	if in.RetryStatus != nil {
+		in, out := &in.RetryStatus, &out.RetryStatus
+		*out = new(RetryStatus)
+		(*in).DeepCopyInto(*out)
 	}
 	if in.ResourceStatus != nil {
 		in, out := &in.ResourceStatus, &out.ResourceStatus

@@ -11,9 +11,8 @@
 - [x] Metrics server integration
 
 ### Resource Management
-- [x] RemoteCluster CRD
-- [x] NamespaceReplication CRD
-- [x] NamespaceMapping CRD
+- [x] RemoteCluster CRD implementation and validation
+- [x] Replication CRD implementation and validation
 - [x] Resource type filtering
 - [x] Resource exclusion lists
 - [x] Deployment replica handling
@@ -25,9 +24,11 @@
 - [x] Basic resource synchronization
 - [x] Cron-based scheduling
 - [x] Multi-cluster support
-- [x] Namespace mapping
 - [x] Status updates
 - [x] Error handling
+
+### Deprecated Features
+- [x] NamespaceMapping CRD (functionality now integrated into Replication CRD)
 
 ### Deployment
 - [x] Basic Helm chart
@@ -54,6 +55,7 @@
 - [ ] Performance tuning documentation
 - [ ] Security best practices
 - [ ] Upgrade procedures
+- [ ] CRD migration guides
 
 ## Planned Features
 

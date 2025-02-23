@@ -3,11 +3,13 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -39,6 +41,11 @@ type ReplicationReconciler struct {
 // Reconcile handles the reconciliation loop for Replication resources
 func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
+	reconcileStart := time.Now()
+	
+	log.V(1).Info("starting reconciliation",
+		"name", req.Name,
+		"namespace", req.Namespace)
 
 	// Fetch the Replication instance
 	var replication drv1alpha1.Replication
@@ -50,8 +57,16 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	log.V(1).Info("fetched replication",
+		"generation", replication.Generation,
+		"resourceVersion", replication.ResourceVersion,
+		"mode", replication.Spec.ReplicationMode,
+		"sourceCluster", replication.Spec.SourceCluster,
+		"destCluster", replication.Spec.DestinationCluster)
+
 	// Initialize clients if not already done
 	if r.modeHandler == nil {
+		log.V(1).Info("initializing mode handler and clients")
 
 		// Fetch the source Cluster instance
 		var sourceCluster drv1alpha1.RemoteCluster
@@ -155,6 +170,12 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
+		log.V(1).Info("initialized mode handler and clients successfully",
+			"sourceClient", fmt.Sprintf("%T", sourceClient),
+			"destClient", fmt.Sprintf("%T", destClient),
+			"sourceDynamic", fmt.Sprintf("%T", sourceDynamicClient),
+			"destDynamic", fmt.Sprintf("%T", destDynamicClient))
+		
 		// Initialize mode handler
 		r.modeHandler = modes.NewModeReconciler(
 			r.Client,
@@ -166,6 +187,11 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Handle reconciliation based on replication mode
+	log.V(1).Info("starting mode reconciliation",
+		"mode", replication.Spec.ReplicationMode,
+		"sourceNS", replication.Spec.SourceNamespace,
+		"destNS", replication.Spec.DestinationNamespace)
+	modeStart := time.Now()
 	var result ctrl.Result
 	var err error
 
@@ -179,32 +205,175 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err != nil {
-		log.Error(err, "failed to reconcile replication")
+		log.Error(err, "failed to reconcile replication",
+			"duration", time.Since(modeStart))
 		return ctrl.Result{}, err
 	}
 
-	// Get the latest version of the Replication object before updating status
-	var latestReplication drv1alpha1.Replication
-	if err := r.Get(ctx, req.NamespacedName, &latestReplication); err != nil {
-		log.Error(err, "unable to fetch latest Replication")
-		return ctrl.Result{}, err
-	}
+	log.V(1).Info("completed mode reconciliation",
+		"duration", time.Since(modeStart),
+		"result", result)
 
-	// Copy the status from our working copy to the latest version
-	latestReplication.Status = replication.Status
-
-	// Update status on the latest version
-	if err := r.Status().Update(ctx, &latestReplication); err != nil {
+	// Update status using optimistic concurrency control
+	if err := r.updateReplicationStatus(ctx, req.NamespacedName, &replication); err != nil {
 		if apierrors.IsConflict(err) {
-			// If we hit a conflict, requeue to try again
-			log.Info("conflict updating status, will retry")
-			return ctrl.Result{Requeue: true}, nil
+			// For conflicts, requeue with a short delay to prevent tight loops
+			log.V(1).Info("status update conflict, requeueing with short delay")
+			return ctrl.Result{RequeueAfter: time.Second * 2}, nil
 		}
-		log.Error(err, "unable to update Replication status")
+		log.Error(err, "failed to update status")
 		return ctrl.Result{}, err
 	}
+
+	log.V(1).Info("reconciliation complete",
+		"name", req.Name,
+		"namespace", req.Namespace,
+		"duration", time.Since(reconcileStart),
+		"nextRequeue", result.RequeueAfter)
 
 	return result, nil
+}
+
+// updateReplicationStatus updates the status of a Replication resource using optimistic concurrency
+func (r *ReplicationReconciler) updateReplicationStatus(ctx context.Context, key client.ObjectKey, replication *drv1alpha1.Replication) error {
+	log := log.FromContext(ctx)
+	maxRetries := 10
+	retryDelay := 100 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		// Get latest version
+		var latest drv1alpha1.Replication
+		if err := r.Get(ctx, key, &latest); err != nil {
+			return fmt.Errorf("failed to get latest version: %w", err)
+		}
+
+		// Log status details before update
+		log.V(1).Info("current status details",
+			"phase", latest.Status.Phase,
+			"lastSyncTime", latest.Status.LastSyncTime,
+			"resourceVersion", latest.ResourceVersion,
+			"deploymentScales", len(latest.Status.DeploymentScales))
+
+		// Log new status details
+		log.V(1).Info("new status details",
+			"phase", replication.Status.Phase,
+			"lastSyncTime", replication.Status.LastSyncTime,
+			"deploymentScales", len(replication.Status.DeploymentScales))
+
+		// Check if status has actually changed
+		if statusEqual(&latest.Status, &replication.Status) {
+			log.V(1).Info("status unchanged, skipping update",
+				"resourceVersion", latest.ResourceVersion)
+			replication.Status = latest.Status
+			return nil
+		}
+
+		log.V(1).Info("status changed, attempting update",
+			"currentResourceVersion", latest.ResourceVersion,
+			"originalResourceVersion", replication.ResourceVersion)
+
+		// Update status fields while preserving others
+		latest.Status = replication.Status
+
+		// Try to update
+		err := r.Status().Update(ctx, &latest)
+		if err == nil {
+			// Success - update our working copy
+			replication.Status = latest.Status
+			return nil
+		}
+
+		if !apierrors.IsConflict(err) {
+			// Return non-conflict errors immediately
+			return err
+		}
+
+		// Log conflict details
+		log.V(1).Info("conflict updating status, retrying",
+			"attempt", i+1,
+			"maxRetries", maxRetries,
+			"delay", retryDelay,
+			"originalResourceVersion", replication.ResourceVersion,
+			"latestResourceVersion", latest.ResourceVersion)
+
+		// Wait before retrying
+		time.Sleep(retryDelay)
+		retryDelay = time.Duration(float64(retryDelay) * 1.5) // Gentler backoff
+	}
+
+	return fmt.Errorf("failed to update status after %d attempts", maxRetries)
+}
+
+// statusEqual compares two ReplicationStatus objects
+func statusEqual(a, b *drv1alpha1.ReplicationStatus) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	// Compare relevant fields
+	if a.Phase != b.Phase {
+		return false
+	}
+	if !timeEqual(a.LastSyncTime, b.LastSyncTime) {
+		return false
+	}
+	if !timeEqual(a.NextSyncTime, b.NextSyncTime) {
+		return false
+	}
+	if !timeEqual(a.LastWatchEvent, b.LastWatchEvent) {
+		return false
+	}
+	
+	// Compare deployment scales
+	if len(a.DeploymentScales) != len(b.DeploymentScales) {
+		return false
+	}
+	for i := range a.DeploymentScales {
+		if a.DeploymentScales[i] != b.DeploymentScales[i] {
+			return false
+		}
+	}
+
+	// Compare sync stats
+	if !syncStatsEqual(a.SyncStats, b.SyncStats) {
+		return false
+	}
+
+	// Compare conditions
+	if len(a.Conditions) != len(b.Conditions) {
+		return false
+	}
+	for i := range a.Conditions {
+		if !conditionEqual(&a.Conditions[i], &b.Conditions[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// timeEqual compares two metav1.Time pointers
+func timeEqual(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(b)
+}
+
+// syncStatsEqual compares two SyncStats pointers
+func syncStatsEqual(a, b *drv1alpha1.SyncStats) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// conditionEqual compares two metav1.Condition pointers
+func conditionEqual(a, b *metav1.Condition) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // SetupWithManager sets up the controller with the Manager

@@ -39,24 +39,55 @@ verify_resource() {
 
 # Function to wait for replication to be ready
 wait_for_replication() {
-    local max_attempts=30
+    local max_attempts=12
     local attempt=1
-    local sleep_time=10
+    local sleep_time=30
     
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
+        # Check phase and conditions
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.phase}' 2>/dev/null)
         REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
-        if [ "$REPLICATION_STATUS" = "True" ]; then
+        
+        if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
             return 0
         fi
-        echo "Attempt $attempt/$max_attempts: Replication not ready yet, waiting ${sleep_time}s..."
+        
+        # Print current status for debugging
+        echo "Attempt $attempt/$max_attempts: Phase=$PHASE, Status=$REPLICATION_STATUS"
+        echo "Waiting ${sleep_time}s..."
         sleep $sleep_time
         ((attempt++))
     done
     
     echo "Timeout waiting for replication to be ready"
     return 1
+}
+
+# Function to verify replication status
+verify_replication_status() {
+    local phase=$1
+    local expected_phase=$2
+    local synced_count=$3
+    local failed_count=$4
+    
+    if [ "$phase" != "$expected_phase" ]; then
+        echo "Phase mismatch: expected $expected_phase, got $phase"
+        return 1
+    fi
+    
+    if [ "$synced_count" -lt 1 ]; then
+        echo "No successful syncs recorded"
+        return 1
+    fi
+    
+    if [ "$failed_count" -ne 0 ]; then
+        echo "Found failed syncs: $failed_count"
+        return 1
+    fi
+    
+    return 0
 }
 
 # Function to deploy resources
@@ -153,12 +184,52 @@ main() {
         print_result "Ingress synced" "fail"
     fi
     
-    # Verify Replication status
-    local replication_status=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}')
-    if [ "$replication_status" = "True" ]; then
-        print_result "Replication status verified" "pass"
+    # Verify Replication status fields
+    echo "Verifying replication status..."
+    
+    # Get status fields
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.nextSyncTime}')
+    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.syncStats.lastSyncDuration}')
+    
+    # Verify phase and sync counts
+    if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then
+        print_result "Replication phase and sync counts" "pass"
     else
-        print_result "Replication status verification" "fail"
+        print_result "Replication phase and sync counts" "fail"
+    fi
+    
+    # Verify timestamps
+    if [ ! -z "$last_sync" ] && [ ! -z "$next_sync" ]; then
+        print_result "Sync timestamps present" "pass"
+    else
+        print_result "Sync timestamps present" "fail"
+    fi
+    
+    # Verify sync duration
+    if [ ! -z "$sync_duration" ]; then
+        print_result "Sync duration tracked" "pass"
+    else
+        print_result "Sync duration tracked" "fail"
+    fi
+    
+    # Verify detailed resource status
+    local resource_status_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test -o jsonpath='{.status.resourceStatus[*].status}' | tr ' ' '\n' | grep -c "Synced" || echo "0")
+    if [ "$resource_status_count" -ge 5 ]; then
+        print_result "Detailed resource status" "pass"
+    else
+        print_result "Detailed resource status" "fail"
+    fi
+    
+    # Verify printer columns
+    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication standard-resources-test)
+    if echo "$columns" | grep -q "Completed" && echo "$columns" | grep -q "[0-9]"; then
+        print_result "Printer columns visible" "pass"
+    else
+        print_result "Printer columns visible" "fail"
     fi
     
     # Print summary
