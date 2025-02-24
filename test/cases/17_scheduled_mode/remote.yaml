@@ -1,0 +1,132 @@
+---
+# Scheduled Mode Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case17
+  labels:
+    dr-syncer.io/test-case: "17"
+    dr-syncer.io/test-name: "scheduled-mode"
+    dr-syncer.io/test: "true"
+    dr-syncer.io/mode: "scheduled"
+---
+# Basic Resources - Scheduled Mode
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+data:
+  app.properties: |
+    mode=scheduled
+    environment=test
+    region=nyc3
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+type: Opaque
+data:
+  username: YWRtaW4=  # admin
+  password: cGFzc3dvcmQ=  # password
+---
+# Stateless Resources - Scheduled Mode
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: test-pvc
+---
+# PVC for Scheduled Mode
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: do-block-storage
+---
+# Network Resources - Scheduled Mode
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress
+  namespace: dr-sync-test-case17
+  labels:
+    app: test-app
+    test-type: scheduled-mode
+spec:
+  rules:
+    - host: test.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 80

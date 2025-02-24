@@ -1,0 +1,57 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-storage-class-mapping
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "11"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+spec:
+  # Use scheduled mode for predictable testing
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *"  # Run every 5 minutes
+  
+  # Cluster configuration
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case11
+  destinationNamespace: dr-sync-test-case11
+  
+  # Resource types to sync
+  resourceTypes:
+    - "*"  # Sync all resource types
+  
+  # Scale deployments to zero in DR
+  scaleToZero: true
+  
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: Recreate
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+  
+  # PVC configuration with storage class mapping
+  pvcConfig:
+    enabled: true                  # Enable PVC synchronization
+    preserveVolumeAttributes: true # Maintain volume attributes
+    waitForBinding: true          # Wait for PVC binding
+    bindingTimeout: 5m            # Timeout for PVC binding
+    
+    # Storage class mapping configuration for DO storage classes
+    storageClassMappings:
+    - from: do-block-storage           # Default class
+      to: do-block-storage-xfs        # Map to XFS variant
+    - from: do-block-storage-retain    # Retain policy class
+      to: do-block-storage-xfs-retain # Map to XFS variant with retain
+    
+    # No access mode mapping - preserve original modes
+    accessModeMapping: {}
+    
+    # Volume attributes to preserve
+    preservedAttributes:
+      - volumeMode
+      - resources
+      - selector
+      - volumeName
+      - dataSource

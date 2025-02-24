@@ -1,0 +1,125 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case11
+  labels:
+    dr-syncer.io/test-case: "11"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+---
+# ConfigMap for application settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case11
+  labels:
+    app: test-app
+    test-type: pvc-storage-class-mapping
+data:
+  app.properties: |
+    standard.path=/data/standard
+    premium.path=/data/premium
+---
+# Standard Storage PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-standard
+  namespace: dr-sync-test-case11
+  labels:
+    app: test-app
+    test-type: pvc-storage-class-mapping
+    storage-type: standard
+  annotations:
+    description: "Standard storage PVC with basic configuration"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: do-block-storage
+  volumeMode: Filesystem
+---
+# Retain Policy PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-premium
+  namespace: dr-sync-test-case11
+  labels:
+    app: test-app
+    test-type: pvc-storage-class-mapping
+    storage-type: retain
+  annotations:
+    description: "PVC with retain policy configuration"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: do-block-storage-retain
+  volumeMode: Filesystem
+---
+# Deployment using all PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case11
+  labels:
+    app: test-app
+    test-type: pvc-storage-class-mapping
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: standard-storage
+              mountPath: /data/standard
+            - name: retain-storage
+              mountPath: /data/premium
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: standard-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-standard
+        - name: retain-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-premium
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case11
+  labels:
+    app: test-app
+    test-type: pvc-storage-class-mapping
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

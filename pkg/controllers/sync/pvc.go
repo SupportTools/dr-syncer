@@ -6,7 +6,6 @@ import (
 	"reflect"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/sync/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -109,12 +108,12 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 			if apierrors.IsNotFound(err) {
 				_, err = destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, destPVC, metav1.CreateOptions{})
 				if err != nil {
-					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to create PVC %s", destPVC.Name))
+					log.WithError(err).Error(fmt.Sprintf("failed to create PVC %s", destPVC.Name))
 					continue
 				}
-				logging.Logger.Info(fmt.Sprintf("created PVC %s", destPVC.Name))
+				log.Info(fmt.Sprintf("created PVC %s", destPVC.Name))
 			} else {
-				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to get PVC %s", destPVC.Name))
+				log.WithError(err).Error(fmt.Sprintf("failed to get PVC %s", destPVC.Name))
 				continue
 			}
 		} else {
@@ -123,17 +122,17 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 				destPVC.ResourceVersion = existing.ResourceVersion
 				_, err = destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, destPVC, metav1.UpdateOptions{})
 				if err != nil {
-					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to update PVC %s", destPVC.Name))
+					log.WithError(err).Error(fmt.Sprintf("failed to update PVC %s", destPVC.Name))
 					continue
 				}
-				logging.Logger.Info(fmt.Sprintf("updated PVC %s", destPVC.Name))
+				log.Info(fmt.Sprintf("updated PVC %s", destPVC.Name))
 			}
 		}
 
 		// Handle PV sync if enabled
 		if syncPV && pvc.Spec.VolumeName != "" {
 			if err := syncPersistentVolume(ctx, sourceClient, destClient, pvc.Spec.VolumeName); err != nil {
-				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to sync PV %s", pvc.Spec.VolumeName))
+				log.WithError(err).Error(fmt.Sprintf("failed to sync PV %s", pvc.Spec.VolumeName))
 			}
 		}
 	}
@@ -161,7 +160,7 @@ func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernet
 			if err != nil {
 				return fmt.Errorf("failed to create PV %s: %v", destPV.Name, err)
 			}
-			logging.Logger.Info(fmt.Sprintf("created PV %s", destPV.Name))
+			log.Info(fmt.Sprintf("created PV %s", destPV.Name))
 		} else {
 			return fmt.Errorf("failed to get PV %s: %v", destPV.Name, err)
 		}
@@ -172,7 +171,7 @@ func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernet
 			if err != nil {
 				return fmt.Errorf("failed to update PV %s: %v", destPV.Name, err)
 			}
-			logging.Logger.Info(fmt.Sprintf("updated PV %s", destPV.Name))
+			log.Info(fmt.Sprintf("updated PV %s", destPV.Name))
 		}
 	}
 

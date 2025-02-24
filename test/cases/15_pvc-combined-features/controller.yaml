@@ -1,0 +1,79 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: pvc-combined-features
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "15"
+    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test: "true"
+spec:
+  # Use scheduled mode for predictable testing
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *"  # Run every 5 minutes
+  
+  # Cluster configuration
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case15
+  destinationNamespace: dr-sync-test-case15
+  
+  # Resource types to sync
+  resourceTypes:
+    - "*"  # Sync all resource types
+  
+  # Scale deployments to zero in DR
+  scaleToZero: true
+  
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: Recreate
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+  
+  # Combined PVC configuration
+  pvcConfig:
+    enabled: true                  # Enable PVC synchronization
+    preserveVolumeAttributes: true # Maintain volume attributes
+    syncPersistentVolumes: true   # Enable PV synchronization
+    waitForBinding: true          # Wait for PVC binding
+    bindingTimeout: 5m            # Timeout for PVC binding
+    
+    # Storage class mapping
+    storageClassMapping:
+      standard: dr-standard       # Map standard class
+      premium: dr-premium        # Map premium class
+      local-storage: dr-local    # Map local storage class
+      block-storage: dr-block    # Map block storage class
+    
+    # Access mode mapping
+    accessModeMapping:
+      ReadWriteOnce: ReadWriteOnce     # Keep RWO as is
+      ReadWriteMany: ReadWriteMany     # Keep RWM as is
+      ReadOnlyMany: ReadWriteMany      # Map ROM to RWM
+      ReadWriteOncePod: ReadWriteOnce  # Map RWOP to RWO
+    
+    # Volume configuration
+    volumeConfig:
+      preserveCapacity: true        # Maintain volume capacity
+      preserveAccessModes: true     # Preserve access modes
+      preserveReclaimPolicy: true   # Keep reclaim policy
+      preserveMountOptions: true    # Maintain mount options
+      preserveVolumeMode: true      # Keep volume mode
+      preserveNodeAffinity: true    # Preserve node affinity
+      preserveVolumeSource: true    # Keep volume source
+      preserveStorageClass: false   # Using storage class mapping
+      
+    # Volume attributes to preserve
+    preservedAttributes:
+      - volumeMode
+      - resources
+      - selector
+      - volumeName
+      - dataSource
+      - mountOptions
+      - nodeAffinity
+      - annotations
+      - labels
+      - finalizers
+      - ownerReferences

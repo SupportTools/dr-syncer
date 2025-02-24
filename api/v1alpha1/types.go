@@ -245,6 +245,64 @@ func (in *RetryConfig) DeepCopy() *RetryConfig {
 	return out
 }
 
+// FailureHandlingMode defines how to handle different types of failures
+// +kubebuilder:validation:Enum=RetryAndWait;RetryOnly;WaitForNextSync;FailFast
+type FailureHandlingMode string
+
+const (
+	// RetryAndWait retries with backoff, then waits for next scheduled sync
+	RetryAndWait FailureHandlingMode = "RetryAndWait"
+	// RetryOnly retries with backoff until success or max retries
+	RetryOnly FailureHandlingMode = "RetryOnly"
+	// WaitForNextSync skips retries and waits for next scheduled sync
+	WaitForNextSync FailureHandlingMode = "WaitForNextSync"
+	// FailFast fails immediately without retrying
+	FailFast FailureHandlingMode = "FailFast"
+)
+
+// FailureHandlingConfig defines how different types of failures are handled
+type FailureHandlingConfig struct {
+	// DefaultMode determines how failures are handled by default
+	// +optional
+	// +kubebuilder:default=RetryAndWait
+	DefaultMode FailureHandlingMode `json:"defaultMode,omitempty"`
+
+	// StorageClassNotFound determines how to handle missing storage classes
+	// +optional
+	// +kubebuilder:default=WaitForNextSync
+	StorageClassNotFound FailureHandlingMode `json:"storageClassNotFound,omitempty"`
+
+	// ResourceNotFound determines how to handle missing resource types
+	// +optional
+	// +kubebuilder:default=FailFast
+	ResourceNotFound FailureHandlingMode `json:"resourceNotFound,omitempty"`
+
+	// ValidationFailure determines how to handle resource validation failures
+	// +optional
+	// +kubebuilder:default=FailFast
+	ValidationFailure FailureHandlingMode `json:"validationFailure,omitempty"`
+
+	// NetworkError determines how to handle network/connectivity issues
+	// +optional
+	// +kubebuilder:default=RetryAndWait
+	NetworkError FailureHandlingMode `json:"networkError,omitempty"`
+}
+
+// DeepCopyInto copies FailureHandlingConfig into out
+func (in *FailureHandlingConfig) DeepCopyInto(out *FailureHandlingConfig) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of FailureHandlingConfig
+func (in *FailureHandlingConfig) DeepCopy() *FailureHandlingConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(FailureHandlingConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
 type ReplicationSpec struct {
 	// ReplicationMode defines how replication should be performed
 	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
@@ -304,6 +362,10 @@ type ReplicationSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	SyncCRDs *bool `json:"syncCRDs,omitempty"`
+
+	// FailureHandling defines how different types of failures are handled
+	// +optional
+	FailureHandling *FailureHandlingConfig `json:"failureHandling,omitempty"`
 }
 
 // DeepCopyInto copies ImmutableResourceConfig into out
@@ -364,6 +426,11 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 	if in.ImmutableResourceConfig != nil {
 		in, out := &in.ImmutableResourceConfig, &out.ImmutableResourceConfig
 		*out = new(ImmutableResourceConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.FailureHandling != nil {
+		in, out := &in.FailureHandling, &out.FailureHandling
+		*out = new(FailureHandlingConfig)
 		(*in).DeepCopyInto(*out)
 	}
 }

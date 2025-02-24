@@ -1,0 +1,105 @@
+---
+# Manual Mode Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case16-manual
+  labels:
+    dr-syncer.io/test-case: "16"
+    dr-syncer.io/test-name: "manual-mode"
+    dr-syncer.io/test: "true"
+    dr-syncer.io/mode: "manual"
+---
+# Basic Resources - Manual Mode
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case16-manual
+  labels:
+    app: test-app
+    test-type: manual-mode
+data:
+  app.properties: |
+    mode=manual
+    environment=test
+    region=nyc3
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+  namespace: dr-sync-test-case16-manual
+  labels:
+    app: test-app
+    test-type: manual-mode
+type: Opaque
+data:
+  username: YWRtaW4=  # admin
+  password: cGFzc3dvcmQ=  # password
+---
+# Stateful Resources - Manual Mode
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-pv-manual
+  labels:
+    type: local
+    test-type: manual-mode
+    mode: manual
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: do-block-storage
+  csi:
+    driver: dobs.csi.digitalocean.com
+    volumeHandle: test-pv-manual
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc
+  namespace: dr-sync-test-case16-manual
+  labels:
+    app: test-app
+    test-type: manual-mode
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: do-block-storage
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: test-statefulset
+  namespace: dr-sync-test-case16-manual
+  labels:
+    app: test-app
+    test-type: manual-mode
+spec:
+  serviceName: test-statefulset
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: test-pvc

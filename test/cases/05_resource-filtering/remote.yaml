@@ -1,0 +1,117 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case05
+  labels:
+    dr-syncer.io/test-case: "05"
+    dr-syncer.io/test-name: "resource-filtering"
+    dr-syncer.io/test: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case05
+  labels:
+    app: test-app
+    test-type: resource-filtering
+  annotations:
+    description: "Test ConfigMap for resource filtering"
+data:
+  key1: value1
+  key2: value2
+  config.yaml: |
+    server:
+      port: 8080
+      host: localhost
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+  namespace: dr-sync-test-case05
+  labels:
+    app: test-app
+    test-type: resource-filtering
+  annotations:
+    description: "Test Secret for resource filtering"
+type: Opaque
+data:
+  username: dXNlcm5hbWU= # base64 encoded "username"
+  password: cGFzc3dvcmQ= # base64 encoded "password"
+  api-key: YXBpLWtleS0xMjM= # base64 encoded "api-key-123"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case05
+  labels:
+    app: test-app
+    test-type: resource-filtering
+  annotations:
+    description: "Test Deployment that should NOT be synced"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case05
+  labels:
+    app: test-app
+    test-type: resource-filtering
+  annotations:
+    description: "Test Service that should NOT be synced"
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress
+  namespace: dr-sync-test-case05
+  labels:
+    app: test-app
+    test-type: resource-filtering
+  annotations:
+    description: "Test Ingress that should NOT be synced"
+spec:
+  rules:
+    - host: dr-sync-test-case05.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 80

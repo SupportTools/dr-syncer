@@ -86,6 +86,61 @@ spec:
               destinationNamespace:
                 description: DestinationNamespace is the namespace to replicate to
                 type: string
+              failureHandling:
+                description: FailureHandling defines how different types of failures
+                  are handled
+                properties:
+                  defaultMode:
+                    default: RetryAndWait
+                    description: DefaultMode determines how failures are handled by
+                      default
+                    enum:
+                    - RetryAndWait
+                    - RetryOnly
+                    - WaitForNextSync
+                    - FailFast
+                    type: string
+                  networkError:
+                    default: RetryAndWait
+                    description: NetworkError determines how to handle network/connectivity
+                      issues
+                    enum:
+                    - RetryAndWait
+                    - RetryOnly
+                    - WaitForNextSync
+                    - FailFast
+                    type: string
+                  resourceNotFound:
+                    default: FailFast
+                    description: ResourceNotFound determines how to handle missing
+                      resource types
+                    enum:
+                    - RetryAndWait
+                    - RetryOnly
+                    - WaitForNextSync
+                    - FailFast
+                    type: string
+                  storageClassNotFound:
+                    default: WaitForNextSync
+                    description: StorageClassNotFound determines how to handle missing
+                      storage classes
+                    enum:
+                    - RetryAndWait
+                    - RetryOnly
+                    - WaitForNextSync
+                    - FailFast
+                    type: string
+                  validationFailure:
+                    default: FailFast
+                    description: ValidationFailure determines how to handle resource
+                      validation failures
+                    enum:
+                    - RetryAndWait
+                    - RetryOnly
+                    - WaitForNextSync
+                    - FailFast
+                    type: string
+                type: object
               immutableResourceConfig:
                 description: ImmutableResourceConfig defines how to handle immutable
                   resources

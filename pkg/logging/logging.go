@@ -20,18 +20,11 @@ func SetupLogging() *logrus.Logger {
 	if log == nil {
 		log = logrus.New()
 		log.SetOutput(os.Stdout)
+		log.SetReportCaller(true)
 
 		customFormatter := &logrus.TextFormatter{
-			DisableTimestamp:       true,
-			DisableColors:          true,
-			DisableLevelTruncation: true,
-			DisableSorting:         true,
-		}
-
-		// Only enable caller reporting in debug mode
-		if debug {
-			log.SetReportCaller(true)
-			customFormatter.CallerPrettyfier = callerPrettyfier
+			DisableTimestamp: true,
+			CallerPrettyfier: callerPrettyfier,
 		}
 
 		log.SetFormatter(customFormatter)
@@ -50,6 +43,6 @@ func SetupLogging() *logrus.Logger {
 func callerPrettyfier(frame *runtime.Frame) (function string, file string) {
 	funcName := frame.Function
 	parts := strings.Split(funcName, "/")
-	function = "[" + parts[len(parts)-1] + "]"
+	function = parts[len(parts)-1]
 	return function, ""
 }

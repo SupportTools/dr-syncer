@@ -1,0 +1,153 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case10
+  labels:
+    dr-syncer.io/test-case: "10"
+    dr-syncer.io/test-name: "pvc-basic-sync"
+    dr-syncer.io/test: "true"
+---
+# ConfigMap for application settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+data:
+  app.properties: |
+    storage.path=/data/standard
+    block.device=/dev/block
+    filesystem.mount=/data/fs
+---
+# Standard PVC with default configuration
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-standard
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+    pvc-type: standard
+  annotations:
+    description: "Standard PVC with default configuration"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: do-block-storage
+  volumeMode: Filesystem
+---
+# Block device PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-block
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+    pvc-type: block
+  annotations:
+    description: "Block device PVC with raw access"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: do-block-storage
+  volumeMode: Block
+---
+# Filesystem PVC with specific configuration
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-filesystem
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+    pvc-type: filesystem
+  annotations:
+    description: "Filesystem PVC with specific mount options"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: do-block-storage
+  volumeMode: Filesystem
+---
+# Deployment using all PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: standard-storage
+              mountPath: /data/standard
+            - name: filesystem-storage
+              mountPath: /data/fs
+          volumeDevices:
+            - name: block-storage
+              devicePath: /dev/block
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: standard-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-standard
+        - name: block-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-block
+        - name: filesystem-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-filesystem
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case10
+  labels:
+    app: test-app
+    test-type: pvc-basic-sync
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

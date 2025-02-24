@@ -22,27 +22,163 @@
 
 ### Active Development Areas
 
-1. Resource Synchronization
-   - Current Focus: Resource type handling
-   - Status: Implementing core sync logic
+1. Test Suite Standardization
+   - Current Focus: Standardizing all test cases to match test case 00 format
+   - Status: Initial test cases completed, proceeding with remaining cases
    - Priority: High
-   - Next Steps: Testing and validation
+   - Progress Tracking:
+     * [x] Test case 00 (Reference implementation)
+       - Enhanced with thorough resource validation
+       - Added detailed metadata comparison
+       - Improved error reporting
+     * [x] Test case 01 (Wildcard namespace selection)
+       - Implemented with same validation depth as case 00
+       - Added thorough resource verification
+       - Standardized test structure
+     * [x] Test case 02 (Ignore label)
+       - Added verification for ignored resources
+       - Enhanced resource validation
+       - Improved error reporting
+     * [x] Test case 03 (Scale down)
+       - Added specific scale down verification
+       - Verifies source has 3 replicas
+       - Verifies DR has 0 replicas
+       - Ensures all other specs match
+     * [x] Test case 04 (Scale override)
+       - Added scale override label verification
+       - Verifies non-overridden deployment scales to 0
+       - Verifies overridden deployment maintains replicas
+       - Enhanced deployment verification with replica checks
+     * [x] Test case 05 (Resource filtering)
+       - Added resource type filtering verification
+       - Verifies ConfigMaps and Secrets are synced
+       - Verifies other resources are filtered out
+       - Enhanced status verification for filtered resources
+     * [x] Test case 06 (Service recreation)
+       - Added service type-specific verification
+       - Verifies ClusterIP, NodePort, LoadBalancer services
+       - Verifies headless service configuration
+       - Enhanced service recreation validation
+     * [x] Test case 07 (Ingress handling)
+       - Added ingress type-specific verification
+       - Verifies basic, complex, and annotated ingresses
+       - Verifies TLS and backend configurations
+       - Enhanced ingress validation with detailed checks
+     * [x] Test case 08 (Namespace mapping)
+       - Added direct and wildcard namespace mapping
+       - Verifies namespace labels and annotations
+       - Verifies resource references are updated
+       - Enhanced namespace-specific validation
+     * [x] Test case 09 (PVC handling)
+       - Added PVC type-specific verification
+       - Verifies storage class mapping
+       - Verifies access mode preservation
+       - Enhanced PVC validation with detailed checks
+     * [x] Test case 10 (PVC basic sync)
+       - Added basic PVC synchronization
+       - Verifies exact attribute preservation
+       - Verifies volume modes and access
+       - Enhanced volume mount validation
+     * [x] Test case 11 (PVC storage class mapping)
+       - Added storage class mapping verification
+       - Verifies class translation
+       - Verifies attribute preservation
+       - Enhanced storage validation
+     * [x] Test case 12 (PVC access mode mapping)
+       - Added access mode mapping verification
+       - Verifies mode translation
+       - Verifies mount configurations
+       - Enhanced access validation
+     * [x] Test case 13 (PVC preserve attributes)
+       - Added attribute preservation verification
+       - Verifies all PVC attributes
+       - Verifies complex configurations
+       - Enhanced attribute validation
+     * [x] Test case 14 (PVC sync persistent volumes)
+       - Added PV synchronization verification
+       - Verifies multiple volume types
+       - Verifies binding relationships
+       - Enhanced volume validation
+     * [x] Test case 15 (PVC combined features)
+       - Added combined feature verification
+       - Verifies feature interactions
+       - Verifies complex configurations
+       - Enhanced validation coverage
+     * [x] Test case 16 (Replication modes)
+       - Added replication mode verification
+       - Verifies mode transitions
+       - Verifies sync behaviors
+       - Enhanced mode validation
 
-2. Controller Logic
-   - Current Focus: Reconciliation patterns
-   - Status: Core implementation complete
-   - Priority: Medium
-   - Next Steps: Optimization and error handling
+   Key Improvements Made:
+   - Added jq-based deep comparison of resources
+   - Implemented thorough metadata validation
+   - Added detailed error reporting with diffs
+   - Enhanced status verification
+   - Standardized test script structure
+   - Added resource-specific validation functions
 
-3. Deployment
-   - Current Focus: Helm chart development
-   - Status: Basic chart implemented
-   - Priority: Medium
-   - Next Steps: Chart testing and documentation
+2. Test Implementation Requirements
+   - Each test case must include:
+     * README.md with consistent documentation
+     * controller.yaml for Replication resource
+     * remote.yaml for source resources
+     * test.sh with standardized structure
+   - Standard test script components:
+     * Color coding and result tracking
+     * Resource verification functions
+     * Status checking
+     * Detailed result reporting
+
+3. Test Categories to Standardize
+   a. Scale Tests (03, 04)
+      * Scale down functionality
+      * Scale override via labels
+      * Replica preservation
+      * Status verification
+
+   b. Resource Tests (05)
+      * Resource type filtering
+      * Resource exclusion
+      * Filter validation
+      * Status tracking
+
+   c. Network Resource Tests (06, 07)
+      * Service recreation
+      * Service configuration
+      * Ingress handling
+      * Network validation
+
+   d. Namespace Tests (08)
+      * Namespace mapping
+      * Namespace creation
+      * Permission verification
+      * Resource placement
+
+   e. PVC Tests (09-15)
+      * Basic PVC synchronization
+      * Storage class mapping
+      * Access mode handling
+      * Attribute preservation
+      * Volume synchronization
+      * Combined features
+
+   f. Mode Tests (16)
+      * Replication mode verification
+      * Schedule handling
+      * Mode transitions
+      * Status updates
 
 ## Recent Changes
 
-1. Core Features
+1. Logging System Refactor
+   - Implemented package-level logger initialization via logger.go
+   - Removed redundant internal logging packages
+   - Standardized logging interface across all packages
+   - Centralized logging configuration
+   - Enhanced logging consistency and maintainability
+
+2. Core Features
    - Simplified CRD architecture to two core CRDs
    - Enhanced Replication CRD with comprehensive status fields
    - Integrated namespace mapping into Replication CRD
@@ -125,19 +261,19 @@
 ## Next Steps
 
 1. Short Term
-   - Complete resource sync testing
-   - Enhance error handling
-   - Update documentation
-   - Implement monitoring
+   - Standardize test case implementations
+   - Enhance test validation
+   - Update test documentation
+   - Implement consistent error handling
 
 2. Medium Term
-   - Optimize performance
-   - Enhance Helm chart
-   - Add advanced features
-   - Improve user guides
+   - Add advanced test scenarios
+   - Improve test coverage
+   - Enhance test reporting
+   - Add performance tests
 
 3. Long Term
-   - Scale testing
-   - Security enhancements
-   - Feature expansion
-   - Community engagement
+   - Scale testing improvements
+   - Security test cases
+   - Feature coverage expansion
+   - Test automation enhancements

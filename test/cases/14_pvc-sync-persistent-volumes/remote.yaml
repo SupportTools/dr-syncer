@@ -1,0 +1,291 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case14
+  labels:
+    dr-syncer.io/test-case: "14"
+    dr-syncer.io/test-name: "pvc-sync-persistent-volumes"
+    dr-syncer.io/test: "true"
+---
+# ConfigMap for application settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+data:
+  app.properties: |
+    static.path=/data/static
+    dynamic.path=/data/dynamic
+    local.path=/data/local
+    nfs.path=/data/nfs
+    block.path=/data/block
+---
+# Static PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-static-pv
+  labels:
+    type: static
+    test-type: pvc-sync-persistent-volumes
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: standard
+  hostPath:
+    path: /mnt/data/static
+    type: DirectoryOrCreate
+---
+# Static PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-static-pvc
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+    volume-type: static
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+  volumeName: test-static-pv
+---
+# Dynamic PVC (PV created automatically)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-dynamic-pvc
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+    volume-type: dynamic
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+---
+# Local PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-local-pv
+  labels:
+    type: local
+    test-type: pvc-sync-persistent-volumes
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/data/local
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - node-1
+---
+# Local PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-local-pvc
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+    volume-type: local
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: local-storage
+  volumeName: test-local-pv
+---
+# NFS PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-nfs-pv
+  labels:
+    type: nfs
+    test-type: pvc-sync-persistent-volumes
+spec:
+  capacity:
+    storage: 15Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs
+  nfs:
+    server: nfs.example.com
+    path: /exports/data
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+---
+# NFS PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-nfs-pvc
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+    volume-type: nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 15Gi
+  storageClassName: nfs
+  volumeName: test-nfs-pv
+---
+# Block Device PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-block-pv
+  labels:
+    type: block
+    test-type: pvc-sync-persistent-volumes
+spec:
+  capacity:
+    storage: 30Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: block-storage
+  volumeMode: Block
+  local:
+    path: /dev/sdb
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - node-2
+---
+# Block Device PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-block-pvc
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+    volume-type: block
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: block-storage
+  volumeMode: Block
+  volumeName: test-block-pv
+---
+# Deployment using all PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: static-storage
+              mountPath: /data/static
+            - name: dynamic-storage
+              mountPath: /data/dynamic
+            - name: local-storage
+              mountPath: /data/local
+            - name: nfs-storage
+              mountPath: /data/nfs
+          volumeDevices:
+            - name: block-storage
+              devicePath: /dev/xvda
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: static-storage
+          persistentVolumeClaim:
+            claimName: test-static-pvc
+        - name: dynamic-storage
+          persistentVolumeClaim:
+            claimName: test-dynamic-pvc
+        - name: local-storage
+          persistentVolumeClaim:
+            claimName: test-local-pvc
+        - name: nfs-storage
+          persistentVolumeClaim:
+            claimName: test-nfs-pvc
+        - name: block-storage
+          persistentVolumeClaim:
+            claimName: test-block-pvc
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case14
+  labels:
+    app: test-app
+    test-type: pvc-sync-persistent-volumes
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

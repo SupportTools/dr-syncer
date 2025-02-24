@@ -149,6 +149,30 @@
    - Status conditions
    - Logging levels
 
+5. Logging Pattern
+   - Package-level logger initialization via logger.go
+   - Shared logging setup across packages
+   - Consistent logging interface
+   ```go
+   // logger.go in each package
+   package mypackage
+
+   import "github.com/supporttools/dr-syncer/pkg/logging"
+
+   var log = logging.SetupLogging()
+   ```
+   - Usage pattern in package files:
+   ```go
+   log.Info("message")
+   log.WithError(err).Error("error message")
+   ```
+   - Benefits:
+     * Centralized logging configuration
+     * Consistent logging format
+     * Package-level logging control
+     * Clean separation of concerns
+     * Easy logging level management
+
 ## CRD Management
 
 1. CRD Locations and Flow

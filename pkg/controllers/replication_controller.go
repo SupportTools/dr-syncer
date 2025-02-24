@@ -6,7 +6,6 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,6 +24,8 @@ type ReplicationReconciler struct {
 	modeHandler *modes.ModeReconciler
 }
 
+
+
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/finalizers,verbs=update
@@ -37,9 +38,14 @@ type ReplicationReconciler struct {
 //+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch
 
+const (
+	// FinalizerName is the name of the finalizer added to Replication resources
+	FinalizerName = "dr-syncer.io/cleanup"
+)
+
 // Reconcile handles the reconciliation loop for Replication resources
 func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logging.Logger.Info(fmt.Sprintf("starting reconciliation for %s/%s", req.Namespace, req.Name))
+	log.Info(fmt.Sprintf("starting reconciliation for %s/%s", req.Namespace, req.Name))
 
 	// Fetch the Replication instance
 	var replication drv1alpha1.Replication
@@ -47,8 +53,24 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		logging.Logger.WithError(err).Error("unable to fetch Replication")
+		log.Errorf("unable to fetch Replication: %v", err)
 		return ctrl.Result{}, err
+	}
+
+	// Handle deletion
+	if !replication.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &replication)
+	}
+
+	// Add finalizer if it doesn't exist
+	if !containsString(replication.Finalizers, FinalizerName) {
+		log.Info("adding finalizer")
+		replication.Finalizers = append(replication.Finalizers, FinalizerName)
+		if err := r.Update(ctx, &replication); err != nil {
+			log.Errorf("failed to add finalizer: %v", err)
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Check if we should proceed with reconciliation based on next sync time
@@ -57,12 +79,12 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		now := time.Now()
 		if now.Before(nextSync) {
 			waitTime := nextSync.Sub(now)
-			logging.Logger.Info(fmt.Sprintf("skipping reconciliation, next sync at %s", nextSync.Format(time.RFC3339)))
+			log.Info(fmt.Sprintf("skipping reconciliation, next sync at %s", nextSync.Format(time.RFC3339)))
 			return ctrl.Result{RequeueAfter: waitTime}, nil
 		}
 	}
 
-	logging.Logger.Info("fetched replication")
+	log.Info("fetched replication")
 
 	// Initialize clients if not already done
 	if r.modeHandler == nil {
@@ -70,7 +92,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		restConfig := ctrl.GetConfigOrDie()
 		// Always disable request/response body logging
 		restConfig.WrapTransport = nil
-		logging.Logger.Info("initializing cluster connections")
+		log.Info("initializing cluster connections")
 
 		// Fetch the source Cluster instance
 		var sourceCluster drv1alpha1.RemoteCluster
@@ -78,7 +100,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Name:      replication.Spec.SourceCluster,
 			Namespace: replication.ObjectMeta.Namespace,
 		}, &sourceCluster); err != nil {
-			logging.Logger.WithError(err).Error("unable to fetch source RemoteCluster")
+			log.Errorf("unable to fetch source RemoteCluster: %v", err)
 			return ctrl.Result{}, err
 		}
 
@@ -88,7 +110,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Namespace: sourceCluster.Spec.KubeconfigSecretRef.Namespace,
 			Name:      sourceCluster.Spec.KubeconfigSecretRef.Name,
 		}, &sourceKubeconfigSecret); err != nil {
-			logging.Logger.WithError(err).Error("unable to fetch source kubeconfig secret")
+			log.Errorf("unable to fetch source kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
@@ -100,14 +122,14 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		sourceKubeconfigData, ok := sourceKubeconfigSecret.Data[sourceKubeconfigKey]
 		if !ok {
 			err := fmt.Errorf("kubeconfig key %s not found in source secret", sourceKubeconfigKey)
-			logging.Logger.WithError(err).Error("invalid source kubeconfig secret")
+			log.Errorf("invalid source kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Create source cluster clients
 		sourceConfig, err := clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create source REST config from kubeconfig")
+			log.Errorf("unable to create source REST config from kubeconfig: %v", err)
 			return ctrl.Result{}, err
 		}
 		// Always disable request/response body logging
@@ -115,23 +137,23 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		sourceClient, err := kubernetes.NewForConfig(sourceConfig)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create source Kubernetes client")
+			log.Errorf("unable to create source Kubernetes client: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		sourceDynamicClient, err := dynamic.NewForConfig(sourceConfig)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create source dynamic client")
+			log.Errorf("unable to create source dynamic client: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Verify source cluster connectivity
 		if _, err := sourceClient.Discovery().ServerVersion(); err != nil {
-			logging.Logger.WithError(err).Error("failed to connect to source cluster")
+			log.Errorf("failed to connect to source cluster: %v", err)
 			return ctrl.Result{}, err
 		}
 
-		logging.Logger.Info("successfully connected to source cluster")
+		log.Info("successfully connected to source cluster")
 
 		// Fetch the destination Cluster instance
 		var destCluster drv1alpha1.RemoteCluster
@@ -139,7 +161,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Name:      replication.Spec.DestinationCluster,
 			Namespace: replication.ObjectMeta.Namespace,
 		}, &destCluster); err != nil {
-			logging.Logger.WithError(err).Error("unable to fetch destination RemoteCluster")
+			log.Errorf("unable to fetch destination RemoteCluster: %v", err)
 			return ctrl.Result{}, err
 		}
 
@@ -149,7 +171,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
 			Name:      destCluster.Spec.KubeconfigSecretRef.Name,
 		}, &destKubeconfigSecret); err != nil {
-			logging.Logger.WithError(err).Error("unable to fetch destination kubeconfig secret")
+			log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
@@ -161,14 +183,14 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
 		if !ok {
 			err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
-			logging.Logger.WithError(err).Error("invalid destination kubeconfig secret")
+			log.Errorf("invalid destination kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Create destination cluster clients
 		destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create destination REST config from kubeconfig")
+			log.Errorf("unable to create destination REST config from kubeconfig: %v", err)
 			return ctrl.Result{}, err
 		}
 		// Always disable request/response body logging
@@ -176,23 +198,23 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 		destClient, err := kubernetes.NewForConfig(destConfig)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create destination Kubernetes client")
+			log.Errorf("unable to create destination Kubernetes client: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		destDynamicClient, err := dynamic.NewForConfig(destConfig)
 		if err != nil {
-			logging.Logger.WithError(err).Error("unable to create destination dynamic client")
+			log.Errorf("unable to create destination dynamic client: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Verify destination cluster connectivity
 		if _, err := destClient.Discovery().ServerVersion(); err != nil {
-			logging.Logger.WithError(err).Error("failed to connect to destination cluster")
+			log.Errorf("failed to connect to destination cluster: %v", err)
 			return ctrl.Result{}, err
 		}
 
-		logging.Logger.Info("successfully connected to destination cluster")
+		log.Info("successfully connected to destination cluster")
 
 		// Initialize mode handler
 		r.modeHandler = modes.NewModeReconciler(
@@ -205,7 +227,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Handle reconciliation based on replication mode
-	logging.Logger.Info(fmt.Sprintf("starting %s mode reconciliation", replication.Spec.ReplicationMode))
+	log.Info(fmt.Sprintf("starting %s mode reconciliation", replication.Spec.ReplicationMode))
 
 	var result ctrl.Result
 	var err error
@@ -220,18 +242,18 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err != nil {
-		logging.Logger.WithError(err).Error("failed to reconcile replication")
+		log.Errorf("failed to reconcile replication: %v", err)
 		return result, err // Return result along with error to respect backoff
 	}
 
 	// Get the latest version of the Replication object before updating status
 	var latestReplication drv1alpha1.Replication
 	if err := r.Get(ctx, req.NamespacedName, &latestReplication); err != nil {
-		logging.Logger.WithError(err).Error("unable to fetch latest Replication")
+		log.Errorf("unable to fetch latest Replication: %v", err)
 		return ctrl.Result{}, err
 	}
 
-	logging.Logger.Debug("fetched latest replication before status update")
+	log.Info("fetched latest replication before status update")
 
 	// Copy the status from our working copy to the latest version
 	latestReplication.Status = replication.Status
@@ -240,16 +262,132 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Status().Update(ctx, &latestReplication); err != nil {
 		if apierrors.IsConflict(err) {
 			// If we hit a conflict, log details and requeue to try again
-			logging.Logger.Info("conflict updating status, will retry")
+			log.Info("conflict updating status, will retry")
 			return ctrl.Result{Requeue: true}, nil
 		}
-		logging.Logger.WithError(err).Error("unable to update Replication status")
+		log.Errorf("unable to update Replication status: %v", err)
 		return ctrl.Result{}, err
 	}
 
-	logging.Logger.Info("reconciliation complete")
+	log.Info("reconciliation complete")
 
 	return result, nil
+}
+
+// handleDeletion handles cleanup when a Replication is being deleted
+func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication *drv1alpha1.Replication) (ctrl.Result, error) {
+	log.Info(fmt.Sprintf("handling deletion of replication %s/%s", replication.Namespace, replication.Name))
+
+	// If finalizer is present, we need to clean up resources
+	if containsString(replication.Finalizers, FinalizerName) {
+		// Initialize clients if not already done
+		if r.modeHandler == nil {
+			// Create REST config with verbosity settings
+			restConfig := ctrl.GetConfigOrDie()
+			// Always disable request/response body logging
+			restConfig.WrapTransport = nil
+			log.Info("initializing cluster connections for cleanup")
+
+			// Fetch the destination Cluster instance
+			var destCluster drv1alpha1.RemoteCluster
+			if err := r.Get(ctx, client.ObjectKey{
+				Name:      replication.Spec.DestinationCluster,
+				Namespace: replication.ObjectMeta.Namespace,
+			}, &destCluster); err != nil {
+				log.Errorf("unable to fetch destination RemoteCluster: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			// Get the destination kubeconfig secret
+			var destKubeconfigSecret corev1.Secret
+			if err := r.Get(ctx, client.ObjectKey{
+				Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
+				Name:      destCluster.Spec.KubeconfigSecretRef.Name,
+			}, &destKubeconfigSecret); err != nil {
+				log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			// Get the destination kubeconfig data
+			destKubeconfigKey := destCluster.Spec.KubeconfigSecretRef.Key
+			if destKubeconfigKey == "" {
+				destKubeconfigKey = "kubeconfig"
+			}
+			destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
+			if !ok {
+				err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
+				log.Errorf("invalid destination kubeconfig secret: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			// Create destination cluster clients
+			destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
+			if err != nil {
+				log.Errorf("unable to create destination REST config from kubeconfig: %v", err)
+				return ctrl.Result{}, err
+			}
+			// Always disable request/response body logging
+			destConfig.WrapTransport = nil
+
+			destClient, err := kubernetes.NewForConfig(destConfig)
+			if err != nil {
+				log.Errorf("unable to create destination Kubernetes client: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			destDynamicClient, err := dynamic.NewForConfig(destConfig)
+			if err != nil {
+				log.Errorf("unable to create destination dynamic client: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			// Initialize mode handler with nil source clients since we only need destination for cleanup
+			r.modeHandler = modes.NewModeReconciler(
+				r.Client,
+				nil,
+				destDynamicClient,
+				nil,
+				destClient,
+			)
+		}
+
+		// Clean up synced resources in destination cluster
+		if err := r.modeHandler.CleanupResources(ctx, replication); err != nil {
+			log.Errorf("failed to cleanup resources: %v", err)
+			return ctrl.Result{}, err
+		}
+
+		// Remove finalizer
+		replication.Finalizers = removeString(replication.Finalizers, FinalizerName)
+		if err := r.Update(ctx, replication); err != nil {
+			log.Errorf("failed to remove finalizer: %v", err)
+			return ctrl.Result{}, err
+		}
+
+		log.Info("cleanup complete")
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// Helper functions for string slice operations
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func removeString(slice []string, s string) []string {
+	result := make([]string, 0, len(slice))
+	for _, item := range slice {
+		if item != s {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 // SetupWithManager sets up the controller with the Manager

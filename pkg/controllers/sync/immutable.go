@@ -6,7 +6,6 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/sync/internal/logging"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -108,7 +107,7 @@ func (h *ImmutableResourceHandler) handleNoChange(ctx context.Context, obj runti
 		return fmt.Errorf("object does not implement client.Object")
 	}
 
-	logging.Logger.Info(fmt.Sprintf("skipping update of immutable resource %s/%s of type %s",
+	log.Info(fmt.Sprintf("skipping update of immutable resource %s/%s of type %s",
 		clientObj.GetNamespace(),
 		clientObj.GetName(),
 		obj.GetObjectKind().GroupVersionKind().Kind))

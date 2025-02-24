@@ -1,0 +1,299 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case13
+  labels:
+    dr-syncer.io/test-case: "13"
+    dr-syncer.io/test-name: "pvc-preserve-attributes"
+    dr-syncer.io/test: "true"
+---
+# ConfigMap for application settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+data:
+  app.properties: |
+    volume.mode=/data/volume-mode
+    resource.req=/data/resource-req
+    selector.pvc=/data/selector
+    volume.name=/data/volume-name
+    data.source=/data/data-source
+    mount.opts=/data/mount-opts
+    node.affinity=/data/node-affinity
+---
+# Basic PVC with Volume Mode
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-volume-mode
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: volume-mode
+  annotations:
+    description: "Basic PVC with volume mode configuration"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+---
+# PVC with Resource Requirements
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-resources
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: resources
+  annotations:
+    description: "PVC with specific resource requirements"
+    performance.tuning: "high-iops"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+      iops: "5000"
+    limits:
+      storage: 20Gi
+      iops: "10000"
+  storageClassName: premium-performance
+  volumeMode: Filesystem
+---
+# PVC with Selector
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-selector
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: selector
+  annotations:
+    description: "PVC with label selector configuration"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+  selector:
+    matchLabels:
+      type: ssd
+      performance: high
+    matchExpressions:
+      - key: zone
+        operator: In
+        values:
+          - us-east-1a
+          - us-east-1b
+---
+# PVC with Volume Name
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-volume-name
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: volume-name
+  annotations:
+    description: "PVC with pre-provisioned volume name"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+  volumeName: pre-provisioned-vol-001
+---
+# PVC with Data Source
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-data-source
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: data-source
+  annotations:
+    description: "PVC with snapshot data source"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+  dataSource:
+    name: snapshot-001
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+---
+# PVC with Mount Options
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-mount-options
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: mount-options
+  annotations:
+    description: "PVC with custom mount options"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 12Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+  mountOptions:
+    - noatime
+    - nodiratime
+    - discard
+    - _netdev
+---
+# PVC with Node Affinity
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-node-affinity
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+    storage-type: node-affinity
+  annotations:
+    description: "PVC with node affinity rules"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 25Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - us-east-1a
+                - us-east-1b
+            - key: storage.kubernetes.io/type
+              operator: In
+              values:
+                - ssd
+                - nvme
+---
+# Deployment using all PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: volume-mode-storage
+              mountPath: /data/volume-mode
+            - name: resource-storage
+              mountPath: /data/resource-req
+            - name: selector-storage
+              mountPath: /data/selector
+            - name: volume-name-storage
+              mountPath: /data/volume-name
+            - name: data-source-storage
+              mountPath: /data/data-source
+            - name: mount-opts-storage
+              mountPath: /data/mount-opts
+            - name: node-affinity-storage
+              mountPath: /data/node-affinity
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: volume-mode-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-volume-mode
+        - name: resource-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-resources
+        - name: selector-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-selector
+        - name: volume-name-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-volume-name
+        - name: data-source-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-data-source
+        - name: mount-opts-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-mount-options
+        - name: node-affinity-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-node-affinity
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case13
+  labels:
+    app: test-app
+    test-type: pvc-preserve-attributes
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

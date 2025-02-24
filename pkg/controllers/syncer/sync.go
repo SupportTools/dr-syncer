@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/internal/logging"
+	syncerrors "github.com/supporttools/dr-syncer/pkg/controllers/syncer/errors"
+	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/validation"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -22,36 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// DeploymentScale represents a deployment's scale information
-type DeploymentScale struct {
-	Name     string
-	Replicas int32
-	SyncTime metav1.Time
-}
-
-// ResourceSyncer handles syncing resources between clusters
-type ResourceSyncer struct {
-	ctrlClient    client.Client
-	sourceDynamic dynamic.Interface
-	destDynamic   dynamic.Interface
-	sourceClient  kubernetes.Interface
-	destClient    kubernetes.Interface
-}
-
-// NewResourceSyncer creates a new resource syncer
-func NewResourceSyncer(ctrlClient client.Client, sourceDynamic, destDynamic dynamic.Interface, sourceClient, destClient kubernetes.Interface) *ResourceSyncer {
-	return &ResourceSyncer{
-		ctrlClient:    ctrlClient,
-		sourceDynamic: sourceDynamic,
-		destDynamic:   destDynamic,
-		sourceClient:  sourceClient,
-		destClient:    destClient,
-	}
-}
-
 // EnsureNamespaceExists ensures the destination namespace exists
 func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dstNamespace, srcNamespace string) error {
-	logging.Logger.Info(fmt.Sprintf("ensuring namespace %s exists", dstNamespace))
+	log.Info(fmt.Sprintf("ensuring namespace %s exists", dstNamespace))
 
 	maxRetries := 3
 	var lastErr error
@@ -60,7 +35,7 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 		// Try to get the namespace
 		_, err := client.CoreV1().Namespaces().Get(ctx, dstNamespace, metav1.GetOptions{})
 		if err == nil {
-			logging.Logger.Info(fmt.Sprintf("namespace %s already exists", dstNamespace))
+			log.Info(fmt.Sprintf("namespace %s already exists", dstNamespace))
 			return nil
 		}
 
@@ -82,7 +57,7 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 
 		_, err = client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 		if err == nil {
-			logging.Logger.Info(fmt.Sprintf("created namespace %s", dstNamespace))
+			log.Info(fmt.Sprintf("created namespace %s", dstNamespace))
 			return nil
 		}
 
@@ -92,7 +67,7 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 		}
 
 		// If we get here, another process created the namespace between our Get and Create
-		logging.Logger.Info(fmt.Sprintf("namespace %s was created concurrently", dstNamespace))
+		log.Info(fmt.Sprintf("namespace %s was created concurrently", dstNamespace))
 		return nil
 	}
 
@@ -101,7 +76,7 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 
 // verifyClusterAccess checks if the cluster has access to required resources
 func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, dynamicClient dynamic.Interface, resourceTypes []string) error {
-	logging.Logger.Info("verifying cluster resource permissions")
+	log.Info("verifying cluster resource permissions")
 
 	// First verify API groups exist
 	groups, err := client.Discovery().ServerGroups()
@@ -117,17 +92,17 @@ func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, dynam
 
 	// Check if networking.k8s.io API group exists (needed for Ingress)
 	if !availableGroups["networking.k8s.io"] {
-		logging.Logger.Info("networking.k8s.io API group not found in cluster")
+		log.Info("networking.k8s.io API group not found in cluster")
 	}
 
 	// Check if apps API group exists (needed for Deployments)
 	if !availableGroups["apps"] {
-		logging.Logger.Info("apps API group not found in cluster")
+		log.Info("apps API group not found in cluster")
 	}
 
 	// Try to list each resource type to verify permissions
 	for _, resourceType := range resourceTypes {
-		logging.Logger.Info(fmt.Sprintf("checking access permissions for %s", resourceType))
+		log.Info(fmt.Sprintf("checking access permissions for %s", resourceType))
 
 		var err error
 		switch strings.ToLower(resourceType) {
@@ -207,11 +182,11 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 	var deploymentScales []DeploymentScale
 
 	// Create resource syncer using the passed-in clients
-	syncer := NewResourceSyncer(ctrlClient, sourceDynamic, destDynamic, sourceClient, destClient)
+	syncer := NewResourceSyncer(ctrlClient, sourceDynamic, destDynamic, sourceClient, destClient, runtime.NewScheme())
 
 	// If SyncCRDs is enabled, sync CRDs first
 	if replicationSpec != nil && replicationSpec.SyncCRDs != nil && *replicationSpec.SyncCRDs {
-		logging.Logger.Info("syncing CRDs")
+		log.Info("syncing CRDs")
 		if err := syncCustomResourceDefinitions(ctx, syncer, sourceClient, sourceDynamic); err != nil {
 			return nil, fmt.Errorf("failed to sync CRDs: %w", err)
 		}
@@ -223,17 +198,17 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 	}
 
 	// Verify cluster access and permissions first
-	logging.Logger.Info("verifying source cluster access")
+	log.Info("verifying source cluster access")
 	if err := verifyClusterAccess(ctx, sourceClient, sourceDynamic, resourceTypes); err != nil {
 		return nil, fmt.Errorf("source cluster verification failed: %w", err)
 	}
 
-	logging.Logger.Info("verifying destination cluster access")
+	log.Info("verifying destination cluster access")
 	if err := verifyClusterAccess(ctx, destClient, destDynamic, resourceTypes); err != nil {
 		return nil, fmt.Errorf("destination cluster verification failed: %w", err)
 	}
 
-	logging.Logger.Info(fmt.Sprintf("initializing resource syncer for %s to %s", srcNamespace, dstNamespace))
+	log.Info(fmt.Sprintf("initializing resource syncer for %s to %s", srcNamespace, dstNamespace))
 
 	// Ensure destination namespace exists first
 	if err := EnsureNamespaceExists(ctx, destClient, dstNamespace, srcNamespace); err != nil {
@@ -257,7 +232,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 			if err != nil {
 				return nil, fmt.Errorf("failed to create source namespace: %w", err)
 			}
-			logging.Logger.Info(fmt.Sprintf("created source namespace %s", srcNamespace))
+			log.Info(fmt.Sprintf("created source namespace %s", srcNamespace))
 		} else {
 			return nil, fmt.Errorf("failed to get source namespace: %w", err)
 		}
@@ -295,7 +270,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 
 		_, err = destClient.CoreV1().Namespaces().Create(ctx, newNS, metav1.CreateOptions{})
 		if err == nil {
-			logging.Logger.Info(fmt.Sprintf("created destination namespace %s", dstNamespace))
+			log.Info(fmt.Sprintf("created destination namespace %s", dstNamespace))
 			break
 		}
 
@@ -305,7 +280,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 		}
 
 		// If we get here, another process created the namespace between our Get and Create
-		logging.Logger.Info(fmt.Sprintf("namespace %s was created concurrently", dstNamespace))
+		log.Info(fmt.Sprintf("namespace %s was created concurrently", dstNamespace))
 		break
 	}
 
@@ -313,13 +288,13 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 		return nil, lastErr
 	}
 
-	logging.Logger.Info(fmt.Sprintf("starting resource synchronization from %s to %s", srcNamespace, dstNamespace))
+	log.Info(fmt.Sprintf("starting resource synchronization from %s to %s", srcNamespace, dstNamespace))
 
 	// Sync standard resource types
 	for _, resourceType := range resourceTypes {
 		// Normalize resource type to lowercase
 		rtLower := strings.ToLower(resourceType)
-		logging.Logger.Info(fmt.Sprintf("processing resource type: %s", resourceType))
+		log.Info(fmt.Sprintf("processing resource type: %s", resourceType))
 
 		switch rtLower {
 		case "configmaps", "configmap":
@@ -356,14 +331,14 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 		// Get all API resources from the source cluster
 		groups, err := sourceClient.Discovery().ServerGroups()
 		if err != nil {
-			logging.Logger.WithError(err).Error("failed to get API groups")
+			log.Errorf("failed to get API groups: %v", err)
 		} else {
 			for _, group := range groups.Groups {
 				for _, version := range group.Versions {
 					groupVersion := version.GroupVersion
 					resources, err := sourceClient.Discovery().ServerResourcesForGroupVersion(groupVersion)
 					if err != nil {
-						logging.Logger.WithError(err).Error(fmt.Sprintf("failed to get resources for group version %s", groupVersion))
+						log.Errorf("failed to get resources for group version %s: %v", groupVersion, err)
 						continue
 					}
 
@@ -371,7 +346,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 						// Only sync namespaced resources that are not built-in types
 						if r.Namespaced && !isBuiltInResource(r.Name) {
 							if err := syncer.syncNamespaceScopedResource(ctx, sourceClient, destClient, srcNamespace, dstNamespace, r.Name, group.Name); err != nil {
-								logging.Logger.WithError(err).Error(fmt.Sprintf("failed to sync resource %s in group %s", r.Name, group.Name))
+								log.Errorf("failed to sync resource %s in group %s: %v", r.Name, group.Name, err)
 							}
 						}
 					}
@@ -383,7 +358,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 		for _, resourceRef := range namespaceScopedResources {
 			parts := strings.Split(resourceRef, ".")
 			if len(parts) < 2 {
-				logging.Logger.Error(fmt.Sprintf("invalid resource reference format: %s", resourceRef))
+				log.Error(fmt.Sprintf("invalid resource reference format: %s", resourceRef))
 				continue
 			}
 
@@ -391,7 +366,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 			group := strings.Join(parts[1:], ".")
 
 			if err := syncer.syncNamespaceScopedResource(ctx, sourceClient, destClient, srcNamespace, dstNamespace, resource, group); err != nil {
-				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to sync resource %s in group %s", resource, group))
+				log.Errorf("failed to sync resource %s in group %s: %v", resource, group, err)
 			}
 		}
 	}
@@ -441,7 +416,10 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 	// Get the resource from the source cluster
 	sourceResources, err := sourceClient.Discovery().ServerResourcesForGroupVersion(group + "/v1")
 	if err != nil {
-		return fmt.Errorf("failed to get resources for group %s: %v", group, err)
+		return syncerrors.NewRetryableError(
+			fmt.Errorf("failed to get resources for group %s: %v", group, err),
+			fmt.Sprintf("Resource/%s.%s", resource, group),
+		)
 	}
 
 	var resourceFound bool
@@ -453,7 +431,10 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 	}
 
 	if !resourceFound {
-		return fmt.Errorf("resource %s not found in group %s or not namespaced", resource, group)
+		return syncerrors.NewNonRetryableError(
+			fmt.Errorf("resource %s not found in group %s or not namespaced", resource, group),
+			fmt.Sprintf("Resource/%s.%s", resource, group),
+		)
 	}
 
 	// Create GVR for the resource
@@ -466,13 +447,19 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 	// List resources in source namespace
 	sourceList, err := r.sourceDynamic.Resource(gvr).Namespace(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to list %s in source namespace: %v", resource, err)
+		return syncerrors.NewRetryableError(
+			fmt.Errorf("failed to list %s in source namespace: %v", resource, err),
+			fmt.Sprintf("Resource/%s.%s", resource, group),
+		)
 	}
 
 	// Convert to unstructured list
 	var items []unstructured.Unstructured
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(sourceList.UnstructuredContent(), &items); err != nil {
-		return fmt.Errorf("failed to convert source list: %v", err)
+		return syncerrors.NewNonRetryableError(
+			fmt.Errorf("failed to convert source list: %v", err),
+			fmt.Sprintf("Resource/%s.%s", resource, group),
+		)
 	}
 
 	// Process each resource
@@ -492,12 +479,12 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 				// Create resource
 				_, err = r.destDynamic.Resource(gvr).Namespace(dstNamespace).Create(ctx, &item, metav1.CreateOptions{})
 				if err != nil {
-					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to create resource %s/%s", resource, item.GetName()))
+					log.Errorf("failed to create resource %s/%s: %v", resource, item.GetName(), err)
 					continue
 				}
-				logging.Logger.Info(fmt.Sprintf("created resource %s/%s", resource, item.GetName()))
+				log.Info(fmt.Sprintf("created resource %s/%s", resource, item.GetName()))
 			} else {
-				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to get resource %s/%s", resource, item.GetName()))
+				log.Errorf("failed to get resource %s/%s: %v", resource, item.GetName(), err)
 				continue
 			}
 		} else {
@@ -508,10 +495,10 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 				item.SetResourceVersion(existing.GetResourceVersion())
 				_, err = r.destDynamic.Resource(gvr).Namespace(dstNamespace).Update(ctx, &item, metav1.UpdateOptions{})
 				if err != nil {
-					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to update resource %s/%s", resource, item.GetName()))
+					log.Errorf("failed to update resource %s/%s: %v", resource, item.GetName(), err)
 					continue
 				}
-				logging.Logger.Info(fmt.Sprintf("updated resource %s/%s", resource, item.GetName()))
+				log.Info(fmt.Sprintf("updated resource %s/%s", resource, item.GetName()))
 			}
 		}
 	}
@@ -531,6 +518,17 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 				Group:   "",
 				Version: "v1",
 				Kind:    "ConfigMap",
+			}
+		case *corev1.PersistentVolumeClaim:
+			pvc := obj.(*corev1.PersistentVolumeClaim)
+			// For PVCs, validate storage class before proceeding
+			if err := validation.ValidateStorageClass(ctx, r.destClient, pvc.Spec.StorageClassName); err != nil {
+				return syncerrors.NewNonRetryableError(err, fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name))
+			}
+			gvk = schema.GroupVersionKind{
+				Group:   "",
+				Version: "v1",
+				Kind:    "PersistentVolumeClaim",
 			}
 		case *corev1.Secret:
 			gvk = schema.GroupVersionKind{
@@ -557,14 +555,24 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 				Kind:    "Ingress",
 			}
 		default:
-			return fmt.Errorf("unknown object type: %T", obj)
+			// Try to get GVK from the object's metadata
+			gvk = obj.GetObjectKind().GroupVersionKind()
+			if gvk.Empty() {
+				return syncerrors.NewNonRetryableError(
+					fmt.Errorf("unknown object type: %T", obj),
+					"TypeConversion",
+				)
+			}
 		}
 	}
 
 	// Convert to unstructured
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
-		return fmt.Errorf("failed to convert object to unstructured: %w", err)
+		return syncerrors.NewNonRetryableError(
+			fmt.Errorf("failed to convert object to unstructured: %w", err),
+			"TypeConversion",
+		)
 	}
 
 	u := &unstructured.Unstructured{Object: unstructuredObj}
@@ -618,6 +626,12 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 			Version:  "v1",
 			Resource: "customresourcedefinitions",
 		}
+	case "PersistentVolumeClaim":
+		gvr = schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "persistentvolumeclaims",
+		}
 	default:
 		// For other types, use the standard conversion
 		gvr = schema.GroupVersionResource{
@@ -627,25 +641,34 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 		}
 	}
 
-	logging.Logger.Info(fmt.Sprintf("syncing %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
+	log.Info(fmt.Sprintf("syncing %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
 
 	// Get current resource in destination cluster
 	existing, err := r.destDynamic.Resource(gvr).Namespace(u.GetNamespace()).Get(ctx, u.GetName(), metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get current resource: %w", err)
+			return syncerrors.NewRetryableError(
+				fmt.Errorf("failed to get current resource: %w", err),
+				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+			)
 		}
 		// Resource doesn't exist, create it
-		logging.Logger.Info(fmt.Sprintf("creating %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
+		log.Info(fmt.Sprintf("creating %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
 
 		// Sanitize metadata before creation
 		utils.SanitizeMetadata(u)
 		_, err = r.destDynamic.Resource(gvr).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind)
+				return syncerrors.NewNonRetryableError(
+				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+			)
 			}
-			return fmt.Errorf("failed to create resource: %w", err)
+			return syncerrors.NewRetryableError(
+				fmt.Errorf("failed to create resource: %w", err),
+				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+			)
 		}
 		return nil
 	}
@@ -664,19 +687,25 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 	// Compare sanitized versions
 	if !reflect.DeepEqual(existingCopy.Object, sourceCopy.Object) {
 		// Real change detected - update with proper resourceVersion and UID
-		logging.Logger.Info(fmt.Sprintf("updating %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
+		log.Info(fmt.Sprintf("updating %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
 
 		u.SetUID(existingUID)
 		u.SetResourceVersion(existing.GetResourceVersion())
 		_, err = r.destDynamic.Resource(gvr).Namespace(u.GetNamespace()).Update(ctx, u, metav1.UpdateOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind)
+				return syncerrors.NewNonRetryableError(
+				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+			)
 			}
-			return fmt.Errorf("failed to update resource: %w", err)
+			return syncerrors.NewRetryableError(
+				fmt.Errorf("failed to update resource: %w", err),
+				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+			)
 		}
 	} else {
-		logging.Logger.Info(fmt.Sprintf("no changes needed for %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
+		log.Info(fmt.Sprintf("no changes needed for %s %s/%s", gvk.Kind, u.GetNamespace(), u.GetName()))
 	}
 	return nil
 }

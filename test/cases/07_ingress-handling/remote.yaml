@@ -1,0 +1,225 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case07
+  labels:
+    dr-syncer.io/test-case: "07"
+    dr-syncer.io/test-name: "ingress-handling"
+    dr-syncer.io/test: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+data:
+  app.properties: |
+    service.port=8080
+    service.protocol=http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 443
+              name: https
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service-1
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service-2
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress-basic
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+    ingress-type: basic
+  annotations:
+    description: "Basic ingress with single host and path-based routing"
+spec:
+  rules:
+    - host: basic.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-1
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress-complex
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+    ingress-type: complex
+  annotations:
+    description: "Complex ingress with multiple hosts, paths, and TLS"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  tls:
+    - hosts:
+        - complex1.example.com
+        - complex2.example.com
+      secretName: test-tls-secret
+  rules:
+    - host: complex1.example.com
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-1
+                port:
+                  number: 80
+          - path: /admin(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-2
+                port:
+                  number: 80
+    - host: complex2.example.com
+      http:
+        paths:
+          - path: /app(/|$)(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-1
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress-annotations
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+    ingress-type: annotated
+  annotations:
+    description: "Ingress with various provider-specific annotations"
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://*.example.com"
+spec:
+  rules:
+    - host: annotated.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-1
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress-default
+  namespace: dr-sync-test-case07
+  labels:
+    app: test-app
+    test-type: ingress-handling
+    ingress-type: default-backend
+  annotations:
+    description: "Ingress with default backend configuration"
+spec:
+  defaultBackend:
+    service:
+      name: test-service-2
+      port:
+        number: 80
+  rules:
+    - http:
+        paths:
+          - path: /specific
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service-1
+                port:
+                  number: 80

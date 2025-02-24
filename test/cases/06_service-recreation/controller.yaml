@@ -1,0 +1,38 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: service-recreation
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "06"
+    dr-syncer.io/test-name: "service-recreation"
+    dr-syncer.io/test: "true"
+spec:
+  # Use scheduled mode for predictable testing
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *"  # Run every 5 minutes
+  
+  # Cluster configuration
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case06
+  destinationNamespace: dr-sync-test-case06
+  
+  # Resource types to sync
+  resourceTypes:
+    - "*"  # Sync all resource types
+  
+  # Scale deployments to zero in DR
+  scaleToZero: true
+  
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: Recreate  # Important for service recreation
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+  
+  # Service handling configuration
+  serviceConfig:
+    recreateServices: true  # Enable service recreation
+    preserveNodePorts: true # Maintain NodePort values
+    preserveClusterIP: false # Allow new ClusterIP assignment

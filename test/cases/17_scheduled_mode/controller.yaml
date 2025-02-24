@@ -1,0 +1,46 @@
+---
+# Scheduled Mode Replication
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: replication-scheduled
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "17"
+    dr-syncer.io/test-name: "scheduled-mode"
+    dr-syncer.io/test: "true"
+    dr-syncer.io/mode: "scheduled"
+spec:
+  # Scheduled mode configuration
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *"  # Every 5 minutes
+  
+  # Cluster configuration
+  sourceCluster: dr-syncer-nyc3
+  destinationCluster: dr-syncer-sfo3
+  sourceNamespace: dr-sync-test-case17
+  destinationNamespace: dr-sync-test-case17
+  
+  # Resource types to sync
+  resourceTypes:
+    - "*"  # Sync all resource types
+  
+  # Scale deployments to zero in DR
+  scaleToZero: true
+  
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: Recreate
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+
+  # Configure PVC handling
+  pvcConfig:
+    storageClassMappings:
+      - from: do-block-storage
+        to: do-block-storage-xfs
+    accessModeMappings:
+      - from: ReadWriteOnce
+        to: ReadWriteOnce
+    preserveVolumeAttributes: true
+    syncPersistentVolumes: true

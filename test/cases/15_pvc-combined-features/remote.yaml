@@ -1,0 +1,332 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case15
+  labels:
+    dr-syncer.io/test-case: "15"
+    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test: "true"
+---
+# ConfigMap for application settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+data:
+  app.properties: |
+    standard.path=/data/standard
+    premium.path=/data/premium
+    local.path=/data/local
+    block.path=/data/block
+    dynamic.path=/data/dynamic
+    static.path=/data/static
+---
+# Standard PV with Storage Class Mapping
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-standard-pv
+  labels:
+    type: standard
+    test-type: pvc-combined-features
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: standard
+  hostPath:
+    path: /mnt/data/standard
+    type: DirectoryOrCreate
+---
+# Standard PVC with Storage Class Mapping
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-standard-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: standard
+  annotations:
+    description: "Standard PVC with storage class mapping"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+  volumeName: test-standard-pv
+---
+# Premium PVC with Access Mode Mapping
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-premium-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: premium
+  annotations:
+    description: "Premium PVC with access mode mapping"
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 20Gi
+      iops: "10000"
+    limits:
+      storage: 30Gi
+      iops: "20000"
+  storageClassName: premium
+---
+# Local PV with Node Affinity
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-local-pv
+  labels:
+    type: local
+    test-type: pvc-combined-features
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  local:
+    path: /mnt/data/local
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - node-1
+---
+# Local PVC with Node Affinity
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-local-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: local
+  annotations:
+    description: "Local PVC with node affinity"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: local-storage
+  volumeName: test-local-pv
+---
+# Block PV with Volume Mode
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-block-pv
+  labels:
+    type: block
+    test-type: pvc-combined-features
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: block-storage
+  volumeMode: Block
+  local:
+    path: /dev/sdb
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - node-2
+---
+# Block PVC with Volume Mode
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-block-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: block
+  annotations:
+    description: "Block PVC with volume mode"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: block-storage
+  volumeMode: Block
+  volumeName: test-block-pv
+---
+# Dynamic PVC with Resource Limits
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-dynamic-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: dynamic
+  annotations:
+    description: "Dynamic PVC with resource limits"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 200Gi
+      iops: "20000"
+    limits:
+      storage: 300Gi
+      iops: "30000"
+  storageClassName: premium
+---
+# Static PV with Mount Options
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-static-pv
+  labels:
+    type: static
+    test-type: pvc-combined-features
+spec:
+  capacity:
+    storage: 150Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: standard
+  mountOptions:
+    - noatime
+    - nodiratime
+    - discard
+    - _netdev
+  nfs:
+    server: nfs.example.com
+    path: /exports/data
+---
+# Static PVC with Mount Options
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-static-pvc
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+    volume-type: static
+  annotations:
+    description: "Static PVC with mount options"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 150Gi
+  storageClassName: standard
+  volumeName: test-static-pv
+---
+# Deployment using all PVCs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: standard-storage
+              mountPath: /data/standard
+            - name: premium-storage
+              mountPath: /data/premium
+            - name: local-storage
+              mountPath: /data/local
+            - name: static-storage
+              mountPath: /data/static
+          volumeDevices:
+            - name: block-storage
+              devicePath: /dev/xvda
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: standard-storage
+          persistentVolumeClaim:
+            claimName: test-standard-pvc
+        - name: premium-storage
+          persistentVolumeClaim:
+            claimName: test-premium-pvc
+        - name: local-storage
+          persistentVolumeClaim:
+            claimName: test-local-pvc
+        - name: block-storage
+          persistentVolumeClaim:
+            claimName: test-block-pvc
+        - name: static-storage
+          persistentVolumeClaim:
+            claimName: test-static-pvc
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case15
+  labels:
+    app: test-app
+    test-type: pvc-combined-features
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
