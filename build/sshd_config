@@ -1,0 +1,36 @@
+# Basic SSH configuration
+Port 2222
+Protocol 2
+HostKey /etc/ssh/keys/ssh_host_rsa_key
+HostKey /etc/ssh/keys/ssh_host_ecdsa_key
+HostKey /etc/ssh/keys/ssh_host_ed25519_key
+
+# Authentication
+PubkeyAuthentication yes
+PasswordAuthentication no
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM no
+
+# Security
+PermitRootLogin no
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+PermitTunnel no
+MaxAuthTries 3
+
+# Logging
+SyslogFacility AUTH
+LogLevel INFO
+
+# Restrict to rsync only
+ForceCommand /usr/bin/rsync ${SSH_ORIGINAL_COMMAND}
+AllowUsers syncer
+
+# Environment
+AcceptEnv LANG LC_*
+
+# Idle timeout
+ClientAliveInterval 300
+ClientAliveCountMax 2

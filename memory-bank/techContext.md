@@ -120,6 +120,24 @@
    kubectl apply -f config/rbac/
    ```
 
+## PVC Sync Components
+
+1. Agent Container
+   - Base: Alpine Linux
+   - Key packages:
+     * OpenSSH server
+     * rsync
+     * bash
+   - Configuration:
+     * Custom SSH port
+     * Restricted shell access
+     * rsync-only commands
+
+2. Build Process
+   - Separate agent image build
+   - Version alignment with controller
+   - Multi-stage build optimization
+
 ## Technical Constraints
 
 1. Resource Limitations

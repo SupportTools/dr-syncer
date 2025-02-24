@@ -38,6 +38,14 @@
 
 ## In Progress
 
+### PVC Sync Implementation
+- [ ] Agent container image
+- [ ] SSH/rsync service
+- [ ] Controller extensions
+- [ ] Remote deployment logic
+- [ ] SSH key management
+- [ ] Sync operations
+
 ### Resource Handling
 - [ ] Enhanced error recovery
 - [ ] Improved status reporting

@@ -9,6 +9,34 @@
    - Resource handling implemented
    - Health checks integrated
 
+2. PVC Sync Agent Implementation
+   - Status: In Progress
+   - Branch: feature/pvc-sync-agent
+   - Components:
+     * Agent DaemonSet with SSH/rsync capability
+     * Controller extension for agent management
+     * SSH key management
+     * Remote cluster deployment handling
+   - Key Features:
+     * Cross-cluster PVC data replication
+     * Secure SSH-based rsync
+     * Configurable concurrency and retry
+     * Automated agent deployment
+
+3. Implementation Plan:
+   - Phase 1: Basic Infrastructure
+     * Agent Dockerfile and build process
+     * SSH/rsync service setup
+     * Controller CRD extensions
+   - Phase 2: Deployment Logic
+     * Remote cluster agent deployment
+     * SSH key management
+     * RBAC setup
+   - Phase 3: Sync Implementation
+     * PVC discovery and mapping
+     * Rsync operations
+     * Status tracking
+
 2. Custom Resources
    - RemoteCluster CRD implemented and validated
    - Replication CRD implemented and validated

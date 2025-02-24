@@ -123,6 +123,25 @@
    }
    ```
 
+## PVC Sync Pattern
+
+1. Agent Architecture
+   - DaemonSet-based deployment
+   - Host network access
+   - Kubelet volume mounting
+   - SSH service for rsync
+
+2. Security Pattern
+   - Per-cluster SSH key pairs
+   - Controller-managed key distribution
+   - Restricted RBAC permissions
+   - Secure rsync over SSH
+
+3. Deployment Pattern
+   - Controller-managed agent lifecycle
+   - Automated remote cluster setup
+   - Resource management via RemoteCluster CRD
+
 ## Best Practices
 
 1. Resource Management

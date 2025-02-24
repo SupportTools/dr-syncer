@@ -1,0 +1,30 @@
+FROM alpine:latest
+
+# Install required packages
+RUN apk add --no-cache \
+    openssh-server \
+    rsync \
+    bash \
+    curl
+
+# Create syncer user and configure SSH
+RUN adduser -D syncer && \
+    mkdir -p /home/syncer/.ssh && \
+    chmod 700 /home/syncer/.ssh && \
+    chown syncer:syncer /home/syncer/.ssh
+
+# Configure SSH for rsync only
+COPY build/sshd_config /etc/ssh/sshd_config
+COPY build/entrypoint.sh /entrypoint.sh
+
+# Set permissions
+RUN chmod +x /entrypoint.sh && \
+    chown root:root /etc/ssh/sshd_config && \
+    chmod 644 /etc/ssh/sshd_config
+
+# Create required directories
+RUN mkdir -p /run/sshd /var/lib/kubelet
+
+EXPOSE 2222
+
+ENTRYPOINT ["/entrypoint.sh"]

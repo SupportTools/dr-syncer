@@ -8,6 +8,21 @@ image:
   # tag will be overridden by deploy commands
   tag: "latest"
 
+# Agent configuration
+agent:
+  image:
+    repository: harbor.support.tools/dr-syncer/agent
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "latest"
+  ssh:
+    port: 2222
+  concurrency: 3
+  retryConfig:
+    maxRetries: 5
+    initialDelay: "5s"
+    maxDelay: "5m"
+
 # Harbor registry credentials secret
 imagePullSecrets:
   - name: harbor-registry

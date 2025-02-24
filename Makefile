@@ -1,11 +1,19 @@
 # Docker settings
 DOCKER_REGISTRY ?= harbor.support.tools
 DOCKER_REPO ?= dr-syncer/controller
+DOCKER_AGENT_REPO ?= dr-syncer/agent
 TIMESTAMP ?= $(shell date +%Y%m%d%H%M%S)
+
+# Controller image settings
 IMG ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(TIMESTAMP)
 DOCKER_LATEST_TAG ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO):latest
 DOCKER_BUILD_CACHE_FROM ?= type=registry,ref=$(DOCKER_LATEST_TAG)
 DOCKER_BUILD_CACHE_TO ?= type=inline
+
+# Agent image settings
+AGENT_IMG ?= $(DOCKER_REGISTRY)/$(DOCKER_AGENT_REPO):$(TIMESTAMP)
+DOCKER_AGENT_LATEST_TAG ?= $(DOCKER_REGISTRY)/$(DOCKER_AGENT_REPO):latest
+DOCKER_AGENT_BUILD_CACHE_FROM ?= type=registry,ref=$(DOCKER_AGENT_LATEST_TAG)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -68,7 +76,7 @@ deploy-local: check-docker create-registry-secret manifests ## Build, push image
 	fi
 	@echo "Using kubeconfig: $(KUBECONFIG)"
 	
-	@echo "Building image with version $(VERSION)..."
+	@echo "Building controller image with version $(VERSION)..."
 	$(eval DEPLOY_TIMESTAMP := $(shell date +%Y%m%d%H%M%S))
 	docker build \
 		--cache-from=$(DOCKER_BUILD_CACHE_FROM) \
@@ -79,9 +87,22 @@ deploy-local: check-docker create-registry-secret manifests ## Build, push image
 		-t $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DEPLOY_TIMESTAMP) \
 		-t $(DOCKER_LATEST_TAG) .
 	
+	@echo "Building agent image..."
+	docker build \
+		--cache-from=$(DOCKER_AGENT_BUILD_CACHE_FROM) \
+		--cache-to=$(DOCKER_BUILD_CACHE_TO) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile.agent \
+		-t $(DOCKER_REGISTRY)/$(DOCKER_AGENT_REPO):$(DEPLOY_TIMESTAMP) \
+		-t $(DOCKER_AGENT_LATEST_TAG) .
+	
 	@echo "Pushing images..."
 	docker push $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DEPLOY_TIMESTAMP)
 	docker push $(DOCKER_LATEST_TAG)
+	docker push $(DOCKER_REGISTRY)/$(DOCKER_AGENT_REPO):$(DEPLOY_TIMESTAMP)
+	docker push $(DOCKER_AGENT_LATEST_TAG)
 	
 	@echo "Deploying to Kubernetes..."
 	KUBECONFIG=$(KUBECONFIG) helm upgrade --install $(HELM_RELEASE_NAME) charts/dr-syncer \
@@ -130,8 +151,33 @@ build: fmt vet ## Build dr-syncer binary
 run: fmt vet ## Run against the configured Kubernetes cluster in ~/.kube/config
 	go run ./main.go
 
+.PHONY: docker-build-agent
+docker-build-agent: check-docker ## Build and push agent docker image with caching
+	@echo "Building agent image with version $(VERSION)..."
+	docker build \
+		--cache-from=$(DOCKER_AGENT_BUILD_CACHE_FROM) \
+		--cache-to=$(DOCKER_BUILD_CACHE_TO) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile.agent \
+		-t ${AGENT_IMG} \
+		-t $(DOCKER_AGENT_LATEST_TAG) .
+	
+	@echo "Pushing agent images..."
+	docker push ${AGENT_IMG}
+	docker push $(DOCKER_AGENT_LATEST_TAG)
+	
+	@echo "✓ Agent build complete"
+	@echo "  Image: ${AGENT_IMG}"
+	@echo "  Version: $(VERSION)"
+	@echo "  Git commit: $(GIT_COMMIT)"
+
+.PHONY: docker-build-all
+docker-build-all: docker-build docker-build-agent ## Build both controller and agent images
+
 .PHONY: docker-build
-docker-build: check-docker ## Build and push docker image with caching
+docker-build: check-docker ## Build and push controller docker image with caching
 	@echo "Building image with version $(VERSION)..."
 	docker build \
 		--cache-from=$(DOCKER_BUILD_CACHE_FROM) \
