@@ -25,6 +25,14 @@ spec:
       jsonPath: .status.lastSyncTime
       name: Last Sync
       type: date
+    - description: PVC sync status
+      jsonPath: .status.pvcSync.phase
+      name: PVC Sync
+      type: string
+    - description: Number of ready PVC sync agents
+      jsonPath: .status.pvcSync.agentStatus.readyNodes
+      name: Ready Agents
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -78,6 +86,69 @@ spec:
                 required:
                 - name
                 - namespace
+                type: object
+              pvcSync:
+                description: PVCSync configures PVC synchronization for this cluster
+                properties:
+                  concurrency:
+                    description: Concurrency is the maximum number of concurrent PVC
+                      syncs
+                    format: int32
+                    type: integer
+                  enabled:
+                    description: Enabled indicates whether PVC synchronization is
+                      enabled
+                    type: boolean
+                  image:
+                    description: Image specifies the PVC sync agent image
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy defines the image pull policy
+                        type: string
+                      repository:
+                        description: Repository is the image repository
+                        type: string
+                      tag:
+                        description: Tag is the image tag
+                        type: string
+                    type: object
+                  retryConfig:
+                    description: RetryConfig configures retry behavior for failed
+                      syncs
+                    properties:
+                      initialDelay:
+                        description: InitialDelay is the initial delay between retries
+                        type: string
+                      maxDelay:
+                        description: MaxDelay is the maximum delay between retries
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the maximum number of retry attempts
+                        format: int32
+                        type: integer
+                    type: object
+                  ssh:
+                    description: SSH configures the SSH service for rsync
+                    properties:
+                      keySecretRef:
+                        description: KeySecretRef references a secret containing SSH
+                          keys
+                        properties:
+                          name:
+                            description: Name is the name of the secret
+                            type: string
+                          namespace:
+                            description: Namespace is the namespace of the secret
+                            type: string
+                        required:
+                        - name
+                        - namespace
+                        type: object
+                      port:
+                        description: Port is the SSH service port
+                        format: int32
+                        type: integer
+                    type: object
                 type: object
             required:
             - kubeconfigSecretRef
@@ -163,6 +234,58 @@ spec:
                 description: LastSyncTime is the last time the cluster was synced
                 format: date-time
                 type: string
+              pvcSync:
+                description: PVCSync represents the status of PVC synchronization
+                properties:
+                  agentStatus:
+                    description: AgentStatus contains the status of PVC sync agents
+                    properties:
+                      nodeStatuses:
+                        additionalProperties:
+                          description: PVCSyncNodeStatus contains status information
+                            for a node's PVC sync agent
+                          properties:
+                            lastHeartbeat:
+                              description: LastHeartbeat is the last time the agent
+                                reported status
+                              format: date-time
+                              type: string
+                            message:
+                              description: Message provides additional status information
+                              type: string
+                            ready:
+                              description: Ready indicates whether the agent is ready
+                              type: boolean
+                          type: object
+                        description: NodeStatuses contains per-node agent status
+                        type: object
+                      readyNodes:
+                        description: ReadyNodes is the number of nodes with ready
+                          agents
+                        format: int32
+                        type: integer
+                      totalNodes:
+                        description: TotalNodes is the total number of nodes that
+                          should have agents
+                        format: int32
+                        type: integer
+                    type: object
+                  failedSyncs:
+                    description: FailedSyncs is the number of failed sync attempts
+                    format: int32
+                    type: integer
+                  lastSuccessfulSync:
+                    description: LastSuccessfulSync is the last time a PVC sync was
+                      successful
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message provides additional status information
+                    type: string
+                  phase:
+                    description: Phase is the current phase of PVC sync agent deployment
+                    type: string
+                type: object
             type: object
         required:
         - spec
