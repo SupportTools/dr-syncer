@@ -6,6 +6,7 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controllers/sync/internal/logging"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,8 +16,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-	"github.com/go-logr/logr"
 )
 
 const (
@@ -29,7 +28,6 @@ type ImmutableResourceHandler struct {
 	sourceClient kubernetes.Interface
 	destClient   kubernetes.Interface
 	ctrlClient   client.Client
-	logger       logr.Logger
 }
 
 // NewImmutableResourceHandler creates a new handler
@@ -38,7 +36,6 @@ func NewImmutableResourceHandler(sourceClient kubernetes.Interface, destClient k
 		sourceClient: sourceClient,
 		destClient:   destClient,
 		ctrlClient:   ctrlClient,
-		logger:       log.Log.WithName("immutable-handler"),
 	}
 }
 
@@ -111,10 +108,10 @@ func (h *ImmutableResourceHandler) handleNoChange(ctx context.Context, obj runti
 		return fmt.Errorf("object does not implement client.Object")
 	}
 
-	h.logger.Info("Skipping update of immutable resource",
-		"name", clientObj.GetName(),
-		"namespace", clientObj.GetNamespace(),
-		"type", obj.GetObjectKind().GroupVersionKind().Kind)
+	logging.Logger.Info(fmt.Sprintf("skipping update of immutable resource %s/%s of type %s",
+		clientObj.GetNamespace(),
+		clientObj.GetName(),
+		obj.GetObjectKind().GroupVersionKind().Kind))
 
 	// TODO: Record warning event
 	return nil

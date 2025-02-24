@@ -3,11 +3,14 @@
 replicaCount: 1
 
 image:
-  repository: supporttools/dr-syncer
+  repository: harbor.support.tools/dr-syncer/controller
   pullPolicy: IfNotPresent
-  tag: "0.1.0"
+  # tag will be overridden by deploy commands
+  tag: "latest"
 
-imagePullSecrets: []
+# Harbor registry credentials secret
+imagePullSecrets:
+  - name: harbor-registry
 nameOverride: ""
 fullnameOverride: ""
 
@@ -15,7 +18,9 @@ serviceAccount:
   # Specifies whether a service account should be created
   create: true
   # Annotations to add to the service account
-  annotations: {}
+  annotations:
+    # Add Harbor registry credentials to service account
+    secret.kubernetes.io/dockerconfigjson: harbor-registry
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: "dr-syncer"
@@ -51,8 +56,10 @@ affinity: {}
 
 # Controller configuration
 controller:
-  # Log level
-  logLevel: "debug"
+  # Log level (info, debug, warn, error)
+  logLevel: "info"
+  # Log verbosity level for client-go transport logging (0=disabled, 1+=enabled)
+  logVerbosity: 0
   # Metrics bind address
   metricsAddr: ":8080"
   # Health probe bind address

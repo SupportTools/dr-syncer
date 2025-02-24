@@ -39,9 +39,9 @@ verify_resource() {
 
 # Function to wait for replication to be ready
 wait_for_replication() {
-    local max_attempts=12
+    local max_attempts=300
     local attempt=1
-    local sleep_time=30
+    local sleep_time=1
     
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do

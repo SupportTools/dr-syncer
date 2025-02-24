@@ -493,7 +493,10 @@ main() {
             ;;
     esac
 
-    # Print test summary
+    # Print test summary and logs
+    echo "Controller logs:"
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer logs -l app.kubernetes.io/name=dr-syncer --tail=100
+    
     print_summary
 }
 

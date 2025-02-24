@@ -13,6 +13,7 @@ type AppConfig struct {
 	KubeConfig           string        `json:"kubeConfig"`       // Path to kubeconfig file
 	SyncInterval         time.Duration `json:"syncInterval"`     // Interval between sync operations
 	ResyncPeriod         time.Duration `json:"resyncPeriod"`     // Period for full resync of resources
+	LogVerbosity         int           `json:"logVerbosity"`     // Kubernetes client log verbosity level
 	MetricsAddr          string        `json:"metricsAddr"`      // The address the metric endpoint binds to
 	ProbeAddr            string        `json:"probeAddr"`        // The address the probe endpoint binds to
 	EnableLeaderElection bool          `json:"leaderElection"`   // Enable leader election for controller manager
@@ -30,6 +31,7 @@ func LoadConfiguration() {
 	CFG.KubeConfig = getEnvOrDefault("KUBECONFIG", "")
 	CFG.SyncInterval = parseEnvDuration("SYNC_INTERVAL", "5m")
 	CFG.ResyncPeriod = parseEnvDuration("RESYNC_PERIOD", "1h")
+	CFG.LogVerbosity = parseEnvInt("LOG_VERBOSITY", 0)
 	CFG.MetricsAddr = getEnvOrDefault("METRICS_ADDR", ":8080")
 	CFG.ProbeAddr = getEnvOrDefault("PROBE_ADDR", ":8081")
 	CFG.EnableLeaderElection = parseEnvBool("ENABLE_LEADER_ELECTION", false)
@@ -80,4 +82,20 @@ func parseEnvDuration(key, defaultValue string) time.Duration {
 		duration, _ = time.ParseDuration(defaultValue)
 	}
 	return duration
+}
+
+// parseEnvInt parses an environment variable as an integer, returning a default value if parsing fails.
+func parseEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Printf("Environment variable %s not set. Using default: %d", key, defaultValue)
+		return defaultValue
+	}
+	
+	intValue, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("Error parsing %s as integer: %v. Using default: %d", key, err, defaultValue)
+		return defaultValue
+	}
+	return intValue
 }

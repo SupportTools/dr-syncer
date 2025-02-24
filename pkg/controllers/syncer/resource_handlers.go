@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,10 +14,7 @@ import (
 
 // syncConfigMaps synchronizes ConfigMaps between namespaces
 func syncConfigMaps(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing configmaps",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace)
+	logging.Logger.Info(fmt.Sprintf("syncing configmaps from %s to %s", srcNamespace, dstNamespace))
 
 	configMaps, err := sourceClient.CoreV1().ConfigMaps(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -29,6 +26,7 @@ func syncConfigMaps(ctx context.Context, syncer *ResourceSyncer, sourceClient ku
 			continue
 		}
 		cm.Namespace = dstNamespace
+		logging.Logger.Info(fmt.Sprintf("syncing configmap %s from %s to %s", cm.Name, srcNamespace, dstNamespace))
 		if err := syncer.SyncResource(ctx, &cm, config); err != nil {
 			return fmt.Errorf("failed to sync ConfigMap %s: %w", cm.Name, err)
 		}
@@ -38,10 +36,7 @@ func syncConfigMaps(ctx context.Context, syncer *ResourceSyncer, sourceClient ku
 
 // syncSecrets synchronizes Secrets between namespaces
 func syncSecrets(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing secrets",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace)
+	logging.Logger.Info(fmt.Sprintf("syncing secrets from %s to %s", srcNamespace, dstNamespace))
 
 	secrets, err := sourceClient.CoreV1().Secrets(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -53,6 +48,7 @@ func syncSecrets(ctx context.Context, syncer *ResourceSyncer, sourceClient kuber
 			continue
 		}
 		secret.Namespace = dstNamespace
+		logging.Logger.Info(fmt.Sprintf("syncing secret %s from %s to %s", secret.Name, srcNamespace, dstNamespace))
 		if err := syncer.SyncResource(ctx, &secret, config); err != nil {
 			return fmt.Errorf("failed to sync Secret %s: %w", secret.Name, err)
 		}
@@ -63,11 +59,7 @@ func syncSecrets(ctx context.Context, syncer *ResourceSyncer, sourceClient kuber
 // syncDeployments synchronizes Deployments between namespaces
 func syncDeployments(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, scaleToZero bool, config *drv1alpha1.ImmutableResourceConfig) ([]DeploymentScale, error) {
 	var scales []DeploymentScale
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing deployments",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace,
-		"scaleToZero", scaleToZero)
+	logging.Logger.Info(fmt.Sprintf("syncing deployments from %s to %s (scale to zero: %v)", srcNamespace, dstNamespace, scaleToZero))
 
 	deployments, err := sourceClient.AppsV1().Deployments(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -110,6 +102,7 @@ func syncDeployments(ctx context.Context, syncer *ResourceSyncer, sourceClient k
 		}
 
 		deploy.Namespace = dstNamespace
+		logging.Logger.Info(fmt.Sprintf("syncing deployment %s from %s to %s (replicas: %d)", deploy.Name, srcNamespace, dstNamespace, *deploy.Spec.Replicas))
 		if err := syncer.SyncResource(ctx, &deploy, config); err != nil {
 			return nil, fmt.Errorf("failed to sync Deployment %s: %w", deploy.Name, err)
 		}
@@ -119,10 +112,7 @@ func syncDeployments(ctx context.Context, syncer *ResourceSyncer, sourceClient k
 
 // syncServices synchronizes Services between namespaces
 func syncServices(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing services",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace)
+	logging.Logger.Info(fmt.Sprintf("syncing services from %s to %s", srcNamespace, dstNamespace))
 
 	services, err := sourceClient.CoreV1().Services(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -136,6 +126,7 @@ func syncServices(ctx context.Context, syncer *ResourceSyncer, sourceClient kube
 		svc.Namespace = dstNamespace
 		svc.Spec.ClusterIP = ""
 		svc.Spec.ClusterIPs = nil
+		logging.Logger.Info(fmt.Sprintf("syncing service %s from %s to %s (type: %s)", svc.Name, srcNamespace, dstNamespace, svc.Spec.Type))
 		if err := syncer.SyncResource(ctx, &svc, config); err != nil {
 			return fmt.Errorf("failed to sync Service %s: %w", svc.Name, err)
 		}
@@ -145,10 +136,7 @@ func syncServices(ctx context.Context, syncer *ResourceSyncer, sourceClient kube
 
 // syncIngresses synchronizes Ingresses between namespaces
 func syncIngresses(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, config *drv1alpha1.ImmutableResourceConfig) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing ingresses",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace)
+	logging.Logger.Info(fmt.Sprintf("syncing ingresses from %s to %s", srcNamespace, dstNamespace))
 
 	ingresses, err := sourceClient.NetworkingV1().Ingresses(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -160,6 +148,7 @@ func syncIngresses(ctx context.Context, syncer *ResourceSyncer, sourceClient kub
 			continue
 		}
 		ing.Namespace = dstNamespace
+		logging.Logger.Info(fmt.Sprintf("syncing ingress %s from %s to %s", ing.Name, srcNamespace, dstNamespace))
 		if err := syncer.SyncResource(ctx, &ing, config); err != nil {
 			return fmt.Errorf("failed to sync Ingress %s: %w", ing.Name, err)
 		}
@@ -169,11 +158,7 @@ func syncIngresses(ctx context.Context, syncer *ResourceSyncer, sourceClient kub
 
 // syncPersistentVolumeClaims synchronizes PVCs between namespaces
 func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig, config *drv1alpha1.ImmutableResourceConfig) error {
-	log := log.FromContext(ctx)
-	log.V(1).Info("syncing persistent volume claims",
-		"sourceNS", srcNamespace,
-		"destNS", dstNamespace,
-		"config", fmt.Sprintf("%+v", pvcConfig))
+	logging.Logger.Info(fmt.Sprintf("syncing persistent volume claims from %s to %s", srcNamespace, dstNamespace))
 
 	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -209,6 +194,7 @@ func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sou
 			}
 		}
 
+		logging.Logger.Info(fmt.Sprintf("syncing pvc %s from %s to %s (storage class: %s)", pvc.Name, srcNamespace, dstNamespace, *pvc.Spec.StorageClassName))
 		if err := syncer.SyncResource(ctx, &pvc, config); err != nil {
 			return fmt.Errorf("failed to sync PVC %s: %w", pvc.Name, err)
 		}

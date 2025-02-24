@@ -10,6 +10,7 @@ import (
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
 	"github.com/supporttools/dr-syncer/pkg/controllers/watch"
+	"github.com/supporttools/dr-syncer/pkg/logging"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -17,13 +18,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
 	// DefaultSchedule is the default cron schedule for replication (every 5 minutes)
 	DefaultSchedule = "*/5 * * * *"
 )
+
+var globalLog = logging.SetupLogging()
 
 // ModeReconciler handles reconciliation for different replication modes
 type ModeReconciler struct {
@@ -49,14 +51,7 @@ func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interfa
 
 // ReconcileScheduled handles scheduled replication mode
 func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, replication *drv1alpha1.Replication) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-
-	log.V(1).Info("starting scheduled reconciliation",
-		"sourceNS", replication.Spec.SourceNamespace,
-		"destNS", replication.Spec.DestinationNamespace,
-		"schedule", replication.Spec.Schedule,
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destinationCluster", replication.Spec.DestinationCluster)
+	globalLog.Info(fmt.Sprintf("starting scheduled reconciliation from %s to %s", replication.Spec.SourceNamespace, replication.Spec.DestinationNamespace))
 
 	// Update status to Running
 	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -73,22 +68,22 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, replication *dr
 	syncDuration := time.Since(startTime)
 
 	if err != nil {
-		log.Error(err, "failed to sync resources")
+		globalLog.WithError(err).Error("failed to sync resources")
 		shouldRetry, backoff, retryErr := r.handleRetry(ctx, replication, err)
 		if retryErr != nil {
-			log.Error(retryErr, "failed to handle retry")
+			globalLog.WithError(retryErr).Error("failed to handle retry")
 			return ctrl.Result{}, retryErr
 		}
 		if shouldRetry {
-			log.V(1).Info("retrying sync after backoff", "backoff", backoff)
-			return ctrl.Result{RequeueAfter: backoff}, nil
+			globalLog.Info(fmt.Sprintf("retrying sync after %s backoff", backoff))
+			return ctrl.Result{RequeueAfter: backoff}, err // Return error with backoff
 		}
 		return ctrl.Result{}, err
 	}
 
 	// Reset retry status and update final status
 	if err := r.resetRetryStatus(ctx, replication); err != nil {
-		log.Error(err, "failed to reset retry status")
+		globalLog.WithError(err).Error("failed to reset retry status")
 	}
 
 	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -130,31 +125,20 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, replication *dr
 		// Get schedule with default
 		schedule := replication.Spec.Schedule
 		if schedule == "" {
-			log.V(1).Info("no schedule specified, using default",
-				"defaultSchedule", DefaultSchedule)
+			globalLog.Info(fmt.Sprintf("no schedule specified, using default: %s", DefaultSchedule))
 			schedule = DefaultSchedule
 		}
 
-		log.V(1).Info("calculating next run time",
-			"schedule", schedule,
-			"isDefault", schedule == DefaultSchedule)
-
 		cronSchedule, err := cron.ParseStandard(schedule)
 		if err != nil {
-			log.Error(err, "invalid schedule, using default interval",
-				"schedule", schedule,
-				"defaultInterval", "5m")
+			globalLog.WithError(err).Error(fmt.Sprintf("invalid schedule: %s, using default interval of 5m", schedule))
 			status.NextSyncTime = &metav1.Time{Time: time.Now().Add(5 * time.Minute)}
 		} else {
 			// Calculate exact next run time
 			now := time.Now()
 			nextRun := cronSchedule.Next(now)
 			status.NextSyncTime = &metav1.Time{Time: nextRun}
-
-			log.V(1).Info("calculated next sync time",
-				"currentTime", now.Format(time.RFC3339),
-				"nextRunTime", nextRun.Format(time.RFC3339),
-				"interval", nextRun.Sub(now).String())
+			globalLog.Info(fmt.Sprintf("next sync scheduled for %s", nextRun.Format(time.RFC3339)))
 		}
 	}); err != nil {
 		return ctrl.Result{}, err
@@ -162,37 +146,24 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, replication *dr
 
 	// Use the same next sync time for requeue
 	if replication.Status.NextSyncTime == nil {
-		log.Error(nil, "next sync time not set, using default 5 minute interval")
+		globalLog.Info("next sync time not set, using default 5 minute interval")
 		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	requeueAfter := time.Until(replication.Status.NextSyncTime.Time)
-	log.V(1).Info("scheduled reconciliation complete",
-		"duration", time.Since(startTime),
-		"schedule", replication.Spec.Schedule,
-		"currentTime", time.Now().Format(time.RFC3339),
-		"nextRunTime", replication.Status.NextSyncTime.Format(time.RFC3339),
-		"requeueAfter", requeueAfter.String())
+	globalLog.Info(fmt.Sprintf("scheduled reconciliation complete, next sync in %s", requeueAfter))
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // ReconcileContinuous handles continuous replication mode
 func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *drv1alpha1.Replication) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-
-	log.V(1).Info("starting continuous reconciliation",
-		"sourceNS", replication.Spec.SourceNamespace,
-		"destNS", replication.Spec.DestinationNamespace,
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destinationCluster", replication.Spec.DestinationCluster)
+	globalLog.Info(fmt.Sprintf("starting continuous reconciliation from %s to %s", replication.Spec.SourceNamespace, replication.Spec.DestinationNamespace))
 
 	// If not already watching, start watching resources
 	if !r.watchManager.IsWatching() {
 		resources := r.getResourceGVRs(replication.Spec.ResourceTypes)
-		log.V(1).Info("starting resource watchers",
-			"resourceTypes", replication.Spec.ResourceTypes,
-			"resourceCount", len(resources))
+		globalLog.Info(fmt.Sprintf("starting resource watchers for %d resource types", len(resources)))
 
 		err := r.watchManager.StartWatching(ctx, replication.Spec.SourceNamespace, resources,
 			func(obj interface{}) error {
@@ -212,14 +183,14 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 				syncDuration := time.Since(startTime)
 
 				if err != nil {
-					log.Error(err, "failed to sync resources after watch event")
+					globalLog.WithError(err).Error("failed to sync resources after watch event")
 					shouldRetry, backoff, retryErr := r.handleRetry(ctx, replication, err)
 					if retryErr != nil {
-						log.Error(retryErr, "failed to handle retry")
+						globalLog.WithError(retryErr).Error("failed to handle retry")
 						return retryErr
 					}
 					if shouldRetry {
-						log.V(1).Info("retrying sync after backoff", "backoff", backoff)
+						globalLog.Info(fmt.Sprintf("retrying sync after %s backoff", backoff))
 						time.Sleep(backoff) // For continuous mode, we sleep here instead of requeueing
 						return nil          // Continue watching
 					}
@@ -228,7 +199,7 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 
 				// Reset retry status and update success status
 				if err := r.resetRetryStatus(ctx, replication); err != nil {
-					log.Error(err, "failed to reset retry status")
+					globalLog.WithError(err).Error("failed to reset retry status")
 				}
 
 				if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -271,14 +242,11 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 					return err
 				}
 
-				log.V(1).Info("watch event sync complete",
-					"duration", syncDuration,
-					"resourceCount", len(deploymentScales))
-
+				globalLog.Info(fmt.Sprintf("watch event sync complete in %s", syncDuration))
 				return nil
 			})
 		if err != nil {
-			log.Error(err, "failed to start watching resources")
+			globalLog.WithError(err).Error("failed to start watching resources")
 			return ctrl.Result{}, err
 		}
 
@@ -286,12 +254,11 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 		if replication.Spec.Continuous != nil && replication.Spec.Continuous.BackgroundSyncInterval != "" {
 			interval, err := time.ParseDuration(replication.Spec.Continuous.BackgroundSyncInterval)
 			if err != nil {
-				log.Error(err, "invalid background sync interval")
+				globalLog.WithError(err).Error("invalid background sync interval")
 				return ctrl.Result{}, err
 			}
 
-			log.V(1).Info("starting background sync",
-				"interval", interval)
+			globalLog.Info(fmt.Sprintf("starting background sync with interval %s", interval))
 
 			r.watchManager.StartBackgroundSync(ctx, interval, func() error {
 				_, err := r.syncResources(ctx, replication)
@@ -300,7 +267,7 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 		}
 	}
 
-	log.V(1).Info("continuous reconciliation complete")
+	globalLog.Info("continuous reconciliation complete")
 
 	// Requeue to periodically check watch status
 	return ctrl.Result{RequeueAfter: time.Hour}, nil
@@ -308,11 +275,7 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, replication *d
 
 // ReconcileManual handles manual replication mode
 func (r *ModeReconciler) ReconcileManual(ctx context.Context, replication *drv1alpha1.Replication) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-
-	log.V(1).Info("starting manual reconciliation",
-		"sourceNS", replication.Spec.SourceNamespace,
-		"destNS", replication.Spec.DestinationNamespace)
+	globalLog.Info(fmt.Sprintf("starting manual reconciliation from %s to %s", replication.Spec.SourceNamespace, replication.Spec.DestinationNamespace))
 
 	// Update status to Running
 	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -329,14 +292,14 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, replication *drv1a
 	syncDuration := time.Since(startTime)
 
 	if err != nil {
-		log.Error(err, "failed to sync resources")
+		globalLog.WithError(err).Error("failed to sync resources")
 		shouldRetry, backoff, retryErr := r.handleRetry(ctx, replication, err)
 		if retryErr != nil {
-			log.Error(retryErr, "failed to handle retry")
+			globalLog.WithError(retryErr).Error("failed to handle retry")
 			return ctrl.Result{}, retryErr
 		}
 		if shouldRetry {
-			log.V(1).Info("retrying sync after backoff", "backoff", backoff)
+			globalLog.Info(fmt.Sprintf("retrying sync after %s backoff", backoff))
 			return ctrl.Result{RequeueAfter: backoff}, nil
 		}
 		return ctrl.Result{}, err
@@ -344,7 +307,7 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, replication *drv1a
 
 	// Reset retry status and update final status
 	if err := r.resetRetryStatus(ctx, replication); err != nil {
-		log.Error(err, "failed to reset retry status")
+		globalLog.WithError(err).Error("failed to reset retry status")
 	}
 
 	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -386,23 +349,16 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, replication *drv1a
 		return ctrl.Result{}, err
 	}
 
-	log.V(1).Info("manual reconciliation complete",
-		"duration", syncDuration,
-		"resourceCount", len(deploymentScales))
+	globalLog.Info(fmt.Sprintf("manual reconciliation complete in %s", syncDuration))
 
 	return ctrl.Result{}, nil
 }
 
 // syncResources performs the actual resource synchronization
 func (r *ModeReconciler) syncResources(ctx context.Context, replication *drv1alpha1.Replication) ([]drv1alpha1.DeploymentScale, error) {
-	log := log.FromContext(ctx)
 	startTime := time.Now()
 
-	log.V(1).Info("starting resource sync",
-		"sourceNS", replication.Spec.SourceNamespace,
-		"destNS", replication.Spec.DestinationNamespace,
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destinationCluster", replication.Spec.DestinationCluster)
+	globalLog.Info(fmt.Sprintf("starting resource sync from %s to %s", replication.Spec.SourceNamespace, replication.Spec.DestinationNamespace))
 
 	// Determine destination namespace
 	dstNamespace := replication.Spec.DestinationNamespace
@@ -431,13 +387,7 @@ func (r *ModeReconciler) syncResources(ctx context.Context, replication *drv1alp
 		normalizedTypes = defaultTypes
 	}
 
-	log.V(1).Info("syncing resources",
-		"originalTypes", resourceTypes,
-		"normalizedTypes", normalizedTypes,
-		"scaleToZero", scaleToZero,
-		"isWildcard", len(replication.Spec.ResourceTypes) == 1 && replication.Spec.ResourceTypes[0] == "*",
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destinationCluster", replication.Spec.DestinationCluster)
+	globalLog.Info(fmt.Sprintf("syncing %d resource types with scale to zero: %v", len(normalizedTypes), scaleToZero))
 
 	// Sync resources
 	syncerScales, err := syncer.SyncNamespaceResources(
@@ -469,11 +419,7 @@ func (r *ModeReconciler) syncResources(ctx context.Context, replication *drv1alp
 		}
 	}
 
-	log.V(1).Info("resource sync complete",
-		"duration", time.Since(startTime),
-		"deploymentCount", len(result),
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destinationCluster", replication.Spec.DestinationCluster)
+	globalLog.Info(fmt.Sprintf("resource sync complete in %s, synced %d deployments", time.Since(startTime), len(result)))
 
 	return result, nil
 }
@@ -501,7 +447,6 @@ func formatDuration(d time.Duration) string {
 
 // updateStatus updates the status of a Replication resource using optimistic concurrency control
 func (r *ModeReconciler) updateStatus(ctx context.Context, replication *drv1alpha1.Replication, updateFn func(*drv1alpha1.ReplicationStatus)) error {
-	log := log.FromContext(ctx)
 	maxRetries := 5                      // Reduced from 10 to avoid excessive retries
 	retryDelay := 250 * time.Millisecond // Increased initial delay
 
@@ -514,49 +459,23 @@ func (r *ModeReconciler) updateStatus(ctx context.Context, replication *drv1alph
 			return fmt.Errorf("failed to get latest version: %w", err)
 		}
 
-		// Log current status details
-		log.V(1).Info("current status before update",
-			"phase", latest.Status.Phase,
-			"lastSyncTime", latest.Status.LastSyncTime,
-			"resourceVersion", latest.ResourceVersion,
-			"deploymentScales", len(latest.Status.DeploymentScales))
+		globalLog.Info(fmt.Sprintf("updating status (attempt %d/%d)", i+1, maxRetries))
 
 		// Store current status and apply update
 		oldStatus := latest.Status.DeepCopy()
 		updateFn(&latest.Status)
 
-		// Log proposed changes
-		log.V(1).Info("proposed status changes",
-			"phase", latest.Status.Phase,
-			"lastSyncTime", latest.Status.LastSyncTime,
-			"deploymentScales", len(latest.Status.DeploymentScales))
-
 		// Check if status actually changed
 		if statusEqual(oldStatus, &latest.Status) {
-			log.V(1).Info("status unchanged after update function",
-				"resourceVersion", latest.ResourceVersion)
+			globalLog.Info("status unchanged after update function")
 			replication.Status = latest.Status
 			return nil
 		}
 
-		log.V(1).Info("attempting status update",
-			"currentResourceVersion", latest.ResourceVersion,
-			"originalResourceVersion", replication.ResourceVersion)
-
-		// Log status comparison details
-		log.V(1).Info("comparing status fields",
-			"phaseChanged", latest.Status.Phase != oldStatus.Phase,
-			"lastSyncTimeChanged", !timeEqual(latest.Status.LastSyncTime, oldStatus.LastSyncTime),
-			"nextSyncTimeChanged", !timeEqual(latest.Status.NextSyncTime, oldStatus.NextSyncTime),
-			"deploymentScalesChanged", len(latest.Status.DeploymentScales) != len(oldStatus.DeploymentScales))
-
 		// Try to update
 		err := r.Status().Update(ctx, &latest)
 		if err == nil {
-			log.V(1).Info("status update successful",
-				"newResourceVersion", latest.ResourceVersion,
-				"phase", latest.Status.Phase,
-				"lastSyncTime", latest.Status.LastSyncTime)
+			globalLog.Info("status update successful")
 			replication.Status = latest.Status
 			return nil
 		}
@@ -576,20 +495,12 @@ func (r *ModeReconciler) updateStatus(ctx context.Context, replication *drv1alph
 		// If the conflicted version has the same status we were trying to set,
 		// we can consider this a success
 		if statusEqual(&conflicted.Status, &latest.Status) {
-			log.V(1).Info("conflict resolved - desired status already set",
-				"resourceVersion", conflicted.ResourceVersion)
+			globalLog.Info("conflict resolved - desired status already set")
 			replication.Status = conflicted.Status
 			return nil
 		}
 
-		// Log detailed conflict information
-		log.V(1).Info("status update conflict detected",
-			"attempt", i+1,
-			"maxRetries", maxRetries,
-			"delay", retryDelay,
-			"originalResourceVersion", replication.ResourceVersion,
-			"latestResourceVersion", latest.ResourceVersion,
-			"conflictedResourceVersion", conflicted.ResourceVersion)
+		globalLog.Info(fmt.Sprintf("status update conflict detected, retrying in %s", retryDelay))
 
 		// Wait before retrying
 		time.Sleep(retryDelay)
@@ -722,57 +633,6 @@ func calculateBackoff(config *drv1alpha1.RetryConfig, status *drv1alpha1.RetrySt
 	return next, nil
 }
 
-// handleRetry updates the RetryStatus and returns whether to retry and after what duration
-func (r *ModeReconciler) handleRetry(ctx context.Context, replication *drv1alpha1.Replication, err error) (bool, time.Duration, error) {
-	log := log.FromContext(ctx)
-
-	// Get current retry status
-	status := replication.Status.RetryStatus
-	if status == nil {
-		status = &drv1alpha1.RetryStatus{
-			RetriesRemaining: 5, // Default max retries
-		}
-	}
-
-	// Calculate next backoff
-	backoff, err := calculateBackoff(replication.Spec.RetryConfig, status)
-	if err != nil {
-		return false, 0, fmt.Errorf("failed to calculate backoff: %w", err)
-	}
-
-	// Update retry status
-	now := metav1.Now()
-	nextRetry := metav1.NewTime(now.Add(backoff))
-	status.NextRetryTime = &nextRetry
-	status.BackoffDuration = backoff.String()
-	status.RetriesRemaining--
-
-	// Update replication status
-	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
-		status.RetryStatus = replication.Status.RetryStatus
-		status.LastError = &drv1alpha1.SyncError{
-			Message: err.Error(),
-			Time:    now,
-		}
-	}); err != nil {
-		log.Error(err, "failed to update retry status")
-		return false, 0, err
-	}
-
-	// Check if we should retry
-	if status.RetriesRemaining <= 0 {
-		log.V(1).Info("no retries remaining, giving up",
-			"error", err)
-		return false, 0, nil
-	}
-
-	log.V(1).Info("scheduling retry",
-		"backoff", backoff.String(),
-		"retriesRemaining", status.RetriesRemaining,
-		"error", err)
-	return true, backoff, nil
-}
-
 // resetRetryStatus clears the retry status after a successful sync
 func (r *ModeReconciler) resetRetryStatus(ctx context.Context, replication *drv1alpha1.Replication) error {
 	return r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
@@ -782,8 +642,6 @@ func (r *ModeReconciler) resetRetryStatus(ctx context.Context, replication *drv1
 
 // getResourceGVRs converts resource types to GroupVersionResource
 func (r *ModeReconciler) getResourceGVRs(resourceTypes []string) []schema.GroupVersionResource {
-	// This is a simplified version - in practice, you'd need to map
-	// resource types to their proper GVRs using the discovery client
 	resources := make([]schema.GroupVersionResource, 0, len(resourceTypes))
 
 	// Normalize resource types
@@ -838,4 +696,101 @@ func (r *ModeReconciler) getResourceGVRs(resourceTypes []string) []schema.GroupV
 		}
 	}
 	return resources
+}
+
+// handleRetry updates the RetryStatus and returns whether to retry and after what duration
+func (r *ModeReconciler) handleRetry(ctx context.Context, replication *drv1alpha1.Replication, err error) (bool, time.Duration, error) {
+	// Initialize retry status
+	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
+		if status.RetryStatus == nil {
+			status.RetryStatus = &drv1alpha1.RetryStatus{
+				RetriesRemaining: 5, // Default max retries
+			}
+		}
+	}); err != nil {
+		globalLog.WithError(err).Error("failed to initialize retry status")
+		return false, 0, err
+	}
+
+	// Get retry status
+	status := replication.Status.RetryStatus
+	if status == nil {
+		globalLog.Error("retry status is nil after initialization")
+		return false, 0, fmt.Errorf("retry status is nil")
+	}
+
+	// Calculate next backoff
+	backoff, err := calculateBackoff(replication.Spec.RetryConfig, status)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to calculate backoff: %w", err)
+	}
+
+	// Check if we should retry
+	if status.RetriesRemaining <= 0 {
+		globalLog.Info("no retries remaining, giving up")
+		return false, 0, nil
+	}
+
+	// Update retry status
+	now := metav1.Now()
+	nextRetry := metav1.NewTime(now.Add(backoff))
+
+	// Update replication status
+	if err := r.updateStatus(ctx, replication, func(status *drv1alpha1.ReplicationStatus) {
+		// Ensure RetryStatus exists
+		if status.RetryStatus == nil {
+			status.RetryStatus = &drv1alpha1.RetryStatus{
+				RetriesRemaining: 5, // Default max retries
+			}
+		}
+
+		// Update retry information
+		status.RetryStatus.NextRetryTime = &nextRetry
+		status.RetryStatus.BackoffDuration = backoff.String()
+		status.RetryStatus.RetriesRemaining--
+
+		// Update error information
+		if err != nil {
+			status.LastError = &drv1alpha1.SyncError{
+				Message: err.Error(),
+				Time:    now,
+			}
+		}
+
+		// Update phase and conditions
+		status.Phase = drv1alpha1.SyncPhaseFailed
+
+		// Add failure condition with safe error message
+		message := "Sync failed"
+		if err != nil {
+			message = fmt.Sprintf("Sync failed: %v", err)
+		}
+		failureCondition := metav1.Condition{
+			Type:               "Failed",
+			Status:             metav1.ConditionTrue,
+			LastTransitionTime: now,
+			Reason:             "SyncFailed",
+			Message:            fmt.Sprintf("%s, retrying in %s", message, backoff),
+		}
+
+		// Update conditions
+		if status.Conditions == nil {
+			status.Conditions = []metav1.Condition{}
+		}
+
+		// Remove old Failed condition if it exists
+		conditions := []metav1.Condition{}
+		for _, condition := range status.Conditions {
+			if condition.Type != "Failed" {
+				conditions = append(conditions, condition)
+			}
+		}
+		conditions = append(conditions, failureCondition)
+		status.Conditions = conditions
+	}); err != nil {
+		return false, 0, fmt.Errorf("failed to update status: %w", err)
+	}
+
+	globalLog.Info(fmt.Sprintf("scheduled retry in %s (%d retries remaining)", backoff, status.RetriesRemaining))
+	return true, backoff, nil
 }

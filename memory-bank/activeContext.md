@@ -51,6 +51,8 @@
    - Added per-resource status tracking
    - Added detailed error reporting
    - Improved kubectl visibility with new columns
+   - Enhanced status update conflict logging with resource version tracking
+   - Added debug logging for resource version changes during reconciliation
 
 2. Resource Management
    - Added deployment replica handling

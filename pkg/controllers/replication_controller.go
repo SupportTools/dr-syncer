@@ -6,17 +6,16 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controllers/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ReplicationReconciler reconciles a Replication object
@@ -40,12 +39,7 @@ type ReplicationReconciler struct {
 
 // Reconcile handles the reconciliation loop for Replication resources
 func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-	reconcileStart := time.Now()
-	
-	log.V(1).Info("starting reconciliation",
-		"name", req.Name,
-		"namespace", req.Namespace)
+	logging.Logger.Info(fmt.Sprintf("starting reconciliation for %s/%s", req.Namespace, req.Name))
 
 	// Fetch the Replication instance
 	var replication drv1alpha1.Replication
@@ -53,20 +47,30 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		log.Error(err, "unable to fetch Replication")
+		logging.Logger.WithError(err).Error("unable to fetch Replication")
 		return ctrl.Result{}, err
 	}
 
-	log.V(1).Info("fetched replication",
-		"generation", replication.Generation,
-		"resourceVersion", replication.ResourceVersion,
-		"mode", replication.Spec.ReplicationMode,
-		"sourceCluster", replication.Spec.SourceCluster,
-		"destCluster", replication.Spec.DestinationCluster)
+	// Check if we should proceed with reconciliation based on next sync time
+	if replication.Status.NextSyncTime != nil {
+		nextSync := replication.Status.NextSyncTime.Time
+		now := time.Now()
+		if now.Before(nextSync) {
+			waitTime := nextSync.Sub(now)
+			logging.Logger.Info(fmt.Sprintf("skipping reconciliation, next sync at %s", nextSync.Format(time.RFC3339)))
+			return ctrl.Result{RequeueAfter: waitTime}, nil
+		}
+	}
+
+	logging.Logger.Info("fetched replication")
 
 	// Initialize clients if not already done
 	if r.modeHandler == nil {
-		log.V(1).Info("initializing mode handler and clients")
+		// Create REST config with verbosity settings
+		restConfig := ctrl.GetConfigOrDie()
+		// Always disable request/response body logging
+		restConfig.WrapTransport = nil
+		logging.Logger.Info("initializing cluster connections")
 
 		// Fetch the source Cluster instance
 		var sourceCluster drv1alpha1.RemoteCluster
@@ -74,7 +78,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Name:      replication.Spec.SourceCluster,
 			Namespace: replication.ObjectMeta.Namespace,
 		}, &sourceCluster); err != nil {
-			log.Error(err, "unable to fetch source RemoteCluster")
+			logging.Logger.WithError(err).Error("unable to fetch source RemoteCluster")
 			return ctrl.Result{}, err
 		}
 
@@ -84,7 +88,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Namespace: sourceCluster.Spec.KubeconfigSecretRef.Namespace,
 			Name:      sourceCluster.Spec.KubeconfigSecretRef.Name,
 		}, &sourceKubeconfigSecret); err != nil {
-			log.Error(err, "unable to fetch source kubeconfig secret")
+			logging.Logger.WithError(err).Error("unable to fetch source kubeconfig secret")
 			return ctrl.Result{}, err
 		}
 
@@ -96,28 +100,38 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		sourceKubeconfigData, ok := sourceKubeconfigSecret.Data[sourceKubeconfigKey]
 		if !ok {
 			err := fmt.Errorf("kubeconfig key %s not found in source secret", sourceKubeconfigKey)
-			log.Error(err, "invalid source kubeconfig secret")
+			logging.Logger.WithError(err).Error("invalid source kubeconfig secret")
 			return ctrl.Result{}, err
 		}
 
 		// Create source cluster clients
 		sourceConfig, err := clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
 		if err != nil {
-			log.Error(err, "unable to create source REST config from kubeconfig")
+			logging.Logger.WithError(err).Error("unable to create source REST config from kubeconfig")
 			return ctrl.Result{}, err
 		}
+		// Always disable request/response body logging
+		sourceConfig.WrapTransport = nil
 
 		sourceClient, err := kubernetes.NewForConfig(sourceConfig)
 		if err != nil {
-			log.Error(err, "unable to create source Kubernetes client")
+			logging.Logger.WithError(err).Error("unable to create source Kubernetes client")
 			return ctrl.Result{}, err
 		}
 
 		sourceDynamicClient, err := dynamic.NewForConfig(sourceConfig)
 		if err != nil {
-			log.Error(err, "unable to create source dynamic client")
+			logging.Logger.WithError(err).Error("unable to create source dynamic client")
 			return ctrl.Result{}, err
 		}
+
+		// Verify source cluster connectivity
+		if _, err := sourceClient.Discovery().ServerVersion(); err != nil {
+			logging.Logger.WithError(err).Error("failed to connect to source cluster")
+			return ctrl.Result{}, err
+		}
+
+		logging.Logger.Info("successfully connected to source cluster")
 
 		// Fetch the destination Cluster instance
 		var destCluster drv1alpha1.RemoteCluster
@@ -125,7 +139,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Name:      replication.Spec.DestinationCluster,
 			Namespace: replication.ObjectMeta.Namespace,
 		}, &destCluster); err != nil {
-			log.Error(err, "unable to fetch destination RemoteCluster")
+			logging.Logger.WithError(err).Error("unable to fetch destination RemoteCluster")
 			return ctrl.Result{}, err
 		}
 
@@ -135,7 +149,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
 			Name:      destCluster.Spec.KubeconfigSecretRef.Name,
 		}, &destKubeconfigSecret); err != nil {
-			log.Error(err, "unable to fetch destination kubeconfig secret")
+			logging.Logger.WithError(err).Error("unable to fetch destination kubeconfig secret")
 			return ctrl.Result{}, err
 		}
 
@@ -147,35 +161,39 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
 		if !ok {
 			err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
-			log.Error(err, "invalid destination kubeconfig secret")
+			logging.Logger.WithError(err).Error("invalid destination kubeconfig secret")
 			return ctrl.Result{}, err
 		}
 
 		// Create destination cluster clients
 		destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
 		if err != nil {
-			log.Error(err, "unable to create destination REST config from kubeconfig")
+			logging.Logger.WithError(err).Error("unable to create destination REST config from kubeconfig")
 			return ctrl.Result{}, err
 		}
+		// Always disable request/response body logging
+		destConfig.WrapTransport = nil
 
 		destClient, err := kubernetes.NewForConfig(destConfig)
 		if err != nil {
-			log.Error(err, "unable to create destination Kubernetes client")
+			logging.Logger.WithError(err).Error("unable to create destination Kubernetes client")
 			return ctrl.Result{}, err
 		}
 
 		destDynamicClient, err := dynamic.NewForConfig(destConfig)
 		if err != nil {
-			log.Error(err, "unable to create destination dynamic client")
+			logging.Logger.WithError(err).Error("unable to create destination dynamic client")
 			return ctrl.Result{}, err
 		}
 
-		log.V(1).Info("initialized mode handler and clients successfully",
-			"sourceClient", fmt.Sprintf("%T", sourceClient),
-			"destClient", fmt.Sprintf("%T", destClient),
-			"sourceDynamic", fmt.Sprintf("%T", sourceDynamicClient),
-			"destDynamic", fmt.Sprintf("%T", destDynamicClient))
-		
+		// Verify destination cluster connectivity
+		if _, err := destClient.Discovery().ServerVersion(); err != nil {
+			logging.Logger.WithError(err).Error("failed to connect to destination cluster")
+			return ctrl.Result{}, err
+		}
+
+		logging.Logger.Info("successfully connected to destination cluster")
+
 		// Initialize mode handler
 		r.modeHandler = modes.NewModeReconciler(
 			r.Client,
@@ -187,11 +205,8 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Handle reconciliation based on replication mode
-	log.V(1).Info("starting mode reconciliation",
-		"mode", replication.Spec.ReplicationMode,
-		"sourceNS", replication.Spec.SourceNamespace,
-		"destNS", replication.Spec.DestinationNamespace)
-	modeStart := time.Now()
+	logging.Logger.Info(fmt.Sprintf("starting %s mode reconciliation", replication.Spec.ReplicationMode))
+
 	var result ctrl.Result
 	var err error
 
@@ -205,175 +220,36 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if err != nil {
-		log.Error(err, "failed to reconcile replication",
-			"duration", time.Since(modeStart))
+		logging.Logger.WithError(err).Error("failed to reconcile replication")
+		return result, err // Return result along with error to respect backoff
+	}
+
+	// Get the latest version of the Replication object before updating status
+	var latestReplication drv1alpha1.Replication
+	if err := r.Get(ctx, req.NamespacedName, &latestReplication); err != nil {
+		logging.Logger.WithError(err).Error("unable to fetch latest Replication")
 		return ctrl.Result{}, err
 	}
 
-	log.V(1).Info("completed mode reconciliation",
-		"duration", time.Since(modeStart),
-		"result", result)
+	logging.Logger.Debug("fetched latest replication before status update")
 
-	// Update status using optimistic concurrency control
-	if err := r.updateReplicationStatus(ctx, req.NamespacedName, &replication); err != nil {
+	// Copy the status from our working copy to the latest version
+	latestReplication.Status = replication.Status
+
+	// Update status on the latest version
+	if err := r.Status().Update(ctx, &latestReplication); err != nil {
 		if apierrors.IsConflict(err) {
-			// For conflicts, requeue with a short delay to prevent tight loops
-			log.V(1).Info("status update conflict, requeueing with short delay")
-			return ctrl.Result{RequeueAfter: time.Second * 2}, nil
+			// If we hit a conflict, log details and requeue to try again
+			logging.Logger.Info("conflict updating status, will retry")
+			return ctrl.Result{Requeue: true}, nil
 		}
-		log.Error(err, "failed to update status")
+		logging.Logger.WithError(err).Error("unable to update Replication status")
 		return ctrl.Result{}, err
 	}
 
-	log.V(1).Info("reconciliation complete",
-		"name", req.Name,
-		"namespace", req.Namespace,
-		"duration", time.Since(reconcileStart),
-		"nextRequeue", result.RequeueAfter)
+	logging.Logger.Info("reconciliation complete")
 
 	return result, nil
-}
-
-// updateReplicationStatus updates the status of a Replication resource using optimistic concurrency
-func (r *ReplicationReconciler) updateReplicationStatus(ctx context.Context, key client.ObjectKey, replication *drv1alpha1.Replication) error {
-	log := log.FromContext(ctx)
-	maxRetries := 10
-	retryDelay := 100 * time.Millisecond
-
-	for i := 0; i < maxRetries; i++ {
-		// Get latest version
-		var latest drv1alpha1.Replication
-		if err := r.Get(ctx, key, &latest); err != nil {
-			return fmt.Errorf("failed to get latest version: %w", err)
-		}
-
-		// Log status details before update
-		log.V(1).Info("current status details",
-			"phase", latest.Status.Phase,
-			"lastSyncTime", latest.Status.LastSyncTime,
-			"resourceVersion", latest.ResourceVersion,
-			"deploymentScales", len(latest.Status.DeploymentScales))
-
-		// Log new status details
-		log.V(1).Info("new status details",
-			"phase", replication.Status.Phase,
-			"lastSyncTime", replication.Status.LastSyncTime,
-			"deploymentScales", len(replication.Status.DeploymentScales))
-
-		// Check if status has actually changed
-		if statusEqual(&latest.Status, &replication.Status) {
-			log.V(1).Info("status unchanged, skipping update",
-				"resourceVersion", latest.ResourceVersion)
-			replication.Status = latest.Status
-			return nil
-		}
-
-		log.V(1).Info("status changed, attempting update",
-			"currentResourceVersion", latest.ResourceVersion,
-			"originalResourceVersion", replication.ResourceVersion)
-
-		// Update status fields while preserving others
-		latest.Status = replication.Status
-
-		// Try to update
-		err := r.Status().Update(ctx, &latest)
-		if err == nil {
-			// Success - update our working copy
-			replication.Status = latest.Status
-			return nil
-		}
-
-		if !apierrors.IsConflict(err) {
-			// Return non-conflict errors immediately
-			return err
-		}
-
-		// Log conflict details
-		log.V(1).Info("conflict updating status, retrying",
-			"attempt", i+1,
-			"maxRetries", maxRetries,
-			"delay", retryDelay,
-			"originalResourceVersion", replication.ResourceVersion,
-			"latestResourceVersion", latest.ResourceVersion)
-
-		// Wait before retrying
-		time.Sleep(retryDelay)
-		retryDelay = time.Duration(float64(retryDelay) * 1.5) // Gentler backoff
-	}
-
-	return fmt.Errorf("failed to update status after %d attempts", maxRetries)
-}
-
-// statusEqual compares two ReplicationStatus objects
-func statusEqual(a, b *drv1alpha1.ReplicationStatus) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-
-	// Compare relevant fields
-	if a.Phase != b.Phase {
-		return false
-	}
-	if !timeEqual(a.LastSyncTime, b.LastSyncTime) {
-		return false
-	}
-	if !timeEqual(a.NextSyncTime, b.NextSyncTime) {
-		return false
-	}
-	if !timeEqual(a.LastWatchEvent, b.LastWatchEvent) {
-		return false
-	}
-	
-	// Compare deployment scales
-	if len(a.DeploymentScales) != len(b.DeploymentScales) {
-		return false
-	}
-	for i := range a.DeploymentScales {
-		if a.DeploymentScales[i] != b.DeploymentScales[i] {
-			return false
-		}
-	}
-
-	// Compare sync stats
-	if !syncStatsEqual(a.SyncStats, b.SyncStats) {
-		return false
-	}
-
-	// Compare conditions
-	if len(a.Conditions) != len(b.Conditions) {
-		return false
-	}
-	for i := range a.Conditions {
-		if !conditionEqual(&a.Conditions[i], &b.Conditions[i]) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// timeEqual compares two metav1.Time pointers
-func timeEqual(a, b *metav1.Time) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Equal(b)
-}
-
-// syncStatsEqual compares two SyncStats pointers
-func syncStatsEqual(a, b *drv1alpha1.SyncStats) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-// conditionEqual compares two metav1.Condition pointers
-func conditionEqual(a, b *metav1.Condition) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
 }
 
 // SetupWithManager sets up the controller with the Manager

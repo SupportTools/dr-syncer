@@ -64,6 +64,8 @@ spec:
           env:
             - name: LOG_LEVEL
               value: {{ .Values.controller.logLevel | quote }}
+            - name: LOG_VERBOSITY
+              value: {{ .Values.controller.logVerbosity | quote }}
             - name: METRICS_ADDR
               value: {{ .Values.controller.metricsAddr | quote }}
             - name: PROBE_ADDR

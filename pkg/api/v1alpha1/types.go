@@ -14,8 +14,8 @@ import (
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Synced",type="integer",JSONPath=".status.syncStats.successfulSyncs"
 // +kubebuilder:printcolumn:name="Failed",type="integer",JSONPath=".status.syncStats.failedSyncs"
-// +kubebuilder:printcolumn:name="Last Sync",type="date",JSONPath=".status.lastSyncTime"
-// +kubebuilder:printcolumn:name="Next Sync",type="date",JSONPath=".status.nextSyncTime"
+// +kubebuilder:printcolumn:name="Last Sync",type="string",JSONPath=".status.lastSyncTime"
+// +kubebuilder:printcolumn:name="Next Sync",type="string",JSONPath=".status.nextSyncTime"
 type Replication struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

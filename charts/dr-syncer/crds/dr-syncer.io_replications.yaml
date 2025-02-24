@@ -39,10 +39,10 @@ spec:
       type: integer
     - jsonPath: .status.lastSyncTime
       name: Last Sync
-      type: date
+      type: string
     - jsonPath: .status.nextSyncTime
       name: Next Sync
-      type: date
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:

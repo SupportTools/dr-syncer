@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"reflect"
 
+	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controllers/sync/internal/logging"
+	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
-	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 )
 
 const (
@@ -47,7 +46,6 @@ func getAccessModeMapping(srcAccessMode corev1.PersistentVolumeAccessMode, mappi
 
 // syncPersistentVolumeClaims synchronizes PVCs between source and destination namespaces
 func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient kubernetes.Interface, srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig) error {
-	log := log.FromContext(ctx)
 	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list PVCs: %v", err)
@@ -111,12 +109,12 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 			if apierrors.IsNotFound(err) {
 				_, err = destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, destPVC, metav1.CreateOptions{})
 				if err != nil {
-					log.Error(err, "Failed to create PVC", "name", destPVC.Name)
+					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to create PVC %s", destPVC.Name))
 					continue
 				}
-				log.Info("Created PVC", "name", destPVC.Name)
+				logging.Logger.Info(fmt.Sprintf("created PVC %s", destPVC.Name))
 			} else {
-				log.Error(err, "Failed to get PVC", "name", destPVC.Name)
+				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to get PVC %s", destPVC.Name))
 				continue
 			}
 		} else {
@@ -125,17 +123,17 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 				destPVC.ResourceVersion = existing.ResourceVersion
 				_, err = destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, destPVC, metav1.UpdateOptions{})
 				if err != nil {
-					log.Error(err, "Failed to update PVC", "name", destPVC.Name)
+					logging.Logger.WithError(err).Error(fmt.Sprintf("failed to update PVC %s", destPVC.Name))
 					continue
 				}
-				log.Info("Updated PVC", "name", destPVC.Name)
+				logging.Logger.Info(fmt.Sprintf("updated PVC %s", destPVC.Name))
 			}
 		}
 
 		// Handle PV sync if enabled
 		if syncPV && pvc.Spec.VolumeName != "" {
 			if err := syncPersistentVolume(ctx, sourceClient, destClient, pvc.Spec.VolumeName); err != nil {
-				log.Error(err, "Failed to sync PV", "pv", pvc.Spec.VolumeName)
+				logging.Logger.WithError(err).Error(fmt.Sprintf("failed to sync PV %s", pvc.Spec.VolumeName))
 			}
 		}
 	}
@@ -145,8 +143,6 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 
 // syncPersistentVolume synchronizes a single PV between clusters
 func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernetes.Interface, pvName string) error {
-	log := log.FromContext(ctx)
-
 	// Get PV from source cluster
 	pv, err := sourceClient.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 	if err != nil {
@@ -165,7 +161,7 @@ func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernet
 			if err != nil {
 				return fmt.Errorf("failed to create PV %s: %v", destPV.Name, err)
 			}
-			log.Info("Created PV", "name", destPV.Name)
+			logging.Logger.Info(fmt.Sprintf("created PV %s", destPV.Name))
 		} else {
 			return fmt.Errorf("failed to get PV %s: %v", destPV.Name, err)
 		}
@@ -176,7 +172,7 @@ func syncPersistentVolume(ctx context.Context, sourceClient, destClient kubernet
 			if err != nil {
 				return fmt.Errorf("failed to update PV %s: %v", destPV.Name, err)
 			}
-			log.Info("Updated PV", "name", destPV.Name)
+			logging.Logger.Info(fmt.Sprintf("updated PV %s", destPV.Name))
 		}
 	}
 
