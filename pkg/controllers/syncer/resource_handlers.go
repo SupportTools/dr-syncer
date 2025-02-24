@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	corev1 "k8s.io/api/core/v1"

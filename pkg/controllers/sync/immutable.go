@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/sync/internal/logging"
 	corev1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"

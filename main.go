@@ -19,7 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers"
 )
 

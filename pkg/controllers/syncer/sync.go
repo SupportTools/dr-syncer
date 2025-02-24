@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/internal/logging"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
 	appsv1 "k8s.io/api/apps/v1"

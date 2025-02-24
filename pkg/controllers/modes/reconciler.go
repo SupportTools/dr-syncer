@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	drv1alpha1 "github.com/supporttools/dr-syncer/pkg/api/v1alpha1"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
 	"github.com/supporttools/dr-syncer/pkg/controllers/watch"
 	"github.com/supporttools/dr-syncer/pkg/logging"
