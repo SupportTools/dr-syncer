@@ -404,6 +404,7 @@ func (r *ModeReconciler) syncResources(ctx context.Context, replication *drv1alp
 		replication.Spec.NamespaceScopedResources,
 		replication.Spec.PVCConfig,
 		replication.Spec.ImmutableResourceConfig,
+		&replication.Spec,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sync namespace resources: %w", err)
@@ -692,6 +693,12 @@ func (r *ModeReconciler) getResourceGVRs(resourceTypes []string) []schema.GroupV
 				Group:    "",
 				Version:  "v1",
 				Resource: "persistentvolumeclaims",
+			})
+		case "customresourcedefinitions", "customresourcedefinition", "crd", "crds":
+			resources = append(resources, schema.GroupVersionResource{
+				Group:    "apiextensions.k8s.io",
+				Version:  "v1",
+				Resource: "customresourcedefinitions",
 			})
 		}
 	}

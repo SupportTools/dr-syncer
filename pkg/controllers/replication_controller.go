@@ -21,8 +21,8 @@ import (
 // ReplicationReconciler reconciles a Replication object
 type ReplicationReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
-	modeHandler  *modes.ModeReconciler
+	Scheme      *runtime.Scheme
+	modeHandler *modes.ModeReconciler
 }
 
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications,verbs=get;list;watch;create;update;patch;delete

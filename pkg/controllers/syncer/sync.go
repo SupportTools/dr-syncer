@@ -100,7 +100,7 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 }
 
 // verifyClusterAccess checks if the cluster has access to required resources
-func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, resourceTypes []string) error {
+func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, dynamicClient dynamic.Interface, resourceTypes []string) error {
 	logging.Logger.Info("verifying cluster resource permissions")
 
 	// First verify API groups exist
@@ -149,6 +149,17 @@ func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, resou
 			_, err = client.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{Limit: 1})
 		case "persistentvolumeclaims", "persistentvolumeclaim", "pvc":
 			_, err = client.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{Limit: 1})
+		case "customresourcedefinitions", "customresourcedefinition", "crd", "crds":
+			if !availableGroups["apiextensions.k8s.io"] {
+				return fmt.Errorf("apiextensions.k8s.io API group not available in cluster")
+			}
+			// Use dynamic client to check CRD access
+			gvr := schema.GroupVersionResource{
+				Group:    "apiextensions.k8s.io",
+				Version:  "v1",
+				Resource: "customresourcedefinitions",
+			}
+			_, err = dynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
 		}
 
 		if err != nil {
@@ -161,9 +172,50 @@ func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, resou
 	return nil
 }
 
+// syncCustomResourceDefinitions synchronizes CRDs between clusters
+func syncCustomResourceDefinitions(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface, sourceDynamic dynamic.Interface) error {
+	// Create GVR for CRDs
+	gvr := schema.GroupVersionResource{
+		Group:    "apiextensions.k8s.io",
+		Version:  "v1",
+		Resource: "customresourcedefinitions",
+	}
+
+	// List CRDs from source cluster
+	crds, err := sourceDynamic.Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list CRDs: %w", err)
+	}
+
+	// Process each CRD
+	for _, crd := range crds.Items {
+		if utils.ShouldIgnoreResource(&crd) {
+			continue
+		}
+
+		// Sync the CRD
+		if err := syncer.SyncResource(ctx, &crd, nil); err != nil {
+			return fmt.Errorf("failed to sync CRD %s: %w", crd.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
 // SyncNamespaceResources synchronizes resources between source and destination namespaces
-func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig) ([]DeploymentScale, error) {
+func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig, replicationSpec *drv1alpha1.ReplicationSpec) ([]DeploymentScale, error) {
 	var deploymentScales []DeploymentScale
+
+	// Create resource syncer using the passed-in clients
+	syncer := NewResourceSyncer(ctrlClient, sourceDynamic, destDynamic, sourceClient, destClient)
+
+	// If SyncCRDs is enabled, sync CRDs first
+	if replicationSpec != nil && replicationSpec.SyncCRDs != nil && *replicationSpec.SyncCRDs {
+		logging.Logger.Info("syncing CRDs")
+		if err := syncCustomResourceDefinitions(ctx, syncer, sourceClient, sourceDynamic); err != nil {
+			return nil, fmt.Errorf("failed to sync CRDs: %w", err)
+		}
+	}
 
 	// If no resource types specified, use defaults
 	if len(resourceTypes) == 0 {
@@ -172,19 +224,16 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 
 	// Verify cluster access and permissions first
 	logging.Logger.Info("verifying source cluster access")
-	if err := verifyClusterAccess(ctx, sourceClient, resourceTypes); err != nil {
+	if err := verifyClusterAccess(ctx, sourceClient, sourceDynamic, resourceTypes); err != nil {
 		return nil, fmt.Errorf("source cluster verification failed: %w", err)
 	}
 
 	logging.Logger.Info("verifying destination cluster access")
-	if err := verifyClusterAccess(ctx, destClient, resourceTypes); err != nil {
+	if err := verifyClusterAccess(ctx, destClient, destDynamic, resourceTypes); err != nil {
 		return nil, fmt.Errorf("destination cluster verification failed: %w", err)
 	}
 
 	logging.Logger.Info(fmt.Sprintf("initializing resource syncer for %s to %s", srcNamespace, dstNamespace))
-
-	// Create resource syncer using the passed-in clients
-	syncer := NewResourceSyncer(ctrlClient, sourceDynamic, destDynamic, sourceClient, destClient)
 
 	// Ensure destination namespace exists first
 	if err := EnsureNamespaceExists(ctx, destClient, dstNamespace, srcNamespace); err != nil {
@@ -357,28 +406,32 @@ func isBuiltInResource(name string) bool {
 
 	// Map of built-in resources with common variations
 	builtInResources := map[string]bool{
-		"configmaps":             true,
-		"configmap":              true,
-		"secrets":                true,
-		"secret":                 true,
-		"deployments":            true,
-		"deployment":             true,
-		"services":               true,
-		"service":                true,
-		"ingresses":              true,
-		"ingress":                true,
-		"pods":                   true,
-		"pod":                    true,
-		"events":                 true,
-		"event":                  true,
-		"endpoints":              true,
-		"endpoint":               true,
-		"persistentvolumeclaims": true,
-		"persistentvolumeclaim":  true,
-		"pvc":                    true,
-		"persistentvolumes":      true,
-		"persistentvolume":       true,
-		"pv":                     true,
+		"configmaps":                true,
+		"configmap":                 true,
+		"secrets":                   true,
+		"secret":                    true,
+		"deployments":               true,
+		"deployment":                true,
+		"services":                  true,
+		"service":                   true,
+		"ingresses":                 true,
+		"ingress":                   true,
+		"pods":                      true,
+		"pod":                       true,
+		"events":                    true,
+		"event":                     true,
+		"endpoints":                 true,
+		"endpoint":                  true,
+		"persistentvolumeclaims":    true,
+		"persistentvolumeclaim":     true,
+		"pvc":                       true,
+		"persistentvolumes":         true,
+		"persistentvolume":          true,
+		"pv":                        true,
+		"customresourcedefinitions": true,
+		"customresourcedefinition":  true,
+		"crd":                       true,
+		"crds":                      true,
 	}
 	return builtInResources[nameLower]
 }
@@ -558,6 +611,12 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 			Group:    "networking.k8s.io",
 			Version:  "v1",
 			Resource: "ingresses",
+		}
+	case "CustomResourceDefinition":
+		gvr = schema.GroupVersionResource{
+			Group:    "apiextensions.k8s.io",
+			Version:  "v1",
+			Resource: "customresourcedefinitions",
 		}
 	default:
 		// For other types, use the standard conversion

@@ -297,6 +297,13 @@ type ReplicationSpec struct {
 	// ImmutableResourceConfig defines how to handle immutable resources
 	// +optional
 	ImmutableResourceConfig *ImmutableResourceConfig `json:"immutableResourceConfig,omitempty"`
+
+	// SyncCRDs determines whether to sync Custom Resource Definitions
+	// When true, CRDs will be synced along with other resources
+	// When false (default), CRDs will be skipped
+	// +optional
+	// +kubebuilder:default=false
+	SyncCRDs *bool `json:"syncCRDs,omitempty"`
 }
 
 // DeepCopyInto copies ImmutableResourceConfig into out

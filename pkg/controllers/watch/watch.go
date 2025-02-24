@@ -22,7 +22,7 @@ type WatchManager struct {
 	stopCh           chan struct{}
 	backgroundStopCh chan struct{}
 	watching         bool
-	mu              sync.RWMutex
+	mu               sync.RWMutex
 }
 
 // NewWatchManager creates a new watch manager

@@ -252,6 +252,13 @@ spec:
               sourceNamespace:
                 description: SourceNamespace is the namespace to replicate from
                 type: string
+              syncCRDs:
+                default: false
+                description: |-
+                  SyncCRDs determines whether to sync Custom Resource Definitions
+                  When true, CRDs will be synced along with other resources
+                  When false (default), CRDs will be skipped
+                type: boolean
             required:
             - destinationCluster
             - destinationNamespace

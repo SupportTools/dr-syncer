@@ -91,7 +91,7 @@ func parseEnvInt(key string, defaultValue int) int {
 		log.Printf("Environment variable %s not set. Using default: %d", key, defaultValue)
 		return defaultValue
 	}
-	
+
 	intValue, err := strconv.Atoi(value)
 	if err != nil {
 		log.Printf("Error parsing %s as integer: %v. Using default: %d", key, err, defaultValue)

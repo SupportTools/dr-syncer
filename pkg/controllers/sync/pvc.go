@@ -95,7 +95,7 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 
 		if !syncPV {
 			destPVC.Spec.VolumeName = ""
-			
+
 			// Always clear volume attributes for now since we don't have PreserveVolumeAttributes yet
 			destPVC.Spec.VolumeMode = nil
 			destPVC.Spec.Selector = nil
