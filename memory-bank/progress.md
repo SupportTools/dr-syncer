@@ -57,11 +57,12 @@
   * RBAC setup
   * SSH key management
   * Controller integration
-- [ ] Sync operations
-  * PVC discovery
-  * Rsync execution
-  * Status tracking
-  * Error handling and retries
+- [x] Sync operations
+  * PVC discovery and volume path detection
+  * Concurrent rsync execution
+  * Worker pool with round-robin node selection
+  * Error handling with exponential backoff retries
+  * Status tracking and logging
 
 ### Resource Handling
 - [ ] Enhanced error recovery
