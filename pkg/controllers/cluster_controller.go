@@ -40,19 +40,19 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			// RemoteCluster not found. Ignoring since object must be deleted.
 			return ctrl.Result{}, nil
 		}
-		logging.Logger.WithError(err).Error("unable to fetch RemoteCluster")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to fetch RemoteCluster %s", req.NamespacedName))
 		return ctrl.Result{}, err
 	}
 
 	// Validate default schedule if provided
 	if cluster.Spec.DefaultSchedule != "" {
 		if _, err := cron.ParseStandard(cluster.Spec.DefaultSchedule); err != nil {
-			logging.Logger.WithError(err).Error(fmt.Sprintf("invalid default schedule: %s", cluster.Spec.DefaultSchedule))
+			logging.Logger.WithError(err).Error(fmt.Sprintf("invalid default schedule for cluster %s: %s", cluster.Name, cluster.Spec.DefaultSchedule))
 			setRemoteClusterCondition(&cluster, "ScheduleValid", metav1.ConditionFalse, "InvalidSchedule", err.Error())
 			// Get latest version before updating status
 			var latest drv1alpha1.RemoteCluster
 			if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
-				logging.Logger.WithError(err).Error("unable to fetch latest RemoteCluster")
+				logging.Logger.WithError(err).Error(fmt.Sprintf("unable to fetch latest RemoteCluster %s", cluster.Name))
 				return ctrl.Result{}, err
 			}
 			latest.Status = cluster.Status
@@ -61,7 +61,7 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 					logging.Logger.Info("conflict updating status, will retry")
 					return ctrl.Result{Requeue: true}, nil
 				}
-				logging.Logger.WithError(err).Error("unable to update RemoteCluster status")
+				logging.Logger.WithError(err).Error(fmt.Sprintf("unable to update RemoteCluster status for cluster %s", cluster.Name))
 				return ctrl.Result{}, err
 			}
 			cluster.Status = latest.Status
@@ -76,7 +76,7 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		Namespace: cluster.Spec.KubeconfigSecretRef.Namespace,
 		Name:      cluster.Spec.KubeconfigSecretRef.Name,
 	}, &kubeconfigSecret); err != nil {
-		logging.Logger.WithError(err).Error("unable to fetch kubeconfig secret")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to fetch kubeconfig secret for cluster %s", cluster.Name))
 		setRemoteClusterCondition(&cluster, "KubeconfigAvailable", metav1.ConditionFalse, "KubeconfigSecretNotFound", err.Error())
 		// Get latest version before updating status
 		var latest drv1alpha1.RemoteCluster
@@ -105,7 +105,7 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	kubeconfigData, ok := kubeconfigSecret.Data[kubeconfigKey]
 	if !ok {
 		err := fmt.Errorf("kubeconfig key %s not found in secret", kubeconfigKey)
-		logging.Logger.WithError(err).Error("invalid kubeconfig secret")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("invalid kubeconfig secret for cluster %s", cluster.Name))
 		setRemoteClusterCondition(&cluster, "KubeconfigAvailable", metav1.ConditionFalse, "KubeconfigKeyNotFound", err.Error())
 		_ = r.Status().Update(ctx, &cluster)
 		return ctrl.Result{RequeueAfter: time.Minute}, err
@@ -114,13 +114,11 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Load and parse the kubeconfig
 	kubeconfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
-		logging.Logger.WithError(err).Error("unable to load kubeconfig")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to load kubeconfig for cluster %s", cluster.Name))
 		setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
 		_ = r.Status().Update(ctx, &cluster)
 		return ctrl.Result{RequeueAfter: time.Minute}, err
 	}
-	logging.Logger.Info("successfully loaded kubeconfig")
-
 	// Create client config from the loaded kubeconfig with overrides
 	configOverrides := &clientcmd.ConfigOverrides{
 		ClusterInfo: clientcmdapi.Cluster{
@@ -131,7 +129,7 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	clientConfig := clientcmd.NewDefaultClientConfig(*kubeconfig, configOverrides)
 	config, err := clientConfig.ClientConfig()
 	if err != nil {
-		logging.Logger.WithError(err).Error("unable to create REST config from kubeconfig")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to create REST config from kubeconfig for cluster %s", cluster.Name))
 		setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
 		_ = r.Status().Update(ctx, &cluster)
 		return ctrl.Result{RequeueAfter: time.Minute}, err
@@ -139,21 +137,13 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Always disable request/response body logging
 	config.WrapTransport = nil
-	if err != nil {
-		logging.Logger.WithError(err).Error("unable to create REST config from kubeconfig")
-		setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
-		_ = r.Status().Update(ctx, &cluster)
-		return ctrl.Result{RequeueAfter: time.Minute}, err
-	}
 
 	// Ensure TLS config is properly set if not already
 	if configCli.CFG.IgnoreCert {
-		logging.Logger.Info("Ignoring certificate validation as per configuration")
 		config.TLSClientConfig.Insecure = true
 		config.TLSClientConfig.CAData = nil
 		config.TLSClientConfig.CAFile = ""
 	} else if len(config.TLSClientConfig.CAData) == 0 && config.TLSClientConfig.CAFile == "" {
-		logging.Logger.Info("No CAData or CAFile found in the REST config. Attempting to set CAData from kubeconfig clusters.")
 		for _, cluster := range kubeconfig.Clusters {
 			if len(cluster.CertificateAuthorityData) > 0 {
 				config.TLSClientConfig.CAData = cluster.CertificateAuthorityData
@@ -163,21 +153,17 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 		if len(config.TLSClientConfig.CAData) == 0 {
 			err := fmt.Errorf("CA data not found in kubeconfig clusters")
-			logging.Logger.WithError(err).Error("unable to find CA data in kubeconfig for any cluster")
+			logging.Logger.WithError(err).Error(fmt.Sprintf("unable to find CA data in kubeconfig for cluster %s", cluster.Name))
 			setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
 			_ = r.Status().Update(ctx, &cluster)
 			return ctrl.Result{RequeueAfter: time.Minute}, err
 		}
-	} else {
-		logging.Logger.Info("REST config already includes CA information")
 	}
-
-	logging.Logger.Info("TLS client config configured")
 
 	// Create a Kubernetes client for the remote cluster
 	remoteClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		logging.Logger.WithError(err).Error("unable to create Kubernetes client")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to create Kubernetes client for cluster %s", cluster.Name))
 		setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
 		_ = r.Status().Update(ctx, &cluster)
 		return ctrl.Result{RequeueAfter: time.Minute}, err
@@ -186,31 +172,39 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Test connection to the remote cluster
 	_, err = remoteClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		logging.Logger.WithError(err).Error("unable to connect to remote cluster - certificate or network issue likely")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to connect to cluster %s - certificate or network issue likely", cluster.Name))
 		setRemoteClusterCondition(&cluster, "ClusterAvailable", metav1.ConditionFalse, "ConnectionFailed", err.Error())
 		_ = r.Status().Update(ctx, &cluster)
 		return ctrl.Result{RequeueAfter: time.Minute}, err
 	}
 
-	// Update status conditions to reflect successful connection
-	setRemoteClusterCondition(&cluster, "KubeconfigAvailable", metav1.ConditionTrue, "KubeconfigFound", "Kubeconfig secret is available")
-	setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionTrue, "KubeconfigValidated", "Kubeconfig is valid")
-	setRemoteClusterCondition(&cluster, "ClusterAvailable", metav1.ConditionTrue, "ConnectionSuccessful", "Successfully connected to remote cluster")
+	// Check if cluster state has changed
+	oldStatus := cluster.Status.DeepCopy()
+
+	// Update status conditions
+	setRemoteClusterCondition(&cluster, "KubeconfigAvailable", metav1.ConditionTrue, "KubeconfigFound", fmt.Sprintf("Kubeconfig secret is available for cluster %s", cluster.Name))
+	setRemoteClusterCondition(&cluster, "KubeconfigValid", metav1.ConditionTrue, "KubeconfigValidated", fmt.Sprintf("Kubeconfig is valid for cluster %s", cluster.Name))
+	setRemoteClusterCondition(&cluster, "ClusterAvailable", metav1.ConditionTrue, "ConnectionSuccessful", fmt.Sprintf("Successfully connected to cluster %s", cluster.Name))
 	cluster.Status.LastSyncTime = &metav1.Time{Time: time.Now()}
+
+	// Only log if conditions changed
+	if !conditionsEqual(oldStatus.Conditions, cluster.Status.Conditions) {
+		logging.Logger.Info(fmt.Sprintf("Successfully connected to cluster %s", cluster.Name))
+	}
 
 	// Get latest version before updating final status
 	var latest drv1alpha1.RemoteCluster
 	if err := r.Get(ctx, req.NamespacedName, &latest); err != nil {
-		logging.Logger.WithError(err).Error("unable to fetch latest RemoteCluster")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to fetch latest RemoteCluster %s", cluster.Name))
 		return ctrl.Result{}, err
 	}
 	latest.Status = cluster.Status
 	if err := r.Status().Update(ctx, &latest); err != nil {
 		if apierrors.IsConflict(err) {
-			logging.Logger.Info("conflict updating status, will retry")
+			logging.Logger.Info(fmt.Sprintf("conflict updating status for cluster %s, will retry", cluster.Name))
 			return ctrl.Result{Requeue: true}, nil
 		}
-		logging.Logger.WithError(err).Error("unable to update RemoteCluster status")
+		logging.Logger.WithError(err).Error(fmt.Sprintf("unable to update RemoteCluster status for cluster %s", cluster.Name))
 		return ctrl.Result{}, err
 	}
 	cluster.Status = latest.Status
@@ -224,6 +218,33 @@ func (r *RemoteClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&drv1alpha1.RemoteCluster{}).
 		Complete(r)
+}
+
+// conditionsEqual compares two slices of conditions for equality
+func conditionsEqual(a, b []metav1.Condition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// Create maps for easier comparison
+	aMap := make(map[string]metav1.Condition)
+	for _, condition := range a {
+		aMap[condition.Type] = condition
+	}
+
+	for _, condition := range b {
+		aCondition, exists := aMap[condition.Type]
+		if !exists {
+			return false
+		}
+		if aCondition.Status != condition.Status ||
+			aCondition.Reason != condition.Reason ||
+			aCondition.Message != condition.Message {
+			return false
+		}
+	}
+
+	return true
 }
 
 // setRemoteClusterCondition updates or adds the specified condition to the RemoteCluster status

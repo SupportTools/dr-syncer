@@ -20,14 +20,18 @@ func SetupLogging() *logrus.Logger {
 	if log == nil {
 		log = logrus.New()
 		log.SetOutput(os.Stdout)
-		log.SetReportCaller(true)
 
 		customFormatter := &logrus.TextFormatter{
 			DisableTimestamp:       true,
-			CallerPrettyfier:       callerPrettyfier,
 			DisableColors:          true,
 			DisableLevelTruncation: true,
 			DisableSorting:         true,
+		}
+
+		// Only enable caller reporting in debug mode
+		if debug {
+			log.SetReportCaller(true)
+			customFormatter.CallerPrettyfier = callerPrettyfier
 		}
 
 		log.SetFormatter(customFormatter)
