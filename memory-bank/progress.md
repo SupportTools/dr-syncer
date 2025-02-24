@@ -59,10 +59,13 @@
   * Controller integration
 - [x] Sync operations
   * PVC discovery and volume path detection
-  * Concurrent rsync execution
-  * Worker pool with round-robin node selection
+  * Target PVC creation and sync pod deployment
+  * Pod-based volume mounting for data sync
+  * Node label matching for pod scheduling
+  * Concurrent sync with worker pool
   * Error handling with exponential backoff retries
   * Status tracking and logging
+  * Automatic sync pod cleanup
 
 ### Resource Handling
 - [ ] Enhanced error recovery
