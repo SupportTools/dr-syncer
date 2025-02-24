@@ -52,14 +52,16 @@
   * PVCSync configuration in RemoteCluster CRD
   * Status fields and printer columns
   * CRD regeneration
-- [ ] Remote deployment logic
+- [x] Remote deployment logic
   * DaemonSet deployment
   * RBAC setup
   * SSH key management
+  * Controller integration
 - [ ] Sync operations
   * PVC discovery
   * Rsync execution
   * Status tracking
+  * Error handling and retries
 
 ### Resource Handling
 - [ ] Enhanced error recovery
