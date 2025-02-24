@@ -42,6 +42,16 @@ func matchNodeLabels(sourceLabels, targetLabels map[string]string) bool {
 	return false
 }
 
+// containsAccessMode checks if a list of access modes contains a specific mode
+func containsAccessMode(modes []corev1.PersistentVolumeAccessMode, mode corev1.PersistentVolumeAccessMode) bool {
+	for _, m := range modes {
+		if m == mode {
+			return true
+		}
+	}
+	return false
+}
+
 // SyncCoordinator manages PVC sync operations between clusters
 type SyncCoordinator struct {
 	sourceClient client.Client
@@ -140,19 +150,31 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 						"targetNode", targetNode.Name)
 				}
 
+				// Get source PVC size
+				sourceSize := resource.MustParse(pvc.Capacity)
+
 				// Create target PVC if it doesn't exist
 				targetPVC := &corev1.PersistentVolumeClaim{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      pvc.Name,
 						Namespace: pvc.Namespace,
+						Labels: map[string]string{
+							"dr-syncer.io/managed-by": "dr-syncer",
+							"dr-syncer.io/source-pvc": pvc.Name,
+							"dr-syncer.io/source-ns":  pvc.Namespace,
+						},
+						Annotations: map[string]string{
+							"dr-syncer.io/source-size": pvc.Capacity,
+						},
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						AccessModes: pvc.AccessModes,
 						Resources: corev1.VolumeResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: resource.MustParse(pvc.Capacity),
+								corev1.ResourceStorage: sourceSize,
 							},
 						},
+						StorageClassName: &pvc.StorageClass,
 					},
 				}
 				if err := c.targetClient.Create(ctx, targetPVC); err != nil {
@@ -162,14 +184,56 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 					}
 				}
 
+				// Check if PVC already exists
+				existingPVC := &corev1.PersistentVolumeClaim{}
+				err := c.targetClient.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: pvc.Namespace}, existingPVC)
+				if err == nil {
+					// Check if size needs to be increased
+					existingSize := existingPVC.Spec.Resources.Requests[corev1.ResourceStorage]
+					if sourceSize.Cmp(existingSize) > 0 {
+						existingPVC.Spec.Resources.Requests[corev1.ResourceStorage] = sourceSize
+						if err := c.targetClient.Update(ctx, existingPVC); err != nil {
+							logger.Error(err, "Failed to update PVC size", 
+								"pvc", pvc.Name,
+								"namespace", pvc.Namespace,
+								"currentSize", existingSize.String(),
+								"newSize", sourceSize.String())
+						}
+					}
+				} else if !k8serrors.IsNotFound(err) {
+					errors <- fmt.Errorf("failed to check existing PVC: %v", err)
+					continue
+				} else {
+					// Create new PVC
+					if err := c.targetClient.Create(ctx, targetPVC); err != nil {
+						errors <- fmt.Errorf("failed to create target PVC %s/%s: %v", pvc.Namespace, pvc.Name, err)
+						continue
+					}
+				}
+
+				// For ReadWriteMany PVCs, we can sync to any node
+				var nodeName string
+				if containsAccessMode(pvc.AccessModes, corev1.ReadWriteMany) {
+					// Use any available node
+					nodeName = targetNodes.Items[0].Name
+				} else {
+					nodeName = targetNode.Name
+				}
+
 				// Create sync pod in target cluster
 				syncPod := &corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      fmt.Sprintf("sync-%s", pvc.Name),
 						Namespace: pvc.Namespace,
+						Labels: map[string]string{
+							"dr-syncer.io/managed-by": "dr-syncer",
+							"dr-syncer.io/sync-pod":   "true",
+							"dr-syncer.io/source-pvc": pvc.Name,
+							"dr-syncer.io/source-ns":  pvc.Namespace,
+						},
 					},
 					Spec: corev1.PodSpec{
-						NodeName: targetNode.Name,
+						NodeName: nodeName,
 						Containers: []corev1.Container{
 							{
 								Name:  "sync",
@@ -226,9 +290,9 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 					errors <- fmt.Errorf("failed to sync PVC %s/%s: %v", pvc.Namespace, pvc.Name, err)
 				}
 
-				// Delete sync pod
-				if err := c.targetClient.Delete(ctx, syncPod); err != nil {
-					logger.Error(err, "Failed to delete sync pod", "pod", syncPod.Name, "namespace", syncPod.Namespace)
+				// Delete sync pod with cleanup
+				if err := c.cleanupSyncResources(ctx, syncPod); err != nil {
+					logger.Error(err, "Failed to cleanup sync resources", "pod", syncPod.Name, "namespace", syncPod.Namespace)
 				}
 			}
 		}(i)
@@ -246,6 +310,54 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 
 	if len(syncErrors) > 0 {
 		return fmt.Errorf("encountered %d sync errors: %v", len(syncErrors), syncErrors[0])
+	}
+
+	return nil
+}
+
+// cleanupSyncResources handles cleanup of sync pod and related resources
+func (c *SyncCoordinator) cleanupSyncResources(ctx context.Context, pod *corev1.Pod) error {
+	logger := log.FromContext(ctx)
+
+	// Delete sync pod
+	if err := c.targetClient.Delete(ctx, pod); err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete sync pod: %v", err)
+	}
+
+	// Wait for pod deletion
+	if err := wait.PollImmediate(2*time.Second, 30*time.Second, func() (bool, error) {
+		if err := c.targetClient.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, &corev1.Pod{}); err != nil {
+			if k8serrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		return false, nil
+	}); err != nil {
+		logger.Error(err, "Failed waiting for sync pod deletion", "pod", pod.Name, "namespace", pod.Namespace)
+	}
+
+	// Check if any other sync pods are using the PVC
+	podList := &corev1.PodList{}
+	if err := c.targetClient.List(ctx, podList, client.MatchingLabels{
+		"dr-syncer.io/sync-pod":   "true",
+		"dr-syncer.io/source-pvc": pod.Labels["dr-syncer.io/source-pvc"],
+		"dr-syncer.io/source-ns":  pod.Labels["dr-syncer.io/source-ns"],
+	}); err != nil {
+		return fmt.Errorf("failed to list sync pods: %v", err)
+	}
+
+	// If no other sync pods are using the PVC, we can clean it up
+	if len(podList.Items) == 0 {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pod.Labels["dr-syncer.io/source-pvc"],
+				Namespace: pod.Labels["dr-syncer.io/source-ns"],
+			},
+		}
+		if err := c.targetClient.Delete(ctx, pvc); err != nil && !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete PVC: %v", err)
+		}
 	}
 
 	return nil
