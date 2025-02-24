@@ -1,0 +1,27 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: test-remote
+  namespace: dr-syncer
+spec:
+  kubeconfigSecretRef:
+    name: remote-kubeconfig
+    namespace: dr-syncer
+
+  # Enable PVC sync
+  pvcSync:
+    enabled: true
+    image:
+      repository: harbor.support.tools/dr-syncer/agent
+      tag: latest
+      pullPolicy: Always
+    ssh:
+      port: 2222
+      keySecretRef:
+        name: pvc-syncer-agent-keys
+        namespace: dr-syncer
+    concurrency: 3
+    retryConfig:
+      maxRetries: 5
+      initialDelay: "5s"
+      maxDelay: "5m"
