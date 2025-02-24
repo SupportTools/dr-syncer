@@ -131,17 +131,56 @@ info "Waiting for sync pods to be created"
 kubectl wait --for=condition=Ready pod/sync-test-pvc-1 -n test-pvc-sync --timeout=2m
 kubectl wait --for=condition=Ready pod/sync-test-pvc-2 -n test-pvc-sync --timeout=2m
 
+# Verify PVC creation and configuration
+info "Verifying PVC configuration"
+
+# Verify PVC 1 (ReadWriteOnce)
+pvc1_access_mode=$(kubectl get pvc test-pvc-1 -n test-pvc-sync -o jsonpath='{.spec.accessModes[0]}')
+pvc1_size=$(kubectl get pvc test-pvc-1 -n test-pvc-sync -o jsonpath='{.spec.resources.requests.storage}')
+pvc1_class=$(kubectl get pvc test-pvc-1 -n test-pvc-sync -o jsonpath='{.spec.storageClassName}')
+
+if [[ "${pvc1_access_mode}" != "ReadWriteOnce" ]]; then
+    fail "PVC 1 has incorrect access mode. Expected: ReadWriteOnce, Got: ${pvc1_access_mode}"
+fi
+
+if [[ "${pvc1_size}" != "1Gi" ]]; then
+    fail "PVC 1 has incorrect size. Expected: 1Gi, Got: ${pvc1_size}"
+fi
+
+if [[ "${pvc1_class}" != "standard" ]]; then
+    fail "PVC 1 has incorrect storage class. Expected: standard, Got: ${pvc1_class}"
+fi
+
+# Verify PVC 2 (ReadWriteMany)
+pvc2_access_mode=$(kubectl get pvc test-pvc-2 -n test-pvc-sync -o jsonpath='{.spec.accessModes[0]}')
+pvc2_size=$(kubectl get pvc test-pvc-2 -n test-pvc-sync -o jsonpath='{.spec.resources.requests.storage}')
+pvc2_class=$(kubectl get pvc test-pvc-2 -n test-pvc-sync -o jsonpath='{.spec.storageClassName}')
+
+if [[ "${pvc2_access_mode}" != "ReadWriteMany" ]]; then
+    fail "PVC 2 has incorrect access mode. Expected: ReadWriteMany, Got: ${pvc2_access_mode}"
+fi
+
+if [[ "${pvc2_size}" != "2Gi" ]]; then
+    fail "PVC 2 has incorrect size. Expected: 2Gi, Got: ${pvc2_size}"
+fi
+
+if [[ "${pvc2_class}" != "standard" ]]; then
+    fail "PVC 2 has incorrect storage class. Expected: standard, Got: ${pvc2_class}"
+fi
+
 # Verify sync pod scheduling
 info "Verifying sync pod scheduling"
 sync1_node=$(kubectl get pod sync-test-pvc-1 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
 sync2_node=$(kubectl get pod sync-test-pvc-2 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
 
+# RWO PVC should be on the matching node
 if [[ "${sync1_node}" != "kind-dr-syncer-dr-worker" ]]; then
-    fail "Sync pod 1 not scheduled on expected node. Expected: kind-dr-syncer-dr-worker, Got: ${sync1_node}"
+    fail "Sync pod 1 (RWO) not scheduled on expected node. Expected: kind-dr-syncer-dr-worker, Got: ${sync1_node}"
 fi
 
-if [[ "${sync2_node}" != "kind-dr-syncer-dr-worker" ]]; then
-    fail "Sync pod 2 not scheduled on expected node. Expected: kind-dr-syncer-dr-worker, Got: ${sync2_node}"
+# RWX PVC can be on any node
+if [[ -z "${sync2_node}" ]]; then
+    fail "Sync pod 2 (RWX) not scheduled on any node"
 fi
 
 # Verify PVC data through sync pods

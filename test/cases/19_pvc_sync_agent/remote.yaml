@@ -41,9 +41,9 @@ metadata:
   name: test-pv-2
 spec:
   capacity:
-    storage: 1Gi
+    storage: 2Gi
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   hostPath:
     path: /tmp/test-pv-2
 ---
@@ -58,6 +58,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
+  storageClassName: standard
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -66,10 +67,11 @@ metadata:
   namespace: test-pvc-sync
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
-      storage: 1Gi
+      storage: 2Gi
+  storageClassName: standard
 ---
 apiVersion: v1
 kind: Pod
