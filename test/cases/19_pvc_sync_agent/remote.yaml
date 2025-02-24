@@ -1,0 +1,114 @@
+# Label the nodes in source cluster
+apiVersion: v1
+kind: Node
+metadata:
+  name: kind-dr-syncer-prod-worker
+  labels:
+    kubernetes.io/hostname: kind-dr-syncer-prod-worker
+    topology.kubernetes.io/zone: zone-a
+    node.kubernetes.io/instance-type: worker
+---
+# Label the nodes in target cluster
+apiVersion: v1
+kind: Node
+metadata:
+  name: kind-dr-syncer-dr-worker
+  labels:
+    kubernetes.io/hostname: kind-dr-syncer-dr-worker
+    topology.kubernetes.io/zone: zone-a
+    node.kubernetes.io/instance-type: worker
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-pvc-sync
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-pv-1
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/test-pv-1
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-pv-2
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /tmp/test-pv-2
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-1
+  namespace: test-pvc-sync
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-2
+  namespace: test-pvc-sync
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-1
+  namespace: test-pvc-sync
+spec:
+  nodeSelector:
+    topology.kubernetes.io/zone: zone-a
+    node.kubernetes.io/instance-type: worker
+  containers:
+  - name: test-container
+    image: busybox
+    command: ["sh", "-c", "echo 'Test data 1' > /data/test.txt && sleep infinity"]
+    volumeMounts:
+    - name: test-volume
+      mountPath: /data
+  volumes:
+  - name: test-volume
+    persistentVolumeClaim:
+      claimName: test-pvc-1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-2
+  namespace: test-pvc-sync
+spec:
+  nodeSelector:
+    topology.kubernetes.io/zone: zone-a
+    node.kubernetes.io/instance-type: worker
+  containers:
+  - name: test-container
+    image: busybox
+    command: ["sh", "-c", "echo 'Test data 2' > /data/test.txt && sleep infinity"]
+    volumeMounts:
+    - name: test-volume
+      mountPath: /data
+  volumes:
+  - name: test-volume
+    persistentVolumeClaim:
+      claimName: test-pvc-2

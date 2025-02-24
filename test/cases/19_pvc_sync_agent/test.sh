@@ -8,6 +8,24 @@ source ../common.sh
 TEST_NAME="PVC Sync Agent"
 start_test "${TEST_NAME}"
 
+# Switch to remote cluster context
+info "Switching to remote cluster"
+REMOTE_CONTEXT="remote"
+kubectl config use-context "${REMOTE_CONTEXT}"
+
+# Create test resources in remote cluster
+info "Creating test resources in remote cluster"
+kubectl apply -f remote.yaml
+
+# Wait for pods to be ready
+info "Waiting for test pods to be ready"
+kubectl wait --for=condition=Ready pod/test-pod-1 -n test-pvc-sync --timeout=2m
+kubectl wait --for=condition=Ready pod/test-pod-2 -n test-pvc-sync --timeout=2m
+
+# Switch to controller cluster context
+info "Switching to controller cluster"
+kubectl config use-context kind-dr-syncer
+
 # Apply RemoteCluster
 info "Creating RemoteCluster with PVC sync enabled"
 kubectl apply -f controller.yaml
@@ -32,17 +50,14 @@ fi
 
 # Switch to remote cluster context
 info "Switching to remote cluster"
-REMOTE_CONTEXT="remote"
 kubectl config use-context "${REMOTE_CONTEXT}"
 
-# Verify namespace
-info "Verifying agent namespace"
+# Verify agent deployment
+info "Verifying agent deployment"
 if ! kubectl get namespace dr-syncer-agent &>/dev/null; then
     fail "Agent namespace not found"
 fi
 
-# Verify RBAC resources
-info "Verifying RBAC resources"
 if ! kubectl get serviceaccount pvc-syncer-agent -n dr-syncer-agent &>/dev/null; then
     fail "ServiceAccount not found"
 fi
@@ -55,8 +70,6 @@ if ! kubectl get clusterrolebinding pvc-syncer-agent &>/dev/null; then
     fail "ClusterRoleBinding not found"
 fi
 
-# Verify DaemonSet
-info "Verifying DaemonSet"
 if ! kubectl get daemonset pvc-syncer-agent -n dr-syncer-agent &>/dev/null; then
     fail "DaemonSet not found"
 fi
@@ -88,6 +101,67 @@ for pod in $(kubectl get pods -n dr-syncer-agent -l app=pvc-syncer-agent -o name
     fi
 done
 
+# Switch to DR cluster context
+info "Switching to DR cluster"
+kubectl config use-context kind-dr-syncer-dr
+
+# Wait for PVC sync
+info "Waiting for PVC sync (30s)"
+sleep 30
+
+# Verify source pod scheduling
+info "Verifying source pod scheduling"
+pod1_node=$(kubectl get pod test-pod-1 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
+pod2_node=$(kubectl get pod test-pod-2 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
+
+if [[ "${pod1_node}" != "kind-dr-syncer-prod-worker" ]]; then
+    fail "Pod 1 not scheduled on expected node. Expected: kind-dr-syncer-prod-worker, Got: ${pod1_node}"
+fi
+
+if [[ "${pod2_node}" != "kind-dr-syncer-prod-worker" ]]; then
+    fail "Pod 2 not scheduled on expected node. Expected: kind-dr-syncer-prod-worker, Got: ${pod2_node}"
+fi
+
+# Switch to DR cluster context
+info "Switching to DR cluster"
+kubectl config use-context kind-dr-syncer-dr
+
+# Wait for sync pods to be created
+info "Waiting for sync pods to be created"
+kubectl wait --for=condition=Ready pod/sync-test-pvc-1 -n test-pvc-sync --timeout=2m
+kubectl wait --for=condition=Ready pod/sync-test-pvc-2 -n test-pvc-sync --timeout=2m
+
+# Verify sync pod scheduling
+info "Verifying sync pod scheduling"
+sync1_node=$(kubectl get pod sync-test-pvc-1 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
+sync2_node=$(kubectl get pod sync-test-pvc-2 -n test-pvc-sync -o jsonpath='{.spec.nodeName}')
+
+if [[ "${sync1_node}" != "kind-dr-syncer-dr-worker" ]]; then
+    fail "Sync pod 1 not scheduled on expected node. Expected: kind-dr-syncer-dr-worker, Got: ${sync1_node}"
+fi
+
+if [[ "${sync2_node}" != "kind-dr-syncer-dr-worker" ]]; then
+    fail "Sync pod 2 not scheduled on expected node. Expected: kind-dr-syncer-dr-worker, Got: ${sync2_node}"
+fi
+
+# Verify PVC data through sync pods
+info "Verifying PVC data through sync pods"
+sync1_data=$(kubectl exec sync-test-pvc-1 -n test-pvc-sync -- cat /data/test.txt)
+sync2_data=$(kubectl exec sync-test-pvc-2 -n test-pvc-sync -- cat /data/test.txt)
+
+if [[ "${sync1_data}" != "Test data 1" ]]; then
+    fail "PVC 1 data not synced correctly. Expected: 'Test data 1', Got: '${sync1_data}'"
+fi
+
+if [[ "${sync2_data}" != "Test data 2" ]]; then
+    fail "PVC 2 data not synced correctly. Expected: 'Test data 2', Got: '${sync2_data}'"
+fi
+
+# Wait for sync pods to be deleted
+info "Waiting for sync pods to be deleted"
+kubectl wait --for=delete pod/sync-test-pvc-1 -n test-pvc-sync --timeout=2m
+kubectl wait --for=delete pod/sync-test-pvc-2 -n test-pvc-sync --timeout=2m
+
 # Switch back to controller cluster context
 info "Switching back to controller cluster"
 kubectl config use-context kind-dr-syncer
@@ -95,6 +169,11 @@ kubectl config use-context kind-dr-syncer
 # Test cleanup
 info "Cleaning up test resources"
 kubectl delete -f controller.yaml
+
+# Switch to remote cluster and cleanup
+info "Cleaning up remote cluster resources"
+kubectl config use-context "${REMOTE_CONTEXT}"
+kubectl delete -f remote.yaml
 
 # Test completion
 success "Test completed successfully"
