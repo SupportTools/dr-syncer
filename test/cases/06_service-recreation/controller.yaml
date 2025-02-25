@@ -30,9 +30,3 @@ spec:
     defaultHandling: Recreate  # Important for service recreation
     drainTimeout: 5m
     forceDeleteTimeout: 2m
-  
-  # Service handling configuration
-  serviceConfig:
-    recreateServices: true  # Enable service recreation
-    preserveNodePorts: true # Maintain NodePort values
-    preserveClusterIP: false # Allow new ClusterIP assignment

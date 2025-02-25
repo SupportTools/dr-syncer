@@ -1,7 +1,7 @@
 # Docker settings
-DOCKER_REGISTRY ?= harbor.support.tools
-DOCKER_REPO ?= dr-syncer/controller
-DOCKER_AGENT_REPO ?= dr-syncer/agent
+DOCKER_REGISTRY ?= docker.io
+DOCKER_REPO ?= supporttools/dr-syncer
+DOCKER_AGENT_REPO ?= supporttools/dr-syncer-agent
 TIMESTAMP ?= $(shell date +%Y%m%d%H%M%S)
 
 # Controller image settings
@@ -51,24 +51,14 @@ check-docker:
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker daemon not running" && exit 1)
 	@docker pull $(DOCKER_LATEST_TAG) >/dev/null 2>&1 || (echo "Warning: Could not pull latest image for cache. Continuing without cache." && exit 0)
 
-.PHONY: create-registry-secret
-create-registry-secret: ## Create Harbor registry secret in Kubernetes
-	@echo "Creating Harbor registry secret..."
-	@if [ -z "$(HARBOR_USER)" ] || [ -z "$(HARBOR_PASSWORD)" ]; then \
-		echo "Error: HARBOR_USER and HARBOR_PASSWORD must be set"; \
-		exit 1; \
-	fi
+.PHONY: create-namespace
+create-namespace: ## Create namespace for deployment
+	@echo "Creating namespace..."
 	kubectl create namespace $(HELM_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
-	kubectl create secret docker-registry harbor-registry \
-		--namespace $(HELM_NAMESPACE) \
-		--docker-server=$(DOCKER_REGISTRY) \
-		--docker-username=$(HARBOR_USER) \
-		--docker-password=$(HARBOR_PASSWORD) \
-		--dry-run=client -o yaml | kubectl apply -f -
-	@echo "✓ Registry secret created"
+	@echo "✓ Namespace created"
 
 .PHONY: deploy-local
-deploy-local: check-docker create-registry-secret manifests ## Build, push image, install CRDs, and deploy to current cluster
+deploy-local: check-docker create-namespace manifests install-crds ## Build, push image, install CRDs, and deploy to current cluster
 	@echo "Starting local deployment..."
 	@if [ ! -f "$(KUBECONFIG)" ]; then \
 		echo "Error: Kubeconfig not found at $(KUBECONFIG)"; \
@@ -109,7 +99,7 @@ deploy-local: check-docker create-registry-secret manifests ## Build, push image
 		--namespace $(HELM_NAMESPACE) \
 		--create-namespace \
 		--values $(HELM_VALUES) \
-		--set crds.install=true \
+		--set crds.install=false \
 		--set image.repository=$(DOCKER_REGISTRY)/$(DOCKER_REPO) \
 		--set image.tag=$(DEPLOY_TIMESTAMP) \
 		--set version=$(VERSION) \
@@ -247,14 +237,30 @@ undeploy: ## Undeploy controller from the K8s cluster with Helm
 
 ##@ Generate
 
-.PHONY: manifests
-manifests: controller-gen ## Generate CRDs and sync to Helm chart
+.PHONY: build-crds
+build-crds: controller-gen ## Generate CRDs from Go types
 	$(CONTROLLER_GEN) crd paths="./..." output:crd:artifacts:config=config/crd/bases
-	# Sync CRDs to Helm chart
+
+.PHONY: test-crds
+test-crds: build-crds ## Test CRDs for validity
+	@echo "Validating CRDs..."
+	@for f in config/crd/bases/*.yaml; do \
+		echo "Validating $$f"; \
+		kubectl apply --dry-run=client -f $$f > /dev/null || exit 1; \
+	done
+	@echo "✓ CRDs validated successfully"
+
+.PHONY: install-crds
+install-crds: build-crds ## Install CRDs directly to the cluster
+	@echo "Installing CRDs directly to the cluster..."
+	kubectl apply -f config/crd/bases/
+	@echo "✓ CRDs installed successfully"
+
+.PHONY: manifests
+manifests: build-crds ## Generate CRDs and sync to Helm chart
+	# Sync CRDs to Helm chart (without Helm templating)
 	for f in config/crd/bases/*.yaml; do \
-		echo '{{- if .Values.crds.install }}' > charts/dr-syncer/crds/$$(basename $$f); \
-		cat $$f >> charts/dr-syncer/crds/$$(basename $$f); \
-		echo '{{- end }}' >> charts/dr-syncer/crds/$$(basename $$f); \
+		cp $$f charts/dr-syncer/crds/$$(basename $$f); \
 	done
 
 .PHONY: generate

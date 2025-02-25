@@ -8,9 +8,25 @@ metadata:
     dr-syncer.io/test-name: "standard-resources-wildcard"
     dr-syncer.io/test: "true"
 spec:
+  # Use scheduled mode for predictable testing
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *" # Run every 5 minutes
+
+  # Cluster configuration
   sourceCluster: dr-syncer-nyc3
   destinationCluster: dr-syncer-sfo3
   sourceNamespace: dr-sync-test-case01
   destinationNamespace: dr-sync-test-case01
+
+  # Resource types to test wildcard functionality
   resourceTypes:
     - "*" # Wildcard to replicate all resources
+
+  # Scale deployments to zero in DR
+  scaleToZero: true
+
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: NoChange
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m

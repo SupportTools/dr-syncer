@@ -58,8 +58,8 @@ func (d *Deployer) createNamespace(ctx context.Context) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: agentNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     agentName,
-				"app.kubernetes.io/part-of":  "dr-syncer",
+				"app.kubernetes.io/name":       agentName,
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
 			},
 		},
@@ -75,8 +75,8 @@ func (d *Deployer) createServiceAccount(ctx context.Context) error {
 			Name:      agentName,
 			Namespace: agentNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     agentName,
-				"app.kubernetes.io/part-of":  "dr-syncer",
+				"app.kubernetes.io/name":       agentName,
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
 			},
 		},
@@ -92,8 +92,8 @@ func (d *Deployer) createRBAC(ctx context.Context) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: agentName,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     agentName,
-				"app.kubernetes.io/part-of":  "dr-syncer",
+				"app.kubernetes.io/name":       agentName,
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
 			},
 		},
@@ -115,8 +115,8 @@ func (d *Deployer) createRBAC(ctx context.Context) error {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: agentName,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     agentName,
-				"app.kubernetes.io/part-of":  "dr-syncer",
+				"app.kubernetes.io/name":       agentName,
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
 			},
 		},
@@ -148,8 +148,8 @@ func (d *Deployer) createDaemonSet(ctx context.Context, rc *drv1alpha1.RemoteClu
 			Name:      agentName,
 			Namespace: agentNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":     agentName,
-				"app.kubernetes.io/part-of":  "dr-syncer",
+				"app.kubernetes.io/name":       agentName,
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
 			},
 		},
@@ -167,7 +167,7 @@ func (d *Deployer) createDaemonSet(ctx context.Context, rc *drv1alpha1.RemoteClu
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: agentName,
-					HostNetwork:       true,
+					HostNetwork:        true,
 					Containers: []corev1.Container{
 						{
 							Name:            "agent",
@@ -200,7 +200,7 @@ func (d *Deployer) createDaemonSet(ctx context.Context, rc *drv1alpha1.RemoteClu
 									},
 								},
 								InitialDelaySeconds: 30,
-								PeriodSeconds:      60,
+								PeriodSeconds:       60,
 							},
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
@@ -209,7 +209,7 @@ func (d *Deployer) createDaemonSet(ctx context.Context, rc *drv1alpha1.RemoteClu
 									},
 								},
 								InitialDelaySeconds: 5,
-								PeriodSeconds:      10,
+								PeriodSeconds:       10,
 							},
 						},
 					},

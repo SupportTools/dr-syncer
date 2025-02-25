@@ -193,7 +193,7 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 					if sourceSize.Cmp(existingSize) > 0 {
 						existingPVC.Spec.Resources.Requests[corev1.ResourceStorage] = sourceSize
 						if err := c.targetClient.Update(ctx, existingPVC); err != nil {
-							logger.Error(err, "Failed to update PVC size", 
+							logger.Error(err, "Failed to update PVC size",
 								"pvc", pvc.Name,
 								"namespace", pvc.Namespace,
 								"currentSize", existingSize.String(),
@@ -381,7 +381,7 @@ func (c *SyncCoordinator) syncWithRetry(ctx context.Context, pvc PVCInfo, target
 			return fmt.Errorf("max retries reached: %v", err)
 		}
 
-		logger.Error(err, "Sync attempt failed", 
+		logger.Error(err, "Sync attempt failed",
 			"pvc", pvc.Name,
 			"namespace", pvc.Namespace,
 			"attempt", attempt+1,

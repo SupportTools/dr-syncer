@@ -661,9 +661,9 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return syncerrors.NewNonRetryableError(
-				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
-				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
-			)
+					fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+					fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+				)
 			}
 			return syncerrors.NewRetryableError(
 				fmt.Errorf("failed to create resource: %w", err),
@@ -695,9 +695,9 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return syncerrors.NewNonRetryableError(
-				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
-				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
-			)
+					fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+					fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+				)
 			}
 			return syncerrors.NewRetryableError(
 				fmt.Errorf("failed to update resource: %w", err),

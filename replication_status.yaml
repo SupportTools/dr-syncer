@@ -1,0 +1,56 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"dr-syncer.io/v1alpha1","kind":"Replication","metadata":{"annotations":{},"labels":{"dr-syncer.io/test":"true","dr-syncer.io/test-case":"00","dr-syncer.io/test-name":"standard-resources-test"},"name":"standard-resources-test","namespace":"dr-syncer"},"spec":{"destinationCluster":"dr-syncer-sfo3","destinationNamespace":"dr-sync-test-case00","immutableResourceConfig":{"defaultHandling":"NoChange","drainTimeout":"5m","forceDeleteTimeout":"2m"},"replicationMode":"Scheduled","resourceTypes":["ConfigMaps","Secrets","Deployments","Services","Ingresses"],"scaleToZero":true,"schedule":"*/5 * * * *","sourceCluster":"dr-syncer-nyc3","sourceNamespace":"dr-sync-test-case00"}}
+  creationTimestamp: "2025-02-24T07:49:55Z"
+  finalizers:
+  - dr-syncer.io/cleanup
+  generation: 3
+  labels:
+    dr-syncer.io/test: "true"
+    dr-syncer.io/test-case: "00"
+    dr-syncer.io/test-name: standard-resources-test
+  name: standard-resources-test
+  namespace: dr-syncer
+  resourceVersion: "55968390"
+  uid: ad2cfd92-a6b9-47b3-8e92-3fb48b4624b9
+spec:
+  destinationCluster: dr-syncer-sfo3
+  destinationNamespace: dr-sync-test-case00
+  immutableResourceConfig:
+    defaultHandling: NoChange
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+  replicationMode: Scheduled
+  resourceTypes:
+  - ConfigMaps
+  - Secrets
+  - Deployments
+  - Services
+  - Ingresses
+  scaleToZero: true
+  schedule: '*/5 * * * *'
+  sourceCluster: dr-syncer-nyc3
+  sourceNamespace: dr-sync-test-case00
+status:
+  conditions:
+  - lastTransitionTime: "2025-02-25T10:20:02Z"
+    message: Resources successfully synced from cluster dr-syncer-nyc3 to cluster
+      dr-syncer-sfo3
+    reason: SyncCompleted
+    status: "True"
+    type: Synced
+  deploymentScales:
+  - lastSyncedAt: "2025-02-25T10:20:01Z"
+    name: test-deployment
+    originalReplicas: 3
+  lastSyncTime: "2025-02-25T10:20:02Z"
+  nextSyncTime: "2025-02-25T10:25:00Z"
+  phase: Completed
+  syncStats:
+    failedSyncs: 0
+    lastSyncDuration: 2s
+    successfulSyncs: 1
+    totalResources: 1

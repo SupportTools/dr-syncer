@@ -22,7 +22,7 @@ type ResourceSyncer struct {
 	destDynamic   dynamic.Interface
 	sourceClient  kubernetes.Interface
 	destClient    kubernetes.Interface
-	scheme       *runtime.Scheme
+	scheme        *runtime.Scheme
 }
 
 // NewResourceSyncer creates a new resource syncer
@@ -33,6 +33,6 @@ func NewResourceSyncer(ctrlClient client.Client, sourceDynamic, destDynamic dyna
 		destDynamic:   destDynamic,
 		sourceClient:  sourceClient,
 		destClient:    destClient,
-		scheme:       scheme,
+		scheme:        scheme,
 	}
 }

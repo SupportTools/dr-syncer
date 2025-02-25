@@ -47,7 +47,7 @@ func (d *Daemon) Stop() error {
 // verifyKubeletMount checks that /var/lib/kubelet is mounted
 func (d *Daemon) verifyKubeletMount() error {
 	kubeletPath := "/var/lib/kubelet"
-	
+
 	// Check if path exists
 	if _, err := os.Stat(kubeletPath); err != nil {
 		return fmt.Errorf("kubelet path not found: %s", kubeletPath)

@@ -24,8 +24,6 @@ type ReplicationReconciler struct {
 	modeHandler *modes.ModeReconciler
 }
 
-
-
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/finalizers,verbs=update

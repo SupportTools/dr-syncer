@@ -12,7 +12,7 @@ spec:
   pvcSync:
     enabled: true
     image:
-      repository: harbor.support.tools/dr-syncer/agent
+      repository: docker.io/supporttools/dr-syncer-agent
       tag: latest
       pullPolicy: Always
     ssh:

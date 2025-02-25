@@ -56,10 +56,10 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 			Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
 			Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":      "pvc-syncer-agent",
-				"app.kubernetes.io/part-of":   "dr-syncer",
+				"app.kubernetes.io/name":       "pvc-syncer-agent",
+				"app.kubernetes.io/part-of":    "dr-syncer",
 				"app.kubernetes.io/managed-by": "dr-syncer-controller",
-				"dr-syncer.io/remote-cluster": rc.Name,
+				"dr-syncer.io/remote-cluster":  rc.Name,
 			},
 		},
 		Type: corev1.SecretTypeOpaque,

@@ -3,7 +3,7 @@
 replicaCount: 1
 
 image:
-  repository: harbor.support.tools/dr-syncer/controller
+  repository: docker.io/supporttools/dr-syncer
   pullPolicy: IfNotPresent
   # tag will be overridden by deploy commands
   tag: "latest"
@@ -11,7 +11,7 @@ image:
 # Agent configuration
 agent:
   image:
-    repository: harbor.support.tools/dr-syncer/agent
+    repository: docker.io/supporttools/dr-syncer-agent
     pullPolicy: IfNotPresent
     # tag will be overridden by deploy commands
     tag: "latest"
@@ -23,9 +23,8 @@ agent:
     initialDelay: "5s"
     maxDelay: "5m"
 
-# Harbor registry credentials secret
-imagePullSecrets:
-  - name: harbor-registry
+# Image pull secrets
+imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
@@ -33,9 +32,7 @@ serviceAccount:
   # Specifies whether a service account should be created
   create: true
   # Annotations to add to the service account
-  annotations:
-    # Add Harbor registry credentials to service account
-    secret.kubernetes.io/dockerconfigjson: harbor-registry
+  annotations: {}
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: "dr-syncer"

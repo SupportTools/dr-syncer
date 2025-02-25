@@ -98,14 +98,14 @@ func (p *PVCManager) DiscoverPVCs(ctx context.Context, nodeName string) ([]PVCIn
 
 			// Create PVC info
 			pvcInfo := PVCInfo{
-				Name:         pvc.Name,
-				Namespace:    pvc.Namespace,
-				Node:        nodeName,
-				VolumePath:  volumePath,
-				VolumeType:  p.getVolumeType(pv),
-				StorageClass: derefString(pvc.Spec.StorageClassName),
-				AccessModes: pvc.Spec.AccessModes,
-				Capacity:    pvc.Status.Capacity.Storage().String(),
+				Name:          pvc.Name,
+				Namespace:     pvc.Namespace,
+				Node:          nodeName,
+				VolumePath:    volumePath,
+				VolumeType:    p.getVolumeType(pv),
+				StorageClass:  derefString(pvc.Spec.StorageClassName),
+				AccessModes:   pvc.Spec.AccessModes,
+				Capacity:      pvc.Status.Capacity.Storage().String(),
 				BoundPodNames: []string{pod.Name},
 			}
 
