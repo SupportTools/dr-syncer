@@ -66,6 +66,10 @@
    - Implement thorough logging
    - Maintain clear status updates
    - Follow controller-runtime patterns
+   - Log command usage:
+     * Always use --tail to limit log output size
+     * Never use -f/--follow in scripts (will never return)
+     * Use appropriate tail sizes (100 for normal, 1000 for debugging)
 
 ## Tool Usage
 

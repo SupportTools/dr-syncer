@@ -185,12 +185,28 @@
    log.Info("message")
    log.WithError(err).Error("error message")
    ```
+   - Log viewing best practices:
+     * Always use --tail flag to limit log output:
+       ```bash
+       kubectl logs pod-name --tail=100  # Last 100 lines
+       docker logs container-name --tail=50  # Last 50 lines
+       ```
+     * Never use -f/--follow in automated scripts or tests:
+       - These commands will never return and cause scripts to hang
+       - Reserve for interactive debugging only
+       - Use --tail instead for bounded output
+     * Recommended tail sizes:
+       - Normal operations: --tail=100
+       - Detailed debugging: --tail=1000
+       - Quick checks: --tail=20
    - Benefits:
      * Centralized logging configuration
      * Consistent logging format
      * Package-level logging control
      * Clean separation of concerns
      * Easy logging level management
+     * Prevents memory issues from unbounded log output
+     * Avoids hanging scripts due to -f flags
 
 ## CRD Management
 

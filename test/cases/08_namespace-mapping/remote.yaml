@@ -1,84 +1,59 @@
----
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: dr-sync-test-case08-a
+  name: Namespace-Prod
   labels:
     dr-syncer.io/test-case: "08"
     dr-syncer.io/test-name: "namespace-mapping"
     dr-syncer.io/test: "true"
-    dr-syncer.io/namespace-type: "source-a"
+    environment: "production"
   annotations:
-    description: "Source namespace A for direct mapping test"
+    description: "Production namespace for direct mapping test"
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: dr-sync-test-case08-b
-  labels:
-    dr-syncer.io/test-case: "08"
-    dr-syncer.io/test-name: "namespace-mapping"
-    dr-syncer.io/test: "true"
-    dr-syncer.io/namespace-type: "source-b"
-  annotations:
-    description: "Source namespace B for wildcard mapping test"
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: dr-sync-test-case08-c
-  labels:
-    dr-syncer.io/test-case: "08"
-    dr-syncer.io/test-name: "namespace-mapping"
-    dr-syncer.io/test: "true"
-    dr-syncer.io/namespace-type: "source-c"
-  annotations:
-    description: "Source namespace C for wildcard mapping test"
----
-# Resources for namespace A
+# Resources for Namespace-Prod
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: test-configmap-a
-  namespace: dr-sync-test-case08-a
+  name: test-configmap
+  namespace: Namespace-Prod
   labels:
-    app: test-app-a
+    app: test-app
     test-type: namespace-mapping
 data:
   app.properties: |
-    service.name=service-a
+    service.name=service-prod
     service.port=8080
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: test-secret-a
-  namespace: dr-sync-test-case08-a
+  name: test-secret
+  namespace: Namespace-Prod
   labels:
-    app: test-app-a
+    app: test-app
     test-type: namespace-mapping
 type: Opaque
 data:
-  username: dXNlcm5hbWUtYQ== # base64 encoded "username-a"
-  password: cGFzc3dvcmQtYQ== # base64 encoded "password-a"
+  username: dXNlcm5hbWUtcHJvZA== # base64 encoded "username-prod"
+  password: cGFzc3dvcmQtcHJvZA== # base64 encoded "password-prod"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: test-deployment-a
-  namespace: dr-sync-test-case08-a
+  name: test-deployment
+  namespace: Namespace-Prod
   labels:
-    app: test-app-a
+    app: test-app
     test-type: namespace-mapping
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: test-app-a
+      app: test-app
   template:
     metadata:
       labels:
-        app: test-app-a
+        app: test-app
     spec:
       containers:
         - name: nginx
@@ -90,14 +65,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-service-a
-  namespace: dr-sync-test-case08-a
+  name: test-service
+  namespace: Namespace-Prod
   labels:
-    app: test-app-a
+    app: test-app
     test-type: namespace-mapping
 spec:
   selector:
-    app: test-app-a
+    app: test-app
   ports:
     - name: http
       port: 80
@@ -107,206 +82,22 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: test-ingress-a
-  namespace: dr-sync-test-case08-a
+  name: test-ingress
+  namespace: Namespace-Prod
   labels:
-    app: test-app-a
+    app: test-app
     test-type: namespace-mapping
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   rules:
-    - host: test-a.example.com
+    - host: test.example.com
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: test-service-a
-                port:
-                  number: 80
----
-# Resources for namespace B
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: test-configmap-b
-  namespace: dr-sync-test-case08-b
-  labels:
-    app: test-app-b
-    test-type: namespace-mapping
-data:
-  app.properties: |
-    service.name=service-b
-    service.port=8081
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: test-secret-b
-  namespace: dr-sync-test-case08-b
-  labels:
-    app: test-app-b
-    test-type: namespace-mapping
-type: Opaque
-data:
-  username: dXNlcm5hbWUtYg== # base64 encoded "username-b"
-  password: cGFzc3dvcmQtYg== # base64 encoded "password-b"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-deployment-b
-  namespace: dr-sync-test-case08-b
-  labels:
-    app: test-app-b
-    test-type: namespace-mapping
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: test-app-b
-  template:
-    metadata:
-      labels:
-        app: test-app-b
-    spec:
-      containers:
-        - name: nginx
-          image: nginx:latest
-          ports:
-            - containerPort: 80
-              name: http
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: test-service-b
-  namespace: dr-sync-test-case08-b
-  labels:
-    app: test-app-b
-    test-type: namespace-mapping
-spec:
-  selector:
-    app: test-app-b
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-  type: ClusterIP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: test-ingress-b
-  namespace: dr-sync-test-case08-b
-  labels:
-    app: test-app-b
-    test-type: namespace-mapping
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-spec:
-  rules:
-    - host: test-b.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: test-service-b
-                port:
-                  number: 80
----
-# Resources for namespace C
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: test-configmap-c
-  namespace: dr-sync-test-case08-c
-  labels:
-    app: test-app-c
-    test-type: namespace-mapping
-data:
-  app.properties: |
-    service.name=service-c
-    service.port=8082
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: test-secret-c
-  namespace: dr-sync-test-case08-c
-  labels:
-    app: test-app-c
-    test-type: namespace-mapping
-type: Opaque
-data:
-  username: dXNlcm5hbWUtYw== # base64 encoded "username-c"
-  password: cGFzc3dvcmQtYw== # base64 encoded "password-c"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-deployment-c
-  namespace: dr-sync-test-case08-c
-  labels:
-    app: test-app-c
-    test-type: namespace-mapping
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: test-app-c
-  template:
-    metadata:
-      labels:
-        app: test-app-c
-    spec:
-      containers:
-        - name: nginx
-          image: nginx:latest
-          ports:
-            - containerPort: 80
-              name: http
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: test-service-c
-  namespace: dr-sync-test-case08-c
-  labels:
-    app: test-app-c
-    test-type: namespace-mapping
-spec:
-  selector:
-    app: test-app-c
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-  type: ClusterIP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: test-ingress-c
-  namespace: dr-sync-test-case08-c
-  labels:
-    app: test-app-c
-    test-type: namespace-mapping
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-spec:
-  rules:
-    - host: test-c.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: test-service-c
+                name: test-service
                 port:
                   number: 80

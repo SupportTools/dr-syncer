@@ -92,47 +92,47 @@
        - Verifies basic, complex, and annotated ingresses
        - Verifies TLS and backend configurations
        - Enhanced ingress validation with detailed checks
-     * [x] Test case 08 (Namespace mapping)
+     * [] Test case 08 (Namespace mapping)
        - Added direct and wildcard namespace mapping
        - Verifies namespace labels and annotations
        - Verifies resource references are updated
        - Enhanced namespace-specific validation
-     * [x] Test case 09 (PVC handling)
+     * [] Test case 09 (PVC handling)
        - Added PVC type-specific verification
        - Verifies storage class mapping
        - Verifies access mode preservation
        - Enhanced PVC validation with detailed checks
-     * [x] Test case 10 (PVC basic sync)
+     * [] Test case 10 (PVC basic sync)
        - Added basic PVC synchronization
        - Verifies exact attribute preservation
        - Verifies volume modes and access
        - Enhanced volume mount validation
-     * [x] Test case 11 (PVC storage class mapping)
+     * [] Test case 11 (PVC storage class mapping)
        - Added storage class mapping verification
        - Verifies class translation
        - Verifies attribute preservation
        - Enhanced storage validation
-     * [x] Test case 12 (PVC access mode mapping)
+     * [] Test case 12 (PVC access mode mapping)
        - Added access mode mapping verification
        - Verifies mode translation
        - Verifies mount configurations
        - Enhanced access validation
-     * [x] Test case 13 (PVC preserve attributes)
+     * [] Test case 13 (PVC preserve attributes)
        - Added attribute preservation verification
        - Verifies all PVC attributes
        - Verifies complex configurations
        - Enhanced attribute validation
-     * [x] Test case 14 (PVC sync persistent volumes)
+     * [] Test case 14 (PVC sync persistent volumes)
        - Added PV synchronization verification
        - Verifies multiple volume types
        - Verifies binding relationships
        - Enhanced volume validation
-     * [x] Test case 15 (PVC combined features)
+     * [] Test case 15 (PVC combined features)
        - Added combined feature verification
        - Verifies feature interactions
        - Verifies complex configurations
        - Enhanced validation coverage
-     * [x] Test case 16 (Replication modes)
+     * [] Test case 16 (Replication modes)
        - Added replication mode verification
        - Verifies mode transitions
        - Verifies sync behaviors
@@ -157,6 +157,10 @@
      * Resource verification functions
      * Status checking
      * Detailed result reporting
+     * Log command best practices:
+       - Always use --tail to limit log output (e.g., kubectl logs pod-name --tail=100)
+       - Never use -f/--follow flags in test scripts as they will never return
+       - Use appropriate tail sizes based on verbosity needs (100 for normal, 1000 for debugging)
 
 3. Test Categories to Standardize
    a. Scale Tests (03, 04)

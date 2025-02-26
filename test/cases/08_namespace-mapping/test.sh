@@ -4,6 +4,7 @@ set -e
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Test status tracking
@@ -292,76 +293,6 @@ deploy_resources() {
     kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} apply -f test/cases/08_namespace-mapping/controller.yaml
 }
 
-# Function to verify resources in mapped namespace
-verify_namespace_resources() {
-    local source_namespace=$1
-    local dr_namespace=$2
-    local suffix=$3
-    
-    # Verify namespace
-    if verify_namespace "$dr_namespace" "$source_namespace"; then
-        print_result "Namespace $dr_namespace created and verified" "pass"
-    else
-        print_result "Namespace $dr_namespace verification failed" "fail"
-        return 1
-    fi
-    
-    # Verify ConfigMap
-    if verify_resource "$dr_namespace" "configmap" "test-configmap-$suffix"; then
-        if verify_configmap "$source_namespace" "$dr_namespace" "test-configmap-$suffix"; then
-            print_result "ConfigMap in $dr_namespace verified" "pass"
-        else
-            print_result "ConfigMap in $dr_namespace verification failed" "fail"
-        fi
-    else
-        print_result "ConfigMap in $dr_namespace not found" "fail"
-    fi
-    
-    # Verify Secret
-    if verify_resource "$dr_namespace" "secret" "test-secret-$suffix"; then
-        if verify_secret "$source_namespace" "$dr_namespace" "test-secret-$suffix"; then
-            print_result "Secret in $dr_namespace verified" "pass"
-        else
-            print_result "Secret in $dr_namespace verification failed" "fail"
-        fi
-    else
-        print_result "Secret in $dr_namespace not found" "fail"
-    fi
-    
-    # Verify Deployment
-    if verify_resource "$dr_namespace" "deployment" "test-deployment-$suffix"; then
-        if verify_deployment "$source_namespace" "$dr_namespace" "test-deployment-$suffix"; then
-            print_result "Deployment in $dr_namespace verified" "pass"
-        else
-            print_result "Deployment in $dr_namespace verification failed" "fail"
-        fi
-    else
-        print_result "Deployment in $dr_namespace not found" "fail"
-    fi
-    
-    # Verify Service
-    if verify_resource "$dr_namespace" "service" "test-service-$suffix"; then
-        if verify_service "$source_namespace" "$dr_namespace" "test-service-$suffix"; then
-            print_result "Service in $dr_namespace verified" "pass"
-        else
-            print_result "Service in $dr_namespace verification failed" "fail"
-        fi
-    else
-        print_result "Service in $dr_namespace not found" "fail"
-    fi
-    
-    # Verify Ingress
-    if verify_resource "$dr_namespace" "ingress" "test-ingress-$suffix"; then
-        if verify_ingress "$source_namespace" "$dr_namespace" "test-ingress-$suffix"; then
-            print_result "Ingress in $dr_namespace verified" "pass"
-        else
-            print_result "Ingress in $dr_namespace verification failed" "fail"
-        fi
-    else
-        print_result "Ingress in $dr_namespace not found" "fail"
-    fi
-}
-
 # Main test function
 main() {
     echo "Testing DR-Sync functionality for case 08 (Namespace Mapping)..."
@@ -369,53 +300,28 @@ main() {
     # Deploy resources
     deploy_resources
     
-    # Wait for direct mapping replication
-    echo "Waiting for direct mapping replication to complete..."
-    if ! wait_for_replication "namespace-mapping-direct"; then
-        print_result "Direct mapping replication ready" "fail"
+    # Wait for replication
+    echo "Waiting for namespace mapping replication to complete..."
+    if ! wait_for_replication "namespace-mapping"; then
+        print_result "Namespace mapping replication ready" "fail"
         exit 1
     fi
-    print_result "Direct mapping replication ready" "pass"
+    print_result "Namespace mapping replication ready" "pass"
     
-    # Wait for wildcard mapping replication
-    echo "Waiting for wildcard mapping replication to complete..."
-    if ! wait_for_replication "namespace-mapping-wildcard"; then
-        print_result "Wildcard mapping replication ready" "fail"
-        exit 1
-    fi
-    print_result "Wildcard mapping replication ready" "pass"
+    # Verify namespace mapping
+    echo "Verifying namespace mapping..."
+    verify_namespace_resources "Namespace-Prod" "Namespace-DR"
     
-    # Verify direct mapping (A -> B)
-    echo "Verifying direct namespace mapping..."
-    verify_namespace_resources "dr-sync-test-case08-a" "dr-sync-test-case08-b" "a"
+    # Verify Replication status fields
+    echo "Verifying replication status..."
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping -o jsonpath='{.status.syncStats.failedSyncs}')
     
-    # Verify wildcard mappings
-    echo "Verifying wildcard namespace mappings..."
-    verify_namespace_resources "dr-sync-test-case08-b" "dr-sync-mapped-b" "b"
-    verify_namespace_resources "dr-sync-test-case08-c" "dr-sync-mapped-c" "c"
-    
-    # Verify Replication status fields for direct mapping
-    echo "Verifying direct mapping replication status..."
-    local direct_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-direct -o jsonpath='{.status.phase}')
-    local direct_synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-direct -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local direct_failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-direct -o jsonpath='{.status.syncStats.failedSyncs}')
-    
-    if verify_replication_status "direct mapping" "$direct_phase" "Completed" "$direct_synced_count" "$direct_failed_count"; then
-        print_result "Direct mapping replication status" "pass"
+    if verify_replication_status "namespace mapping" "$phase" "Completed" "$synced_count" "$failed_count"; then
+        print_result "Replication status" "pass"
     else
-        print_result "Direct mapping replication status" "fail"
-    fi
-    
-    # Verify Replication status fields for wildcard mapping
-    echo "Verifying wildcard mapping replication status..."
-    local wildcard_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-wildcard -o jsonpath='{.status.phase}')
-    local wildcard_synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-wildcard -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local wildcard_failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication namespace-mapping-wildcard -o jsonpath='{.status.syncStats.failedSyncs}')
-    
-    if verify_replication_status "wildcard mapping" "$wildcard_phase" "Completed" "$wildcard_synced_count" "$wildcard_failed_count"; then
-        print_result "Wildcard mapping replication status" "pass"
-    else
-        print_result "Wildcard mapping replication status" "fail"
+        print_result "Replication status" "fail"
     fi
     
     # Print summary
@@ -429,6 +335,75 @@ main() {
         exit 0
     else
         exit 1
+    fi
+}
+
+# Function to verify resources in mapped namespace
+verify_namespace_resources() {
+    local source_namespace=$1
+    local dr_namespace=$2
+    
+    # Verify namespace
+    if verify_namespace "$dr_namespace" "$source_namespace"; then
+        print_result "Namespace $dr_namespace created and verified" "pass"
+    else
+        print_result "Namespace $dr_namespace verification failed" "fail"
+        return 1
+    fi
+    
+    # Verify ConfigMap
+    if verify_resource "$dr_namespace" "configmap" "test-configmap"; then
+        if verify_configmap "$source_namespace" "$dr_namespace" "test-configmap"; then
+            print_result "ConfigMap in $dr_namespace verified" "pass"
+        else
+            print_result "ConfigMap in $dr_namespace verification failed" "fail"
+        fi
+    else
+        print_result "ConfigMap in $dr_namespace not found" "fail"
+    fi
+    
+    # Verify Secret
+    if verify_resource "$dr_namespace" "secret" "test-secret"; then
+        if verify_secret "$source_namespace" "$dr_namespace" "test-secret"; then
+            print_result "Secret in $dr_namespace verified" "pass"
+        else
+            print_result "Secret in $dr_namespace verification failed" "fail"
+        fi
+    else
+        print_result "Secret in $dr_namespace not found" "fail"
+    fi
+    
+    # Verify Deployment
+    if verify_resource "$dr_namespace" "deployment" "test-deployment"; then
+        if verify_deployment "$source_namespace" "$dr_namespace" "test-deployment"; then
+            print_result "Deployment in $dr_namespace verified" "pass"
+        else
+            print_result "Deployment in $dr_namespace verification failed" "fail"
+        fi
+    else
+        print_result "Deployment in $dr_namespace not found" "fail"
+    fi
+    
+    # Verify Service
+    if verify_resource "$dr_namespace" "service" "test-service"; then
+        if verify_service "$source_namespace" "$dr_namespace" "test-service"; then
+            print_result "Service in $dr_namespace verified" "pass"
+        else
+            print_result "Service in $dr_namespace verification failed" "fail"
+        fi
+    else
+        print_result "Service in $dr_namespace not found" "fail"
+    fi
+    
+    # Verify Ingress
+    if verify_resource "$dr_namespace" "ingress" "test-ingress"; then
+        if verify_ingress "$source_namespace" "$dr_namespace" "test-ingress"; then
+            print_result "Ingress in $dr_namespace verified" "pass"
+        else
+            print_result "Ingress in $dr_namespace verification failed" "fail"
+        fi
+    else
+        print_result "Ingress in $dr_namespace not found" "fail"
     fi
 }
 

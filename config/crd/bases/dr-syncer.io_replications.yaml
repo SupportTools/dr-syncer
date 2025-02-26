@@ -199,6 +199,25 @@ spec:
                     description: PreserveTLS determines whether to maintain TLS configurations
                     type: boolean
                 type: object
+              namespaceConfig:
+                description: NamespaceConfig defines configuration for namespace handling
+                properties:
+                  createNamespace:
+                    default: true
+                    description: CreateNamespace determines whether to create destination
+                      namespace if it doesn't exist
+                    type: boolean
+                  preserveAnnotations:
+                    default: true
+                    description: PreserveAnnotations determines whether to maintain
+                      namespace annotations
+                    type: boolean
+                  preserveLabels:
+                    default: true
+                    description: PreserveLabels determines whether to maintain namespace
+                      labels
+                    type: boolean
+                type: object
               namespaceScopedResources:
                 description: |-
                   NamespaceScopedResources is a list of namespace scoped resources to replicate

@@ -214,7 +214,7 @@ main() {
     # Run tests
     if [ -n "${test_num}" ]; then
         # Format test number with leading zero if needed
-        test_num=$(printf "%02d" "${test_num}")
+        test_num=$(printf "%02d" "$((10#${test_num}))")
         run_specific_test "${test_num}"
     else
         run_all_tests

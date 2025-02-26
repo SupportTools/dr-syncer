@@ -351,11 +351,49 @@ func (in *IngressConfig) DeepCopy() *IngressConfig {
 	return out
 }
 
+// NamespaceConfig defines configuration for namespace handling
+type NamespaceConfig struct {
+	// CreateNamespace determines whether to create destination namespace if it doesn't exist
+	// +optional
+	// +kubebuilder:default=true
+	CreateNamespace bool `json:"createNamespace,omitempty"`
+
+	// PreserveLabels determines whether to maintain namespace labels
+	// +optional
+	// +kubebuilder:default=true
+	PreserveLabels bool `json:"preserveLabels,omitempty"`
+
+	// PreserveAnnotations determines whether to maintain namespace annotations
+	// +optional
+	// +kubebuilder:default=true
+	PreserveAnnotations bool `json:"preserveAnnotations,omitempty"`
+
+}
+
+// DeepCopyInto copies NamespaceConfig into out
+func (in *NamespaceConfig) DeepCopyInto(out *NamespaceConfig) {
+	*out = *in
+}
+
+// DeepCopy creates a deep copy of NamespaceConfig
+func (in *NamespaceConfig) DeepCopy() *NamespaceConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(NamespaceConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
 type ReplicationSpec struct {
 	// ReplicationMode defines how replication should be performed
 	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
 	// +kubebuilder:default=Scheduled
 	ReplicationMode ReplicationMode `json:"replicationMode,omitempty"`
+
+	// NamespaceConfig defines configuration for namespace handling
+	// +optional
+	NamespaceConfig *NamespaceConfig `json:"namespaceConfig,omitempty"`
 
 	// Continuous configuration for continuous replication mode
 	// +optional
