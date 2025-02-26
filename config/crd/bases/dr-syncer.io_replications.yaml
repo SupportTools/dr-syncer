@@ -181,6 +181,24 @@ spec:
                       Format: "resource.group" (e.g. "statefulsets.apps")
                     type: object
                 type: object
+              ingressConfig:
+                description: IngressConfig defines configuration for ingress replication
+                properties:
+                  preserveAnnotations:
+                    default: true
+                    description: PreserveAnnotations determines whether to maintain
+                      all ingress annotations
+                    type: boolean
+                  preserveBackends:
+                    default: true
+                    description: PreserveBackends determines whether to preserve backend
+                      service references
+                    type: boolean
+                  preserveTLS:
+                    default: true
+                    description: PreserveTLS determines whether to maintain TLS configurations
+                    type: boolean
+                type: object
               namespaceScopedResources:
                 description: |-
                   NamespaceScopedResources is a list of namespace scoped resources to replicate

@@ -303,6 +303,54 @@ func (in *FailureHandlingConfig) DeepCopy() *FailureHandlingConfig {
 	return out
 }
 
+// IngressConfig defines configuration for ingress replication
+type IngressConfig struct {
+	// PreserveAnnotations determines whether to maintain all ingress annotations
+	// +optional
+	// +kubebuilder:default=true
+	PreserveAnnotations *bool `json:"preserveAnnotations,omitempty"`
+
+	// PreserveTLS determines whether to maintain TLS configurations
+	// +optional
+	// +kubebuilder:default=true
+	PreserveTLS *bool `json:"preserveTLS,omitempty"`
+
+	// PreserveBackends determines whether to preserve backend service references
+	// +optional
+	// +kubebuilder:default=true
+	PreserveBackends *bool `json:"preserveBackends,omitempty"`
+}
+
+// DeepCopyInto copies IngressConfig into out
+func (in *IngressConfig) DeepCopyInto(out *IngressConfig) {
+	*out = *in
+	if in.PreserveAnnotations != nil {
+		in, out := &in.PreserveAnnotations, &out.PreserveAnnotations
+		*out = new(bool)
+		**out = **in
+	}
+	if in.PreserveTLS != nil {
+		in, out := &in.PreserveTLS, &out.PreserveTLS
+		*out = new(bool)
+		**out = **in
+	}
+	if in.PreserveBackends != nil {
+		in, out := &in.PreserveBackends, &out.PreserveBackends
+		*out = new(bool)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of IngressConfig
+func (in *IngressConfig) DeepCopy() *IngressConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(IngressConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
 type ReplicationSpec struct {
 	// ReplicationMode defines how replication should be performed
 	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
@@ -366,6 +414,10 @@ type ReplicationSpec struct {
 	// FailureHandling defines how different types of failures are handled
 	// +optional
 	FailureHandling *FailureHandlingConfig `json:"failureHandling,omitempty"`
+
+	// IngressConfig defines configuration for ingress replication
+	// +optional
+	IngressConfig *IngressConfig `json:"ingressConfig,omitempty"`
 }
 
 // DeepCopyInto copies ImmutableResourceConfig into out
@@ -431,6 +483,11 @@ func (in *ReplicationSpec) DeepCopyInto(out *ReplicationSpec) {
 	if in.FailureHandling != nil {
 		in, out := &in.FailureHandling, &out.FailureHandling
 		*out = new(FailureHandlingConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.IngressConfig != nil {
+		in, out := &in.IngressConfig, &out.IngressConfig
+		*out = new(IngressConfig)
 		(*in).DeepCopyInto(*out)
 	}
 }

@@ -210,6 +210,14 @@
    - Simplified CRD architecture to two core CRDs
    - Enhanced Replication CRD with comprehensive status fields
    - Integrated namespace mapping into Replication CRD
+   - Added IngressConfig to Replication CRD
+     * Supports preserveAnnotations, preserveTLS, preserveBackends
+     * Implemented following CRD update workflow:
+       1. Added IngressConfig struct to types.go
+       2. Added field to ReplicationSpec
+       3. Generated CRDs with `make manifests`
+       4. Applied updated CRD to cluster
+     * Successfully validated with test case 07
    - Added phase tracking (Pending, Running, Completed, Failed)
    - Added sync statistics tracking
    - Added per-resource status tracking
@@ -230,6 +238,11 @@
    - Added troubleshooting section
    - Improved examples
    - Documented CRD update process
+   - Enhanced CRD documentation:
+     * Added comprehensive file update guide
+     * Documented required changes for spec vs status updates
+     * Listed all affected files and their purposes
+     * Included auto-generated file handling
 
 4. CRD Management
    - Streamlined CRD management with automated sync

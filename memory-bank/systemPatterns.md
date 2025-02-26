@@ -231,3 +231,48 @@
    - Use consistent naming patterns
    - Include clear field descriptions
    - Add examples in CRD documentation
+
+7. CRD Update Workflow
+   - Step 1: Update Go Types
+     * Add new structs/fields in api/v1alpha1/types.go
+     * Include kubebuilder markers for validation
+     * Implement DeepCopy methods if needed
+     * Follow existing patterns for similar fields
+
+   - Required Files for CRD Updates:
+     * For Spec Changes:
+       - api/v1alpha1/types.go: Add new structs and fields
+       - api/v1alpha1/types.go: Add DeepCopy methods for new types
+       - api/v1alpha1/types.go: Update ReplicationSpec/RemoteClusterSpec
+       - test/cases/XX_*: Add test cases covering new fields
+       - charts/dr-syncer/values.yaml: Add default values if needed
+
+     * For Status Changes:
+       - api/v1alpha1/types.go: Add new status structs and fields
+       - api/v1alpha1/types.go: Add DeepCopy methods for new types
+       - api/v1alpha1/types.go: Update ReplicationStatus/RemoteClusterStatus
+       - controllers/*_controller.go: Update status handling in reconciler
+
+     * Generated/Updated by make manifests:
+       - config/crd/bases/dr-syncer.io_*.yaml
+       - charts/dr-syncer/crds/*.yaml
+
+   - Step 2: Regenerate CRDs
+     * Run `make manifests` to:
+       - Generate new CRD YAML
+       - Update Helm chart CRDs
+       - Validate schema changes
+
+   - Step 3: Apply Changes
+     * Apply updated CRD to cluster:
+       ```bash
+       kubectl apply -f config/crd/bases/dr-syncer.io_replications.yaml
+       ```
+     * For production:
+       - Update via Helm chart
+       - Follow proper release process
+
+   - Step 4: Validation
+     * Verify new fields with kubectl explain
+     * Run affected test cases
+     * Check controller logs for schema errors
