@@ -135,7 +135,7 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 
 			// Update the PVC in the destination cluster
 			log.Info(fmt.Sprintf("Updating existing PVC %s in namespace %s", destPVC.Name, dstNamespace))
-			updatedPVC, err := targetClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.CreateOptions{})
+			updatedPVC, err := targetClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
 			if err != nil {
 				return syncerrors.NewRetryableError(
 					fmt.Errorf("failed to update PVC %s: %w", destPVC.Name, err),
