@@ -17,11 +17,13 @@
      * Controller extension for agent management
      * SSH key management
      * Remote cluster deployment handling
+     * Temporary PVC mount pods
    - Key Features:
      * Cross-cluster PVC data replication
      * Secure SSH-based rsync
      * Configurable concurrency and retry
      * Automated agent deployment
+     * Enhanced security model without root filesystem access
 
 3. Implementation Plan:
    - Phase 1: Basic Infrastructure
@@ -36,6 +38,31 @@
      * PVC discovery and mapping
      * Rsync operations
      * Status tracking
+   - Phase 4: Security Enhancement
+     * Implement bastion/proxy pattern for agent
+     * Create temporary pods with specific PVC mounts
+     * Configure SSH forwarding between components
+     * Implement dual-layer SSH key management
+
+4. Improved Security Architecture:
+   - Bastion/Proxy Pattern:
+     * Agent pod acts as SSH proxy/bastion
+     * No root filesystem access required
+     * SSH forwarding to temporary pods
+   - Temporary PVC Mount Pods:
+     * Created on-demand for specific PVCs
+     * Node affinity to run on same node as PVC
+     * Direct PVC mount with minimal permissions
+     * Runs rsync server for data access
+   - Data Flow:
+     * DR replication pod → Agent SSH (port 2222)
+     * Agent → Temp Pod rsync (internal port)
+     * Direct node-to-node path with minimal network overhead
+   - SSH Key Management:
+     * Two-layer authentication system
+     * DR→Agent: Cluster-level keys stored in secrets
+     * Agent→Temp: Operation-specific internal keys
+     * Automated key generation and rotation
 
 2. Custom Resources
    - RemoteCluster CRD implemented and validated
@@ -92,11 +119,14 @@
        - Verifies basic, complex, and annotated ingresses
        - Verifies TLS and backend configurations
        - Enhanced ingress validation with detailed checks
-     * [] Test case 08 (Namespace mapping)
+     * [x] Test case 08 (Namespace mapping)
        - Added direct and wildcard namespace mapping
        - Verifies namespace labels and annotations
        - Verifies resource references are updated
        - Enhanced namespace-specific validation
+       - Validates namespace creation if it doesn't exist
+       - Confirms proper mapping between Namespace-Prod and Namespace-DR
+       - Verifies all resource types are properly synchronized with namespace updates
      * [] Test case 09 (PVC handling)
        - Added PVC type-specific verification
        - Verifies storage class mapping
@@ -203,12 +233,25 @@
 
 ## Recent Changes
 
-1. Logging System Refactor
+1. Build System Improvements
+   - Added DEBUG variable to Makefile to control log output verbosity
+   - Updated kubeconfig settings to use files in the kubeconfig directory
+   - Added conditional output based on DEBUG value for Docker, Helm, and kubectl commands
+   - Added new deployment targets for different environments (deploy-dr, deploy-prod)
+   - Updated test scripts to use the same kubeconfig files from the project directory
+   - Enhanced test environment setup to copy kubeconfig files to the project directory
+
+2. Logging System Improvements
    - Implemented package-level logger initialization via logger.go
    - Removed redundant internal logging packages
    - Standardized logging interface across all packages
    - Centralized logging configuration
    - Enhanced logging consistency and maintainability
+   - Added controller-runtime logging integration
+     * Created LogrusLogAdapter to bridge logrus with controller-runtime
+     * Implemented logr.LogSink interface for proper integration
+     * Added SetupControllerRuntimeLogging function to initialize controller-runtime logging
+     * Fixed panic caused by uninitialized controller-runtime logger
 
 2. Core Features
    - Simplified CRD architecture to two core CRDs
@@ -303,6 +346,74 @@
    - Helm templating automatically applied
    - Only two CRDs maintained: remoteclusters and replications
 
+## Current Implementation Tasks
+
+### Task 1: Agent SSH Proxy Implementation
+- Status: Completed
+- Files to Modify:
+  * build/sshd_config
+  * build/entrypoint.sh
+  * cmd/agent/main.go
+- Key Changes:
+  * Enable SSH forwarding
+  * Configure proxy settings
+  * Add connection validation
+- Success Criteria:
+  * Agent can accept SSH connections
+  * Port forwarding works
+  * Connection logging in place
+
+### Task 2: Temporary Pod Management
+- Status: Completed
+- Files to Create/Modify:
+  * New pkg/agent/tempod package
+  * Controller code updates
+- Key Changes:
+  * Pod template with PVC mount
+  * Node affinity rules
+  * Rsync server setup
+  * Lifecycle management
+- Success Criteria:
+  * Pods created on correct nodes
+  * PVCs mounted correctly
+  * Cleanup works reliably
+
+### Task 3: SSH Key Management System
+- Status: Completed
+- Files Created/Modified:
+  * New pkg/agent/sshkeys package
+  * New pkg/controller/replication/keys.go
+  * New pkg/controller/replication/log.go
+  * New pkg/controller/replication/pvc_sync.go
+  * Controller code updates
+- Key Changes:
+  * Two-layer key generation
+  * Key rotation logic
+  * Secret management
+  * Secure SSH key handling
+  * Replication-level key management
+  * Temporary pod key integration
+- Success Criteria:
+  * Keys generated securely
+  * Rotation works smoothly
+  * Secrets properly managed
+  * Secure communication between pods
+  * Proper key isolation between replications
+
+### Task 4: Integration and Testing
+- Status: Completed
+- Files to Create/Modify:
+  * test/cases/21_pvc_sync_security
+  * Documentation updates
+- Key Changes:
+  * New test scenarios
+  * Security validation
+  * Performance metrics
+- Success Criteria:
+  * All tests pass
+  * Documentation complete
+  * Performance verified
+
 ## Next Steps
 
 1. Short Term
@@ -310,6 +421,7 @@
    - Enhance test validation
    - Update test documentation
    - Implement consistent error handling
+   - Complete PVC sync agent security enhancement tasks
 
 2. Medium Term
    - Add advanced test scenarios
@@ -322,3 +434,8 @@
    - Security test cases
    - Feature coverage expansion
    - Test automation enhancements
+   - Label-based namespace replication:
+     * Automatic replication based on namespace labels
+     * Dynamic namespace discovery with label selectors
+     * Destination namespace suffix pattern
+     * Test case for label-based replication (20_label_based_replication)

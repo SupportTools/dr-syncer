@@ -14,9 +14,13 @@ spec:
   # Manual mode configuration
   replicationMode: Manual
   
-  # Cluster configuration
-  sourceCluster: dr-syncer-nyc3
-  destinationCluster: dr-syncer-sfo3
+  # Cluster configuration using ClusterMapping
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
+  # Legacy cluster configuration (commented out)
+  # sourceCluster: dr-syncer-nyc3
+  # destinationCluster: dr-syncer-sfo3
   sourceNamespace: dr-sync-test-case16-manual
   destinationNamespace: dr-sync-test-case16-manual
   

@@ -4,38 +4,33 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.14.0
-  name: replications.dr-syncer.io
+  name: namespacemappings.dr-syncer.io
 spec:
   group: dr-syncer.io
   names:
-    kind: Replication
-    listKind: ReplicationList
-    plural: replications
-    singular: replication
+    kind: NamespaceMapping
+    listKind: NamespaceMappingList
+    plural: namespacemappings
+    singular: namespacemapping
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.namespaceSelector
+      name: Selection Mode
+      priority: 1
+      type: string
     - jsonPath: .spec.sourceNamespace
       name: Source
       type: string
     - jsonPath: .spec.destinationNamespace
       name: Destination
       type: string
-    - jsonPath: .spec.sourceCluster
-      name: Source Cluster
-      type: string
-    - jsonPath: .spec.destinationCluster
-      name: Destination Cluster
+    - jsonPath: .spec.clusterMappingRef.name
+      name: Cluster Mapping
       type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.syncStats.successfulSyncs
-      name: Synced
-      type: integer
-    - jsonPath: .status.syncStats.failedSyncs
-      name: Failed
-      type: integer
     - jsonPath: .status.lastSyncTime
       name: Last Sync
       type: string
@@ -65,6 +60,20 @@ spec:
             type: object
           spec:
             properties:
+              clusterMappingRef:
+                description: |-
+                  ClusterMappingRef references a ClusterMapping resource for cluster connectivity
+                  This is the preferred way to specify source and target clusters
+                properties:
+                  name:
+                    description: Name is the name of the ClusterMapping
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the ClusterMapping
+                    type: string
+                required:
+                - name
+                type: object
               continuous:
                 description: Continuous configuration for continuous replication mode
                 properties:
@@ -84,6 +93,7 @@ spec:
                 type: string
               destinationNamespace:
                 description: DestinationNamespace is the namespace to replicate to
+                  (direct mapping mode)
                 type: string
               failureHandling:
                 description: FailureHandling defines how different types of failures
@@ -249,6 +259,36 @@ spec:
                       - to
                       type: object
                     type: array
+                  dataSyncConfig:
+                    description: |-
+                      DataSyncConfig defines configuration for PVC data synchronization.
+                      Only used when SyncData is true.
+                    properties:
+                      concurrentSyncs:
+                        default: 2
+                        description: ConcurrentSyncs is the maximum number of concurrent
+                          PVC data syncs.
+                        format: int32
+                        type: integer
+                      excludePaths:
+                        description: |-
+                          ExcludePaths is a list of paths to exclude from synchronization.
+                          Paths are relative to the PVC mount point.
+                        items:
+                          type: string
+                        type: array
+                      rsyncOptions:
+                        description: RsyncOptions is a list of additional options
+                          to pass to rsync.
+                        items:
+                          type: string
+                        type: array
+                      timeout:
+                        default: 30m
+                        description: Timeout is the maximum time to wait for a sync
+                          operation to complete.
+                        type: string
+                    type: object
                   preserveVolumeAttributes:
                     default: false
                     description: |-
@@ -278,6 +318,13 @@ spec:
                       - to
                       type: object
                     type: array
+                  syncData:
+                    default: false
+                    description: |-
+                      SyncData determines whether to sync the data inside PVCs between clusters.
+                      When true, the data will be synced from source to destination PVCs.
+                      When false (default), only the PVC resources will be synced.
+                    type: boolean
                   syncPersistentVolumes:
                     default: false
                     description: |-
@@ -342,7 +389,8 @@ spec:
                 description: SourceCluster is the name of the source cluster
                 type: string
               sourceNamespace:
-                description: SourceNamespace is the namespace to replicate from
+                description: SourceNamespace is the namespace to replicate from (direct
+                  mapping mode)
                 type: string
               syncCRDs:
                 default: false
@@ -351,17 +399,26 @@ spec:
                   When true, CRDs will be synced along with other resources
                   When false (default), CRDs will be skipped
                 type: boolean
-            required:
-            - destinationCluster
-            - destinationNamespace
-            - sourceCluster
-            - sourceNamespace
+              tempPodKeySecretRef:
+                description: TempPodKeySecretRef is a reference to the secret containing
+                  SSH keys for temporary pods
+                properties:
+                  name:
+                    description: Name is the name of the secret
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the secret
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
             type: object
           status:
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the replication's state
+                  of the namespace mapping's state
                 items:
                   description: "Condition contains details for one aspect of the current
                     state of this API Resource.\n---\nThis struct is intended for
@@ -569,7 +626,8 @@ spec:
                 - time
                 type: object
               lastSyncTime:
-                description: LastSyncTime is the last time the replication was synced
+                description: LastSyncTime is the last time the namespace mapping was
+                  synced
                 format: date-time
                 type: string
               lastWatchEvent:
@@ -583,7 +641,7 @@ spec:
                 format: date-time
                 type: string
               phase:
-                description: Phase represents the current phase of the replication
+                description: Phase represents the current phase of the namespace mapping
                 enum:
                 - Pending
                 - Running

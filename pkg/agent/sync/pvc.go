@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/supporttools/dr-syncer/pkg/agent/rsync"
 )
@@ -47,8 +46,7 @@ func NewPVCManager(client client.Client) *PVCManager {
 
 // DiscoverPVCs finds all PVCs and their data locations on the node
 func (p *PVCManager) DiscoverPVCs(ctx context.Context, nodeName string) ([]PVCInfo, error) {
-	logger := log.FromContext(ctx)
-	logger.Info("Discovering PVCs", "node", nodeName)
+	log.Infof("Discovering PVCs on node %s", nodeName)
 
 	// Get all PVCs in the cluster
 	pvcList := &corev1.PersistentVolumeClaimList{}
@@ -85,14 +83,14 @@ func (p *PVCManager) DiscoverPVCs(ctx context.Context, nodeName string) ([]PVCIn
 			// Get PV details
 			pv := &corev1.PersistentVolume{}
 			if err := p.client.Get(ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, pv); err != nil {
-				logger.Error(err, "Failed to get PV", "pv", pvc.Spec.VolumeName)
+				log.Errorf("Failed to get PV %s: %v", pvc.Spec.VolumeName, err)
 				continue
 			}
 
 			// Determine volume path
 			volumePath := p.getVolumePath(pod.UID, volume.Name, pv)
 			if volumePath == "" {
-				logger.Info("Could not determine volume path", "pod", pod.Name, "volume", volume.Name)
+				log.Infof("Could not determine volume path for pod %s, volume %s", pod.Name, volume.Name)
 				continue
 			}
 
@@ -173,8 +171,8 @@ func derefString(s *string) string {
 
 // SyncPVC syncs a PVC's data to a target node
 func (p *PVCManager) SyncPVC(ctx context.Context, pvcInfo PVCInfo, targetNode string, targetPath string) error {
-	logger := log.FromContext(ctx)
-	logger.Info("Syncing PVC", "pvc", pvcInfo.Name, "namespace", pvcInfo.Namespace, "source", pvcInfo.Node, "target", targetNode)
+	log.Infof("Syncing PVC %s in namespace %s from source %s to target %s",
+		pvcInfo.Name, pvcInfo.Namespace, pvcInfo.Node, targetNode)
 
 	// Build rsync source and target paths
 	source := fmt.Sprintf("%s/", pvcInfo.VolumePath) // Trailing slash to sync contents

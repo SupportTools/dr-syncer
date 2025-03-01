@@ -1,21 +1,20 @@
 # Basic SSH configuration
 Port 2222
 Protocol 2
-HostKey /etc/ssh/keys/ssh_host_rsa_key
-HostKey /etc/ssh/keys/ssh_host_ecdsa_key
-HostKey /etc/ssh/keys/ssh_host_ed25519_key
+HostKey /etc/ssh/host_keys/ssh_host_rsa_key
+HostKey /etc/ssh/host_keys/ssh_host_ecdsa_key
+HostKey /etc/ssh/host_keys/ssh_host_ed25519_key
 
 # Authentication
 PubkeyAuthentication yes
 PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
-UsePAM no
 
 # Security
 PermitRootLogin no
 X11Forwarding no
-AllowTcpForwarding no
+AllowTcpForwarding yes
 AllowAgentForwarding no
 PermitTunnel no
 MaxAuthTries 3
@@ -24,9 +23,12 @@ MaxAuthTries 3
 SyslogFacility AUTH
 LogLevel INFO
 
-# Restrict to rsync only
-ForceCommand /usr/bin/rsync ${SSH_ORIGINAL_COMMAND}
+# SSH proxy configuration
+# Allow both rsync and proxy commands
+ForceCommand /bin/bash /usr/local/bin/ssh-command-handler.sh
 AllowUsers syncer
+GatewayPorts yes
+StreamLocalBindUnlink yes
 
 # Environment
 AcceptEnv LANG LC_*

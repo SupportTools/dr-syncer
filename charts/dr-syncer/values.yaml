@@ -15,6 +15,14 @@ agent:
     pullPolicy: IfNotPresent
     # tag will be overridden by deploy commands
     tag: "latest"
+
+# Rsync configuration
+rsync:
+  image:
+    repository: docker.io/supporttools/dr-syncer-rsync
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "latest"
   ssh:
     port: 2222
   concurrency: 3
@@ -22,6 +30,16 @@ agent:
     maxRetries: 5
     initialDelay: "5s"
     maxDelay: "5m"
+  # Health check configuration
+  healthCheck:
+    # Interval between health checks
+    interval: "5m"
+    # SSH connection timeout
+    sshTimeout: "10s"
+    # Number of retry attempts for failed health checks
+    retryAttempts: 3
+    # Interval between retry attempts
+    retryInterval: "30s"
 
 # Image pull secrets
 imagePullSecrets: []

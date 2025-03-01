@@ -3,6 +3,7 @@ FROM alpine:latest
 # Install required packages
 RUN apk add --no-cache \
     openssh-server \
+    openssh-client \
     rsync \
     bash \
     curl
@@ -13,9 +14,10 @@ RUN adduser -D syncer && \
     chmod 700 /home/syncer/.ssh && \
     chown syncer:syncer /home/syncer/.ssh
 
-# Configure SSH for rsync only
+# Configure SSH for proxy and rsync
 COPY build/sshd_config /etc/ssh/sshd_config
 COPY build/entrypoint.sh /entrypoint.sh
+COPY build/ssh-command-handler.sh /build/ssh-command-handler.sh
 
 # Set permissions
 RUN chmod +x /entrypoint.sh && \

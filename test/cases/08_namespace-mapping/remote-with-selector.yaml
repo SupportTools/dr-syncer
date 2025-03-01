@@ -1,0 +1,103 @@
+# First namespace with replication label
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: namespace-prod
+  labels:
+    dr-syncer.io/replicate: "true"
+    dr-syncer.io/test-case: "08"
+    environment: "production"
+  annotations:
+    description: "Production namespace for label-based replication test"
+---
+# Resources for namespace-prod (with replication label)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-configmap
+  namespace: namespace-prod
+  labels:
+    app: test-app
+    test-type: namespace-mapping
+data:
+  app.properties: |
+    service.name=test-service
+    service.port=8080
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-secret
+  namespace: namespace-prod
+  labels:
+    app: test-app
+    test-type: namespace-mapping
+type: Opaque
+data:
+  username: dXNlcm5hbWU= # base64 encoded "username"
+  password: cGFzc3dvcmQ= # base64 encoded "password"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: namespace-prod
+  labels:
+    app: test-app
+    test-type: namespace-mapping
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: namespace-prod
+  labels:
+    app: test-app
+    test-type: namespace-mapping
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-ingress
+  namespace: namespace-prod
+  labels:
+    app: test-app
+    test-type: namespace-mapping
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - host: test.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: test-service
+                port:
+                  number: 80

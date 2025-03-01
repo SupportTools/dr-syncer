@@ -38,6 +38,18 @@
    - Network configuration adaptation
    - Service recreation logic
 
+5. Namespace Mapping
+   - Direct namespace mapping (sourceNamespace → destinationNamespace)
+   - Namespace creation if it doesn't exist
+   - Preservation of namespace labels and annotations
+   - Resource reference updates across namespaces
+   - Cross-namespace reference handling
+   - Planned label-based namespace selection:
+     * Automatic replication based on namespace labels
+     * Dynamic namespace discovery and mapping
+     * Destination namespace suffix pattern (e.g., "-dr")
+     * Automatic cleanup when labels are removed
+
 ## Design Patterns
 
 1. Operator Pattern
@@ -127,20 +139,55 @@
 
 1. Agent Architecture
    - DaemonSet-based deployment
-   - Host network access
-   - Kubelet volume mounting
-   - SSH service for rsync
+   - SSH proxy/bastion pattern
+   - No root filesystem access required
+   - Temporary PVC mount pods
+   - Node-specific routing
 
 2. Security Pattern
-   - Per-cluster SSH key pairs
-   - Controller-managed key distribution
+   - Two-layer SSH key management:
+     * DR→Agent: Cluster-level keys stored in secrets
+     * Agent→Temp: Operation-specific internal keys
+     * Replication→Temp: Replication-specific keys for isolation
+   - Controller-managed key generation and rotation
    - Restricted RBAC permissions
    - Secure rsync over SSH
+   - Minimal pod permissions
+   - Key management implementation:
+     * Replication-level key generation and storage
+     * Automatic key rotation
+     * Secure key distribution to temporary pods
+     * Fingerprint tracking for key verification
+     * Annotations for key metadata
 
 3. Deployment Pattern
    - Controller-managed agent lifecycle
    - Automated remote cluster setup
    - Resource management via RemoteCluster CRD
+   - On-demand temporary pod creation
+
+4. Data Flow Pattern
+   ```
+   DR Replication Pod → Agent SSH (port 2222) → Temp Pod rsync (internal port)
+   ```
+   - Direct node-to-node path
+   - Minimal network overhead
+   - Clean separation of concerns
+
+5. Temporary Pod Pattern
+   - Created on-demand for specific PVCs
+   - Node affinity to run on same node as PVC
+   - Direct PVC mount with minimal permissions
+   - Short-lived, purpose-specific pods
+   - Runs rsync server for data access
+   - Automatic cleanup after sync completion
+
+6. SSH Proxy Pattern
+   - Agent pod acts as SSH proxy/bastion
+   - SSH forwarding to temporary pods
+   - Restricted command execution
+   - Connection validation and logging
+   - Secure key management
 
 ## Best Practices
 
@@ -172,6 +219,7 @@
    - Package-level logger initialization via logger.go
    - Shared logging setup across packages
    - Consistent logging interface
+   - Controller-runtime logging integration
    ```go
    // logger.go in each package
    package mypackage
@@ -184,6 +232,28 @@
    ```go
    log.Info("message")
    log.WithError(err).Error("error message")
+   ```
+   - Controller-runtime integration in main.go:
+   ```go
+   // Initialize logging
+   log := logging.SetupLogging()
+   
+   // Set up controller-runtime logging to use our logger
+   logging.SetupControllerRuntimeLogging(log)
+   ```
+   - LogrusLogAdapter implementation:
+   ```go
+   // Implements logr.LogSink interface to bridge logrus with controller-runtime
+   type LogrusLogAdapter struct {
+       logger *logrus.Logger
+       name   string
+   }
+   
+   // SetupControllerRuntimeLogging configures controller-runtime
+   func SetupControllerRuntimeLogging(logger *logrus.Logger) {
+       ctrl := NewControllerRuntimeLogger(logger)
+       ctrllog.SetLogger(ctrl)
+   }
    ```
    - Log viewing best practices:
      * Always use --tail flag to limit log output:

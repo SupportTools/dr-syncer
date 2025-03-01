@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
@@ -74,8 +73,6 @@ func NewSyncCoordinator(sourceClient, targetClient client.Client, concurrency in
 
 // SyncPVCs syncs PVCs from source to target cluster
 func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
-	logger := log.FromContext(ctx)
-
 	// Get nodes from source cluster
 	sourceNodes := &corev1.NodeList{}
 	if err := c.sourceClient.List(ctx, sourceNodes); err != nil {
@@ -97,7 +94,7 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 	for _, node := range sourceNodes.Items {
 		pvcs, err := c.pvcManager.DiscoverPVCs(ctx, node.Name)
 		if err != nil {
-			logger.Error(err, "Failed to discover PVCs", "node", node.Name)
+			log.Errorf("Failed to discover PVCs on node %s: %v", node.Name, err)
 			continue
 		}
 		allPVCs = append(allPVCs, pvcs...)
@@ -143,11 +140,8 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 						continue
 					}
 					targetNode = &targetNodes.Items[0]
-					logger.Info("No matching target node found, using first available node",
-						"pvc", pvc.Name,
-						"namespace", pvc.Namespace,
-						"sourceNode", pvc.Node,
-						"targetNode", targetNode.Name)
+					log.Infof("No matching target node found, using first available node - pvc: %s, namespace: %s, sourceNode: %s, targetNode: %s",
+						pvc.Name, pvc.Namespace, pvc.Node, targetNode.Name)
 				}
 
 				// Get source PVC size
@@ -193,11 +187,8 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 					if sourceSize.Cmp(existingSize) > 0 {
 						existingPVC.Spec.Resources.Requests[corev1.ResourceStorage] = sourceSize
 						if err := c.targetClient.Update(ctx, existingPVC); err != nil {
-							logger.Error(err, "Failed to update PVC size",
-								"pvc", pvc.Name,
-								"namespace", pvc.Namespace,
-								"currentSize", existingSize.String(),
-								"newSize", sourceSize.String())
+							log.Errorf("Failed to update PVC size - pvc: %s, namespace: %s, currentSize: %s, newSize: %s, error: %v",
+								pvc.Name, pvc.Namespace, existingSize.String(), sourceSize.String(), err)
 						}
 					}
 				} else if !k8serrors.IsNotFound(err) {
@@ -292,7 +283,8 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 
 				// Delete sync pod with cleanup
 				if err := c.cleanupSyncResources(ctx, syncPod); err != nil {
-					logger.Error(err, "Failed to cleanup sync resources", "pod", syncPod.Name, "namespace", syncPod.Namespace)
+					log.Errorf("Failed to cleanup sync resources - pod: %s, namespace: %s, error: %v",
+						syncPod.Name, syncPod.Namespace, err)
 				}
 			}
 		}(i)
@@ -317,8 +309,6 @@ func (c *SyncCoordinator) SyncPVCs(ctx context.Context) error {
 
 // cleanupSyncResources handles cleanup of sync pod and related resources
 func (c *SyncCoordinator) cleanupSyncResources(ctx context.Context, pod *corev1.Pod) error {
-	logger := log.FromContext(ctx)
-
 	// Delete sync pod
 	if err := c.targetClient.Delete(ctx, pod); err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete sync pod: %v", err)
@@ -334,7 +324,8 @@ func (c *SyncCoordinator) cleanupSyncResources(ctx context.Context, pod *corev1.
 		}
 		return false, nil
 	}); err != nil {
-		logger.Error(err, "Failed waiting for sync pod deletion", "pod", pod.Name, "namespace", pod.Namespace)
+		log.Errorf("Failed waiting for sync pod deletion - pod: %s, namespace: %s, error: %v",
+			pod.Name, pod.Namespace, err)
 	}
 
 	// Check if any other sync pods are using the PVC
@@ -365,7 +356,6 @@ func (c *SyncCoordinator) cleanupSyncResources(ctx context.Context, pod *corev1.
 
 // syncWithRetry attempts to sync a PVC with retries based on configuration
 func (c *SyncCoordinator) syncWithRetry(ctx context.Context, pvc PVCInfo, targetNode, targetPath string) error {
-	logger := log.FromContext(ctx)
 	maxRetries := int(c.retryConfig.MaxRetries)
 	initialDelay, _ := time.ParseDuration(c.retryConfig.InitialDelay)
 	maxDelay, _ := time.ParseDuration(c.retryConfig.MaxDelay)
@@ -381,11 +371,8 @@ func (c *SyncCoordinator) syncWithRetry(ctx context.Context, pvc PVCInfo, target
 			return fmt.Errorf("max retries reached: %v", err)
 		}
 
-		logger.Error(err, "Sync attempt failed",
-			"pvc", pvc.Name,
-			"namespace", pvc.Namespace,
-			"attempt", attempt+1,
-			"maxRetries", maxRetries)
+		log.Errorf("Sync attempt failed - pvc: %s, namespace: %s, attempt: %d/%d, error: %v",
+			pvc.Name, pvc.Namespace, attempt+1, maxRetries, err)
 
 		select {
 		case <-ctx.Done():

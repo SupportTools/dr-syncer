@@ -1,0 +1,14 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-namespacemapping
+  namespace: test-clustermapping
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-clustermapping
+  destinationNamespace: test-clustermapping
+  resourceTypes:
+    - persistentvolumeclaims
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer

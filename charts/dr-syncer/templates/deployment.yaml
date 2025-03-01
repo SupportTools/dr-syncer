@@ -104,6 +104,14 @@ spec:
               value: {{ .Values.controller.watch.backgroundSyncInterval | quote }}
             - name: DEFAULT_RESOURCE_TYPES
               value: {{ join "," .Values.controller.replication.defaultResourceTypes | quote }}
+            - name: AGENT_IMAGE_REPOSITORY
+              value: {{ .Values.agent.image.repository | quote }}
+            - name: AGENT_IMAGE_TAG
+              value: {{ .Values.agent.image.tag | quote }}
+            - name: RSYNC_IMAGE_REPOSITORY
+              value: {{ .Values.rsync.image.repository | quote }}
+            - name: RSYNC_IMAGE_TAG
+              value: {{ .Values.rsync.image.tag | quote }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

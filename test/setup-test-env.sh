@@ -54,6 +54,13 @@ delete_test_cluster() {
     echo -e "${GREEN}✓ Cluster ${name} deleted${NC}"
 }
 
+# Set kubeconfig paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROD_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/prod"
+DR_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/dr"
+CONTROLLER_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/controller"
+
 # Function to setup test environment
 setup_environment() {
     # Create test clusters
@@ -61,13 +68,16 @@ setup_environment() {
     create_test_cluster "dr-syncer-dr" || return 1
     create_test_cluster "dr-syncer-controller" || return 1
     
-    # Export kubeconfig paths
-    export PROD_KUBECONFIG="/tmp/dr-syncer-prod.kubeconfig"
-    export DR_KUBECONFIG="/tmp/dr-syncer-dr.kubeconfig"
-    export CONTROLLER_KUBECONFIG="/tmp/dr-syncer-controller.kubeconfig"
+    # Create kubeconfig directory if it doesn't exist
+    mkdir -p "${PROJECT_ROOT}/kubeconfig"
+    
+    # Copy kubeconfig files to project directory
+    cp "/tmp/dr-syncer-prod.kubeconfig" "${PROD_KUBECONFIG}"
+    cp "/tmp/dr-syncer-dr.kubeconfig" "${DR_KUBECONFIG}"
+    cp "/tmp/dr-syncer-controller.kubeconfig" "${CONTROLLER_KUBECONFIG}"
     
     echo -e "\n${GREEN}Test environment ready${NC}"
-    echo "Use the following environment variables:"
+    echo "Kubeconfig files copied to project directory:"
     echo "  PROD_KUBECONFIG=${PROD_KUBECONFIG}"
     echo "  DR_KUBECONFIG=${DR_KUBECONFIG}"
     echo "  CONTROLLER_KUBECONFIG=${CONTROLLER_KUBECONFIG}"
@@ -81,9 +91,8 @@ cleanup_environment() {
     delete_test_cluster "dr-syncer-dr"
     delete_test_cluster "dr-syncer-controller"
     
-    unset PROD_KUBECONFIG
-    unset DR_KUBECONFIG
-    unset CONTROLLER_KUBECONFIG
+    # Remove kubeconfig files from project directory
+    rm -f "${PROD_KUBECONFIG}" "${DR_KUBECONFIG}" "${CONTROLLER_KUBECONFIG}"
     
     echo -e "${GREEN}✓ Test environment cleaned up${NC}"
 }

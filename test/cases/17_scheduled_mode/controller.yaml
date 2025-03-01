@@ -16,8 +16,9 @@ spec:
   schedule: "*/5 * * * *"  # Every 5 minutes
   
   # Cluster configuration
-  sourceCluster: dr-syncer-nyc3
-  destinationCluster: dr-syncer-sfo3
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
   sourceNamespace: dr-sync-test-case17
   destinationNamespace: dr-sync-test-case17
   

@@ -12,40 +12,39 @@ TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 
-# Function to check required environment variables
+# Set kubeconfig paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROD_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/prod"
+DR_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/dr"
+CONTROLLER_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/controller"
+
+# Export kubeconfig variables for test scripts
+export PROD_KUBECONFIG
+export DR_KUBECONFIG
+export CONTROLLER_KUBECONFIG
+
+# Function to check required kubeconfig files
 check_environment() {
-    local missing_vars=()
-    
-    if [ -z "${PROD_KUBECONFIG}" ]; then
-        missing_vars+=("PROD_KUBECONFIG")
-    fi
-    
-    if [ -z "${DR_KUBECONFIG}" ]; then
-        missing_vars+=("DR_KUBECONFIG")
-    fi
-    
-    if [ -z "${CONTROLLER_KUBECONFIG}" ]; then
-        missing_vars+=("CONTROLLER_KUBECONFIG")
-    fi
-    
-    if [ ${#missing_vars[@]} -ne 0 ]; then
-        echo -e "${RED}Error: Missing required environment variables:${NC}"
-        printf '%s\n' "${missing_vars[@]}"
-        echo
-        echo "Please set the following environment variables:"
-        echo "  PROD_KUBECONFIG: Path to production cluster kubeconfig"
-        echo "  DR_KUBECONFIG: Path to DR cluster kubeconfig"
-        echo "  CONTROLLER_KUBECONFIG: Path to controller cluster kubeconfig"
-        exit 1
-    fi
+    local missing_files=()
     
     # Verify kubeconfig files exist
     for config in "${PROD_KUBECONFIG}" "${DR_KUBECONFIG}" "${CONTROLLER_KUBECONFIG}"; do
         if [ ! -f "${config}" ]; then
-            echo -e "${RED}Error: Kubeconfig file not found: ${config}${NC}"
-            exit 1
+            missing_files+=("${config}")
         fi
     done
+    
+    if [ ${#missing_files[@]} -ne 0 ]; then
+        echo -e "${RED}Error: Missing required kubeconfig files:${NC}"
+        printf '%s\n' "${missing_files[@]}"
+        echo
+        echo "Please ensure the following kubeconfig files exist:"
+        echo "  ${PROD_KUBECONFIG}: Production cluster kubeconfig"
+        echo "  ${DR_KUBECONFIG}: DR cluster kubeconfig"
+        echo "  ${CONTROLLER_KUBECONFIG}: Controller cluster kubeconfig"
+        exit 1
+    fi
     
     # Verify cluster access
     echo "Verifying cluster access..."
@@ -117,6 +116,7 @@ run_all_tests() {
         "14_pvc-sync-persistent-volumes"
         "15_pvc-combined-features"
         "16_replication_modes"
+        "21_clustermapping"
     )
     
     # Run each test case
@@ -161,6 +161,8 @@ cleanup_resources() {
     # Clean up resources in controller cluster
     echo "Cleaning up controller resources..."
     kubectl --kubeconfig "${CONTROLLER_KUBECONFIG}" -n dr-syncer delete replication --all 2>/dev/null || true
+    kubectl --kubeconfig "${CONTROLLER_KUBECONFIG}" delete clustermapping --all -A 2>/dev/null || true
+    kubectl --kubeconfig "${CONTROLLER_KUBECONFIG}" delete namespace test-clustermapping 2>/dev/null || true
     
     # Clean up resources in production cluster
     echo "Cleaning up production resources..."

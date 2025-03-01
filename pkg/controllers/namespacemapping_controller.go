@@ -12,21 +12,23 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ReplicationReconciler reconciles a Replication object
-type ReplicationReconciler struct {
+// NamespaceMappingReconciler reconciles a NamespaceMapping object
+type NamespaceMappingReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	modeHandler *modes.ModeReconciler
 }
 
-//+kubebuilder:rbac:groups=dr-syncer.io,resources=replications,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=dr-syncer.io,resources=replications/finalizers,verbs=update
+//+kubebuilder:rbac:groups=dr-syncer.io,resources=namespacemappings,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=dr-syncer.io,resources=namespacemappings/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=dr-syncer.io,resources=namespacemappings/finalizers,verbs=update
+//+kubebuilder:rbac:groups=dr-syncer.io,resources=clustermappings,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 //+kubebuilder:rbac:groups="",resources=configmaps;secrets;services,verbs=get;list;watch;create;update;patch;delete
@@ -37,34 +39,34 @@ type ReplicationReconciler struct {
 //+kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch
 
 const (
-	// FinalizerName is the name of the finalizer added to Replication resources
-	FinalizerName = "dr-syncer.io/cleanup"
+	// NamespaceMappingFinalizerName is the name of the finalizer added to NamespaceMapping resources
+	NamespaceMappingFinalizerName = "dr-syncer.io/cleanup-namespacemapping"
 )
 
-// Reconcile handles the reconciliation loop for Replication resources
-func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+// Reconcile handles the reconciliation loop for NamespaceMapping resources
+func (r *NamespaceMappingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log.Info(fmt.Sprintf("starting reconciliation for %s/%s", req.Namespace, req.Name))
 
-	// Fetch the Replication instance
-	var replication drv1alpha1.Replication
-	if err := r.Get(ctx, req.NamespacedName, &replication); err != nil {
+	// Fetch the NamespaceMapping instance
+	var namespacemapping drv1alpha1.NamespaceMapping
+	if err := r.Get(ctx, req.NamespacedName, &namespacemapping); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		log.Errorf("unable to fetch Replication: %v", err)
+		log.Errorf("unable to fetch NamespaceMapping: %v", err)
 		return ctrl.Result{}, err
 	}
 
 	// Handle deletion
-	if !replication.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, &replication)
+	if !namespacemapping.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &namespacemapping)
 	}
 
 	// Add finalizer if it doesn't exist
-	if !containsString(replication.Finalizers, FinalizerName) {
+	if !containsString(namespacemapping.Finalizers, NamespaceMappingFinalizerName) {
 		log.Info("adding finalizer")
-		replication.Finalizers = append(replication.Finalizers, FinalizerName)
-		if err := r.Update(ctx, &replication); err != nil {
+		namespacemapping.Finalizers = append(namespacemapping.Finalizers, NamespaceMappingFinalizerName)
+		if err := r.Update(ctx, &namespacemapping); err != nil {
 			log.Errorf("failed to add finalizer: %v", err)
 			return ctrl.Result{}, err
 		}
@@ -72,8 +74,8 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	// Check if we should proceed with reconciliation based on next sync time
-	if replication.Status.NextSyncTime != nil {
-		nextSync := replication.Status.NextSyncTime.Time
+	if namespacemapping.Status.NextSyncTime != nil {
+		nextSync := namespacemapping.Status.NextSyncTime.Time
 		now := time.Now()
 		if now.Before(nextSync) {
 			waitTime := nextSync.Sub(now)
@@ -82,7 +84,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	log.Info("fetched replication")
+	log.Info("fetched namespacemapping")
 
 	// Initialize clients if not already done
 	if r.modeHandler == nil {
@@ -92,12 +94,50 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		restConfig.WrapTransport = nil
 		log.Info("initializing cluster connections")
 
+		var sourceCluster, destCluster string
+		var sourceConfig, destConfig *rest.Config
+		var sourceClient *kubernetes.Clientset
+		var destClient *kubernetes.Clientset
+		var sourceDynamicClient, destDynamicClient dynamic.Interface
+
+		// Check if ClusterMapping is specified
+		if namespacemapping.Spec.ClusterMappingRef != nil {
+			// Fetch the ClusterMapping instance
+			var clusterMapping drv1alpha1.ClusterMapping
+			clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
+			if clusterMappingNamespace == "" {
+				clusterMappingNamespace = namespacemapping.Namespace
+			}
+
+			if err := r.Get(ctx, client.ObjectKey{
+				Name:      namespacemapping.Spec.ClusterMappingRef.Name,
+				Namespace: clusterMappingNamespace,
+			}, &clusterMapping); err != nil {
+				log.Errorf("unable to fetch ClusterMapping: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			// Use source and target clusters from ClusterMapping
+			sourceCluster = clusterMapping.Spec.SourceCluster
+			destCluster = clusterMapping.Spec.TargetCluster
+		} else {
+			// Use directly specified source and destination clusters
+			if namespacemapping.Spec.SourceCluster == "" || namespacemapping.Spec.DestinationCluster == "" {
+				err := fmt.Errorf("either ClusterMappingRef or both SourceCluster and DestinationCluster must be specified")
+				log.Errorf("invalid NamespaceMapping configuration: %v", err)
+				return ctrl.Result{}, err
+			}
+
+			sourceCluster = namespacemapping.Spec.SourceCluster
+			destCluster = namespacemapping.Spec.DestinationCluster
+		}
+
 		// Fetch the source Cluster instance
-		var sourceCluster drv1alpha1.RemoteCluster
+		var sourceRemoteCluster drv1alpha1.RemoteCluster
 		if err := r.Get(ctx, client.ObjectKey{
-			Name:      replication.Spec.SourceCluster,
-			Namespace: replication.ObjectMeta.Namespace,
-		}, &sourceCluster); err != nil {
+			Name:      sourceCluster,
+			Namespace: namespacemapping.ObjectMeta.Namespace,
+		}, &sourceRemoteCluster); err != nil {
 			log.Errorf("unable to fetch source RemoteCluster: %v", err)
 			return ctrl.Result{}, err
 		}
@@ -105,15 +145,15 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Get the source kubeconfig secret
 		var sourceKubeconfigSecret corev1.Secret
 		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: sourceCluster.Spec.KubeconfigSecretRef.Namespace,
-			Name:      sourceCluster.Spec.KubeconfigSecretRef.Name,
+			Namespace: sourceRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
+			Name:      sourceRemoteCluster.Spec.KubeconfigSecretRef.Name,
 		}, &sourceKubeconfigSecret); err != nil {
 			log.Errorf("unable to fetch source kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Get the source kubeconfig data
-		sourceKubeconfigKey := sourceCluster.Spec.KubeconfigSecretRef.Key
+		sourceKubeconfigKey := sourceRemoteCluster.Spec.KubeconfigSecretRef.Key
 		if sourceKubeconfigKey == "" {
 			sourceKubeconfigKey = "kubeconfig"
 		}
@@ -125,7 +165,8 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 
 		// Create source cluster clients
-		sourceConfig, err := clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
+		var err error
+		sourceConfig, err = clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
 		if err != nil {
 			log.Errorf("unable to create source REST config from kubeconfig: %v", err)
 			return ctrl.Result{}, err
@@ -133,13 +174,13 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Always disable request/response body logging
 		sourceConfig.WrapTransport = nil
 
-		sourceClient, err := kubernetes.NewForConfig(sourceConfig)
+		sourceClient, err = kubernetes.NewForConfig(sourceConfig)
 		if err != nil {
 			log.Errorf("unable to create source Kubernetes client: %v", err)
 			return ctrl.Result{}, err
 		}
 
-		sourceDynamicClient, err := dynamic.NewForConfig(sourceConfig)
+		sourceDynamicClient, err = dynamic.NewForConfig(sourceConfig)
 		if err != nil {
 			log.Errorf("unable to create source dynamic client: %v", err)
 			return ctrl.Result{}, err
@@ -154,11 +195,11 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		log.Info("successfully connected to source cluster")
 
 		// Fetch the destination Cluster instance
-		var destCluster drv1alpha1.RemoteCluster
+		var destRemoteCluster drv1alpha1.RemoteCluster
 		if err := r.Get(ctx, client.ObjectKey{
-			Name:      replication.Spec.DestinationCluster,
-			Namespace: replication.ObjectMeta.Namespace,
-		}, &destCluster); err != nil {
+			Name:      destCluster,
+			Namespace: namespacemapping.ObjectMeta.Namespace,
+		}, &destRemoteCluster); err != nil {
 			log.Errorf("unable to fetch destination RemoteCluster: %v", err)
 			return ctrl.Result{}, err
 		}
@@ -166,15 +207,15 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Get the destination kubeconfig secret
 		var destKubeconfigSecret corev1.Secret
 		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
-			Name:      destCluster.Spec.KubeconfigSecretRef.Name,
+			Namespace: destRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
+			Name:      destRemoteCluster.Spec.KubeconfigSecretRef.Name,
 		}, &destKubeconfigSecret); err != nil {
 			log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Get the destination kubeconfig data
-		destKubeconfigKey := destCluster.Spec.KubeconfigSecretRef.Key
+		destKubeconfigKey := destRemoteCluster.Spec.KubeconfigSecretRef.Key
 		if destKubeconfigKey == "" {
 			destKubeconfigKey = "kubeconfig"
 		}
@@ -186,7 +227,7 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 
 		// Create destination cluster clients
-		destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
+		destConfig, err = clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
 		if err != nil {
 			log.Errorf("unable to create destination REST config from kubeconfig: %v", err)
 			return ctrl.Result{}, err
@@ -194,13 +235,13 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Always disable request/response body logging
 		destConfig.WrapTransport = nil
 
-		destClient, err := kubernetes.NewForConfig(destConfig)
+		destClient, err = kubernetes.NewForConfig(destConfig)
 		if err != nil {
 			log.Errorf("unable to create destination Kubernetes client: %v", err)
 			return ctrl.Result{}, err
 		}
 
-		destDynamicClient, err := dynamic.NewForConfig(destConfig)
+		destDynamicClient, err = dynamic.NewForConfig(destConfig)
 		if err != nil {
 			log.Errorf("unable to create destination dynamic client: %v", err)
 			return ctrl.Result{}, err
@@ -221,49 +262,53 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			destDynamicClient,
 			sourceClient,
 			destClient,
+			sourceConfig,
+			destConfig,
 		)
 	}
 
 	// Handle reconciliation based on replication mode
-	log.Info(fmt.Sprintf("starting %s mode reconciliation", replication.Spec.ReplicationMode))
+	log.Info(fmt.Sprintf("starting %s mode reconciliation", namespacemapping.Spec.ReplicationMode))
 
 	var result ctrl.Result
 	var err error
 
-	switch replication.Spec.ReplicationMode {
+	// Use the NamespaceMapping directly with the mode handler
+
+	switch namespacemapping.Spec.ReplicationMode {
 	case drv1alpha1.ContinuousMode:
-		result, err = r.modeHandler.ReconcileContinuous(ctx, &replication)
+		result, err = r.modeHandler.ReconcileContinuous(ctx, &namespacemapping)
 	case drv1alpha1.ManualMode:
-		result, err = r.modeHandler.ReconcileManual(ctx, &replication)
+		result, err = r.modeHandler.ReconcileManual(ctx, &namespacemapping)
 	default: // Scheduled mode is the default
-		result, err = r.modeHandler.ReconcileScheduled(ctx, &replication)
+		result, err = r.modeHandler.ReconcileScheduled(ctx, &namespacemapping)
 	}
 
 	if err != nil {
-		log.Errorf("failed to reconcile replication: %v", err)
+		log.Errorf("failed to reconcile namespacemapping: %v", err)
 		return result, err // Return result along with error to respect backoff
 	}
 
-	// Get the latest version of the Replication object before updating status
-	var latestReplication drv1alpha1.Replication
-	if err := r.Get(ctx, req.NamespacedName, &latestReplication); err != nil {
-		log.Errorf("unable to fetch latest Replication: %v", err)
+	// Get the latest version of the NamespaceMapping object before updating status
+	var latestNamespaceMapping drv1alpha1.NamespaceMapping
+	if err := r.Get(ctx, req.NamespacedName, &latestNamespaceMapping); err != nil {
+		log.Errorf("unable to fetch latest NamespaceMapping: %v", err)
 		return ctrl.Result{}, err
 	}
 
-	log.Info("fetched latest replication before status update")
+	log.Info("fetched latest namespacemapping before status update")
 
 	// Copy the status from our working copy to the latest version
-	latestReplication.Status = replication.Status
+	latestNamespaceMapping.Status = namespacemapping.Status
 
 	// Update status on the latest version
-	if err := r.Status().Update(ctx, &latestReplication); err != nil {
+	if err := r.Status().Update(ctx, &latestNamespaceMapping); err != nil {
 		if apierrors.IsConflict(err) {
 			// If we hit a conflict, log details and requeue to try again
 			log.Info("conflict updating status, will retry")
 			return ctrl.Result{Requeue: true}, nil
 		}
-		log.Errorf("unable to update Replication status: %v", err)
+		log.Errorf("unable to update NamespaceMapping status: %v", err)
 		return ctrl.Result{}, err
 	}
 
@@ -272,12 +317,12 @@ func (r *ReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return result, nil
 }
 
-// handleDeletion handles cleanup when a Replication is being deleted
-func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication *drv1alpha1.Replication) (ctrl.Result, error) {
-	log.Info(fmt.Sprintf("handling deletion of replication %s/%s", replication.Namespace, replication.Name))
+// handleDeletion handles cleanup when a NamespaceMapping is being deleted
+func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespacemapping *drv1alpha1.NamespaceMapping) (ctrl.Result, error) {
+	log.Info(fmt.Sprintf("handling deletion of namespacemapping %s/%s", namespacemapping.Namespace, namespacemapping.Name))
 
 	// If finalizer is present, we need to clean up resources
-	if containsString(replication.Finalizers, FinalizerName) {
+	if containsString(namespacemapping.Finalizers, NamespaceMappingFinalizerName) {
 		// Initialize clients if not already done
 		if r.modeHandler == nil {
 			// Create REST config with verbosity settings
@@ -286,12 +331,44 @@ func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication 
 			restConfig.WrapTransport = nil
 			log.Info("initializing cluster connections for cleanup")
 
+			var destCluster string
+
+			// Check if ClusterMapping is specified
+			if namespacemapping.Spec.ClusterMappingRef != nil {
+				// Fetch the ClusterMapping instance
+				var clusterMapping drv1alpha1.ClusterMapping
+				clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
+				if clusterMappingNamespace == "" {
+					clusterMappingNamespace = namespacemapping.Namespace
+				}
+
+				if err := r.Get(ctx, client.ObjectKey{
+					Name:      namespacemapping.Spec.ClusterMappingRef.Name,
+					Namespace: clusterMappingNamespace,
+				}, &clusterMapping); err != nil {
+					log.Errorf("unable to fetch ClusterMapping: %v", err)
+					return ctrl.Result{}, err
+				}
+
+				// Use target cluster from ClusterMapping
+				destCluster = clusterMapping.Spec.TargetCluster
+			} else {
+				// Use directly specified destination cluster
+				if namespacemapping.Spec.DestinationCluster == "" {
+					err := fmt.Errorf("either ClusterMappingRef or DestinationCluster must be specified")
+					log.Errorf("invalid NamespaceMapping configuration: %v", err)
+					return ctrl.Result{}, err
+				}
+
+				destCluster = namespacemapping.Spec.DestinationCluster
+			}
+
 			// Fetch the destination Cluster instance
-			var destCluster drv1alpha1.RemoteCluster
+			var destRemoteCluster drv1alpha1.RemoteCluster
 			if err := r.Get(ctx, client.ObjectKey{
-				Name:      replication.Spec.DestinationCluster,
-				Namespace: replication.ObjectMeta.Namespace,
-			}, &destCluster); err != nil {
+				Name:      destCluster,
+				Namespace: namespacemapping.ObjectMeta.Namespace,
+			}, &destRemoteCluster); err != nil {
 				log.Errorf("unable to fetch destination RemoteCluster: %v", err)
 				return ctrl.Result{}, err
 			}
@@ -299,15 +376,15 @@ func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication 
 			// Get the destination kubeconfig secret
 			var destKubeconfigSecret corev1.Secret
 			if err := r.Get(ctx, client.ObjectKey{
-				Namespace: destCluster.Spec.KubeconfigSecretRef.Namespace,
-				Name:      destCluster.Spec.KubeconfigSecretRef.Name,
+				Namespace: destRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
+				Name:      destRemoteCluster.Spec.KubeconfigSecretRef.Name,
 			}, &destKubeconfigSecret); err != nil {
 				log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
 				return ctrl.Result{}, err
 			}
 
 			// Get the destination kubeconfig data
-			destKubeconfigKey := destCluster.Spec.KubeconfigSecretRef.Key
+			destKubeconfigKey := destRemoteCluster.Spec.KubeconfigSecretRef.Key
 			if destKubeconfigKey == "" {
 				destKubeconfigKey = "kubeconfig"
 			}
@@ -346,18 +423,22 @@ func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication 
 				destDynamicClient,
 				nil,
 				destClient,
+				nil,
+				destConfig,
 			)
 		}
 
+		// Use the NamespaceMapping directly with the mode handler
+		
 		// Clean up synced resources in destination cluster
-		if err := r.modeHandler.CleanupResources(ctx, replication); err != nil {
+		if err := r.modeHandler.CleanupResources(ctx, namespacemapping); err != nil {
 			log.Errorf("failed to cleanup resources: %v", err)
 			return ctrl.Result{}, err
 		}
 
 		// Remove finalizer
-		replication.Finalizers = removeString(replication.Finalizers, FinalizerName)
-		if err := r.Update(ctx, replication); err != nil {
+		namespacemapping.Finalizers = removeString(namespacemapping.Finalizers, NamespaceMappingFinalizerName)
+		if err := r.Update(ctx, namespacemapping); err != nil {
 			log.Errorf("failed to remove finalizer: %v", err)
 			return ctrl.Result{}, err
 		}
@@ -368,7 +449,16 @@ func (r *ReplicationReconciler) handleDeletion(ctx context.Context, replication 
 	return ctrl.Result{}, nil
 }
 
+// SetupWithManager sets up the controller with the Manager
+func (r *NamespaceMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&drv1alpha1.NamespaceMapping{}).
+		Complete(r)
+}
+
 // Helper functions for string slice operations
+
+// containsString checks if a string is in a slice
 func containsString(slice []string, s string) bool {
 	for _, item := range slice {
 		if item == s {
@@ -378,6 +468,7 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
+// removeString removes a string from a slice
 func removeString(slice []string, s string) []string {
 	result := make([]string, 0, len(slice))
 	for _, item := range slice {
@@ -386,11 +477,4 @@ func removeString(slice []string, s string) []string {
 		}
 	}
 	return result
-}
-
-// SetupWithManager sets up the controller with the Manager
-func (r *ReplicationReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&drv1alpha1.Replication{}).
-		Complete(r)
 }

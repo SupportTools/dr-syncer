@@ -52,6 +52,20 @@ wait_for_condition() {
     done
 }
 
+# Set kubeconfig paths if not already set
+if [ -z "${PROD_KUBECONFIG}" ] || [ -z "${DR_KUBECONFIG}" ] || [ -z "${CONTROLLER_KUBECONFIG}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    PROD_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/prod"
+    DR_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/dr"
+    CONTROLLER_KUBECONFIG="${PROJECT_ROOT}/kubeconfig/controller"
+    
+    # Export for child processes
+    export PROD_KUBECONFIG
+    export DR_KUBECONFIG
+    export CONTROLLER_KUBECONFIG
+fi
+
 # Verify kubeconfig files exist
 verify_kubeconfig() {
     local kubeconfig=$1
@@ -60,15 +74,13 @@ verify_kubeconfig() {
     fi
 }
 
-# Check required environment variables
+# Check required kubeconfig files
 check_env_vars() {
-    local required_vars=("PROD_KUBECONFIG" "DR_KUBECONFIG" "CONTROLLER_KUBECONFIG")
-    for var in "${required_vars[@]}"; do
-        if [ -z "${!var}" ]; then
-            fail "Required environment variable $var is not set"
-        fi
-        verify_kubeconfig "${!var}"
+    local kubeconfig_files=("${PROD_KUBECONFIG}" "${DR_KUBECONFIG}" "${CONTROLLER_KUBECONFIG}")
+    for config in "${kubeconfig_files[@]}"; do
+        verify_kubeconfig "${config}"
     done
+    info "Kubeconfig files verified"
 }
 
 # Initialize test environment

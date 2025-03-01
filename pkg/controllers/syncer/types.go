@@ -5,6 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -23,6 +24,8 @@ type ResourceSyncer struct {
 	sourceClient  kubernetes.Interface
 	destClient    kubernetes.Interface
 	scheme        *runtime.Scheme
+	sourceConfig  *rest.Config
+	destConfig    *rest.Config
 }
 
 // NewResourceSyncer creates a new resource syncer
@@ -35,4 +38,10 @@ func NewResourceSyncer(ctrlClient client.Client, sourceDynamic, destDynamic dyna
 		destClient:    destClient,
 		scheme:        scheme,
 	}
+}
+
+// SetConfigs sets the REST configs for the source and destination clusters
+func (r *ResourceSyncer) SetConfigs(sourceConfig, destConfig *rest.Config) {
+	r.sourceConfig = sourceConfig
+	r.destConfig = destConfig
 }

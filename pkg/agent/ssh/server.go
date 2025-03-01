@@ -14,6 +14,11 @@ type Server struct {
 	hostKeys []string
 }
 
+// Port returns the SSH server port
+func (s *Server) Port() int {
+	return s.port
+}
+
 // NewServer creates a new SSH server instance
 func NewServer(port int) (*Server, error) {
 	keyPath := "/etc/ssh/keys"

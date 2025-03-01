@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-pvc-replication
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: source-pvc
+  namespace: test-pvc-replication
+  labels:
+    app: pvc-replication-test
+    dr-syncer.io/replicate: "true"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

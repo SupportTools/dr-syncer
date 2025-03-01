@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// Export the logger instance for use across packages
 var log *logrus.Logger
 
 // SetupLogging initializes the logger with the appropriate settings.

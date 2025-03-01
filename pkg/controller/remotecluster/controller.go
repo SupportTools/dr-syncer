@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
@@ -24,7 +23,7 @@ func NewRemoteClusterReconciler(client client.Client, scheme *runtime.Scheme) *R
 	return &RemoteClusterReconciler{
 		client:         client,
 		scheme:         scheme,
-		pvcSyncManager: NewPVCSyncManager(client),
+		pvcSyncManager: NewPVCSyncManager(client, client),
 	}
 }
 
@@ -37,8 +36,6 @@ func NewRemoteClusterReconciler(client client.Client, scheme *runtime.Scheme) *R
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
 	// Fetch RemoteCluster instance
 	rc := &drv1alpha1.RemoteCluster{}
 	if err := r.client.Get(ctx, req.NamespacedName, rc); err != nil {
@@ -52,7 +49,7 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// Handle PVC sync reconciliation
 	if err := r.pvcSyncManager.Reconcile(ctx, rc); err != nil {
-		logger.Error(err, "Failed to reconcile PVC sync")
+		log.Errorf("Failed to reconcile PVC sync: %v", err)
 		rc.Status.Health = "Unhealthy"
 		if err := r.client.Status().Update(ctx, rc); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to update status: %v", err)
