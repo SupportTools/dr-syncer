@@ -334,7 +334,8 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 				return nil, fmt.Errorf("failed to sync Ingresses: %w", err)
 			}
 		case "persistentvolumeclaims", "persistentvolumeclaim", "pvc":
-			if err := syncPersistentVolumeClaims(ctx, syncer, sourceClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig); err != nil {
+			// Use the new PVC handler with mounting support
+			if err := syncPersistentVolumeClaimsWithMounting(ctx, syncer, sourceClient, destClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig); err != nil {
 				return nil, fmt.Errorf("failed to sync PVCs: %w", err)
 			}
 		}

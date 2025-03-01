@@ -1,138 +1,73 @@
-# DR Syncer
+# DR-Syncer
 
-DR Syncer is a Kubernetes controller designed to automate and simplify disaster recovery synchronization between Kubernetes clusters. It provides automated, scheduled synchronization of resources from source namespaces to destination namespaces in remote clusters.
+DR-Syncer is a Kubernetes operator for disaster recovery that synchronizes resources between Kubernetes clusters.
+
+## Overview
+
+This controller synchronizes Kubernetes resources across clusters enabling disaster recovery and multi-cluster operations. It supports continuous sync mode and scheduled sync operations for PVCs, deployments, and other cluster resources.
 
 ## Features
 
-- Multiple replication modes:
-  - **Scheduled Mode**: Traditional cron-based scheduling for periodic synchronization
-  - **Continuous Mode**: Real-time replication using resource watchers with background sync
-  - **Manual Mode**: On-demand synchronization triggered via CRD updates
-- Multi-cluster support
-- Flexible resource filtering
-- Namespace mapping
-- PVC and storage class handling
-- Deployment replica management
-- Service and Ingress handling
-- Immutable resource handling
+- Cross-cluster resource synchronization
+- Persistent Volume Claim (PVC) data replication
+- Scheduled and continuous sync modes
+- Resource filtering and transformation
+- Automatic backoff and retry mechanisms
 
-## Installation
+## Development
 
-### Using Helm
+### Local Development Setup
+
+To run the controller locally for development:
+
+1. Use the provided `run-local.sh` script:
 
 ```bash
-helm repo add dr-syncer https://supporttools.github.io/dr-syncer
-helm install dr-syncer dr-syncer/dr-syncer
+./run-local.sh /path/to/controller/kubeconfig
 ```
 
-## Usage
+The script handles:
+- Scaling down the in-cluster controller deployment to prevent conflicts
+- Setting the KUBECONFIG environment variable
+- Restoring the original deployment when you exit
 
-### Basic Configuration
+### Architectural Notes
 
-1. Create a RemoteCluster resource for each cluster:
+- The controller implements exponential backoff with jitter to prevent API server flooding during failure conditions
+- Concurrent operations are managed via a configurable worker pool
+- Thread-safe mechanisms are used to handle status updates and prevent race conditions
 
-```yaml
-apiVersion: dr-syncer.io/v1alpha1
-kind: RemoteCluster
-metadata:
-  name: source-cluster
-  namespace: dr-syncer
-spec:
-  kubeconfigSecretRef:
-    name: source-cluster-kubeconfig
-    namespace: dr-syncer
-```
+### Build and Deploy
 
-2. Create a Replication resource to define synchronization:
+Build the container:
 
-```yaml
-apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
-metadata:
-  name: app-replication
-  namespace: dr-syncer
-spec:
-  replicationMode: Scheduled  # Scheduled, Continuous, or Manual
-  sourceCluster: source-cluster
-  destinationCluster: destination-cluster
-  sourceNamespace: app-namespace
-  destinationNamespace: app-namespace-dr
-  schedule: "*/15 * * * *"  # Every 15 minutes (for Scheduled mode)
-  scaleToZero: true
-  resourceTypes:
-    - configmaps
-    - secrets
-    - deployments
-    - services
-```
-
-### Replication Modes
-
-#### Scheduled Mode
-Traditional cron-based scheduling for periodic synchronization:
-
-```yaml
-spec:
-  replicationMode: Scheduled
-  schedule: "*/15 * * * *"  # Required for Scheduled mode
-```
-
-#### Continuous Mode
-Real-time replication using resource watchers with background sync:
-
-```yaml
-spec:
-  replicationMode: Continuous
-  continuous:
-    watchResources: true
-    backgroundSyncInterval: "1h"  # Optional background full sync
-```
-
-#### Manual Mode
-On-demand synchronization triggered via CRD updates:
-
-```yaml
-spec:
-  replicationMode: Manual
-```
-
-To trigger a manual sync, add the annotation:
 ```bash
-kubectl annotate replication <name> dr-syncer.io/trigger-sync="true" -n dr-syncer
+make docker-build
 ```
 
-## Configuration
+Deploy the controller:
 
-### Helm Values
+```bash
+make deploy
+```
 
-Key configuration options in `values.yaml`:
+## Troubleshooting
 
-```yaml
-controller:
-  # Watch configuration for continuous mode
-  watch:
-    bufferSize: 1024
-    maxConcurrentReconciles: 5
-    backgroundSyncInterval: "1h"
+### Common Issues
 
-  # Default replication mode configuration
-  replication:
-    defaultMode: "Scheduled"
-    defaultSchedule: "*/5 * * * *"
-    defaultScaleToZero: true
-    defaultResourceTypes:
-      - configmaps
-      - secrets
-      - deployments
-      - services
-      - ingresses
-      - persistentvolumeclaims
+**Log Spamming**: 
+If the remote cluster API calls seem excessive, check the logs for rapid cycling between states. The controller implements exponential backoff to reduce API load during failures.
+
+**Authentication Errors**:
+When running locally, ensure you're using the proper kubeconfig with the necessary permissions:
+```
+./run-local.sh /path/to/controller/kubeconfig
 ```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on contributing to DR-Syncer.
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the terms of the [LICENSE](LICENSE) file.

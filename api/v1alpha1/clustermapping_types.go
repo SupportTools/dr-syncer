@@ -116,6 +116,15 @@ type ClusterMappingStatus struct {
 	// Conditions represent the latest available observations of the mapping's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// LastAttemptTime is when the last reconciliation attempt was made
+	// +optional
+	LastAttemptTime *metav1.Time `json:"lastAttemptTime,omitempty"`
+
+	// ConsecutiveFailures tracks the number of consecutive reconciliation failures
+	// +optional
+	// +kubebuilder:default=0
+	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -198,6 +207,12 @@ func (c *ClusterMapping) DeepCopyInto(out *ClusterMapping) {
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
+	}
+	// Deep copy new backoff-related fields
+	if c.Status.LastAttemptTime != nil {
+		in, out := &c.Status.LastAttemptTime, &out.Status.LastAttemptTime
+		*out = new(metav1.Time)
+		**out = **in
 	}
 }
 

@@ -227,6 +227,16 @@ spec:
                 - totalSourceAgents
                 - totalTargetAgents
                 type: object
+              consecutiveFailures:
+                default: 0
+                description: ConsecutiveFailures tracks the number of consecutive
+                  reconciliation failures
+                type: integer
+              lastAttemptTime:
+                description: LastAttemptTime is when the last reconciliation attempt
+                  was made
+                format: date-time
+                type: string
               lastVerified:
                 description: LastVerified is when connectivity was last verified
                 format: date-time

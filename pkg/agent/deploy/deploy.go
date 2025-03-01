@@ -265,7 +265,7 @@ func (d *Deployer) createOrUpdateDaemonSet(ctx context.Context, rc *drv1alpha1.R
 	}
 
 	// Determine secret name for SSH keys
-	secretName := fmt.Sprintf("%s-keys", agentName)
+	secretName := "pvc-syncer-agent-keys"
 	if rc.Spec.PVCSync.SSH != nil && rc.Spec.PVCSync.SSH.KeySecretRef != nil {
 		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
 	}

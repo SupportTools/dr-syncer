@@ -11,6 +11,12 @@
 - [x] Metrics server integration
 - [x] Controller-runtime logging integration with logrus
 
+### Testing Infrastructure
+- [x] Test case standardization
+- [x] Test environment setup automation
+- [x] Kubeconfig secret management
+- [x] Integration with controller's SSH key management system
+
 ### Resource Management
 - [x] RemoteCluster CRD implementation and validation
 - [x] Replication CRD implementation and validation
@@ -225,7 +231,7 @@
 ## Known Issues
 
 ### Critical
-- None currently identified
+- SSH Key Management Issue: Controller fails to create separate SSH key secrets for each RemoteCluster when they use the same secret name. Fixed by updating RemoteCluster resources to use unique secret names for each cluster.
 
 ### Resolved
 - [x] Controller-runtime logging panic - Fixed by implementing LogrusLogAdapter to properly integrate logrus with controller-runtime's logging system

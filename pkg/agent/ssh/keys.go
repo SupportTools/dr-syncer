@@ -48,22 +48,32 @@ func NewKeyManager(client client.Client) *KeyManager {
 
 // EnsureKeys ensures SSH keys exist for the remote cluster and returns the secret
 func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluster) (*corev1.Secret, error) {
-	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil || rc.Spec.PVCSync.SSH.KeySecretRef == nil {
+	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil {
 		return nil, fmt.Errorf("PVCSync SSH configuration not found")
+	}
+
+	// Use a default secret name if keySecretRef is not specified
+	secretName := "pvc-syncer-agent-keys"
+	secretNamespace := "dr-syncer"
+	
+	// If keySecretRef is specified, use those values
+	if rc.Spec.PVCSync.SSH.KeySecretRef != nil {
+		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
+		secretNamespace = rc.Spec.PVCSync.SSH.KeySecretRef.Namespace
 	}
 
 	// Check if secret already exists
 	existingSecret := &corev1.Secret{}
 	err := k.client.Get(ctx, client.ObjectKey{
-		Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-		Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
+		Name:      secretName,
+		Namespace: secretNamespace,
 	}, existingSecret)
 
 	// If secret exists, return it
 	if err == nil {
 		log.Infof("SSH key secret %s/%s already exists for cluster %s",
-			rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
-			rc.Spec.PVCSync.SSH.KeySecretRef.Name,
+			secretNamespace,
+			secretName,
 			rc.Name)
 		return existingSecret, nil
 	}
@@ -86,9 +96,12 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	}
 
 	// Create secret data with both client and host keys
+	// Store keys under both naming conventions for compatibility
 	secretData := map[string][]byte{
 		privateKeyKey:  privateKey,
+		"id_rsa":       privateKey,
 		publicKeyKey:   publicKey,
+		"id_rsa.pub":   publicKey,
 		authorizedKeys: publicKey,
 	}
 
@@ -100,8 +113,8 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	// Create secret in controller cluster
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-			Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
+			Name:      secretName,
+			Namespace: secretNamespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       "pvc-syncer-agent",
 				"app.kubernetes.io/part-of":    "dr-syncer",
@@ -114,8 +127,8 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	}
 
 	log.Infof("Creating SSH key secret %s/%s for cluster %s with host keys",
-		rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
-		rc.Spec.PVCSync.SSH.KeySecretRef.Name,
+		secretNamespace,
+		secretName,
 		rc.Name)
 
 	err = k.client.Create(ctx, secret)
@@ -126,8 +139,8 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	// Get the created secret to ensure we have the latest version
 	createdSecret := &corev1.Secret{}
 	err = k.client.Get(ctx, client.ObjectKey{
-		Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-		Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
+		Name:      secretName,
+		Namespace: secretNamespace,
 	}, createdSecret)
 
 	if err != nil {
@@ -210,18 +223,50 @@ func (k *KeyManager) generateHostKeys() (map[string][]byte, error) {
 
 // DeleteKeys deletes SSH keys for the remote cluster
 func (k *KeyManager) DeleteKeys(ctx context.Context, rc *drv1alpha1.RemoteCluster) error {
-	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil || rc.Spec.PVCSync.SSH.KeySecretRef == nil {
+	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil {
 		return nil // Nothing to delete
 	}
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-			Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
-		},
+	// Use a default secret name if keySecretRef is not specified
+	secretName := "pvc-syncer-agent-keys"
+	secretNamespace := "dr-syncer"
+	
+	// If keySecretRef is specified, use those values
+	if rc.Spec.PVCSync.SSH.KeySecretRef != nil {
+		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
+		secretNamespace = rc.Spec.PVCSync.SSH.KeySecretRef.Namespace
 	}
 
-	return k.client.Delete(ctx, secret)
+	// Delete the main secret with private keys
+	mainSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: secretNamespace,
+		},
+	}
+	
+	mainErr := k.client.Delete(ctx, mainSecret)
+	if mainErr != nil && client.IgnoreNotFound(mainErr) != nil {
+		log.Errorf("Failed to delete main SSH key secret %s/%s: %v", secretNamespace, secretName, mainErr)
+		return fmt.Errorf("failed to delete main SSH key secret: %v", mainErr)
+	}
+	
+	// Also delete the controller cluster public key secret
+	controllerSecretName := "dr-syncer-sshkey-" + rc.Name
+	controllerSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      controllerSecretName,
+			Namespace: "dr-syncer",
+		},
+	}
+	
+	controllerErr := k.client.Delete(ctx, controllerSecret)
+	if controllerErr != nil && client.IgnoreNotFound(controllerErr) != nil {
+		log.Errorf("Failed to delete controller SSH key secret %s/%s: %v", "dr-syncer", controllerSecretName, controllerErr)
+		// Don't return an error if we can't delete the controller key secret, as it might not exist
+	}
+	
+	return nil
 }
 
 // RotateKeys rotates SSH keys for the remote cluster
@@ -242,15 +287,19 @@ func (k *KeyManager) RotateKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 
 // PushKeysToRemoteCluster pushes the SSH key secret to the remote cluster
 func (k *KeyManager) PushKeysToRemoteCluster(ctx context.Context, rc *drv1alpha1.RemoteCluster, remoteClient client.Client, secret *corev1.Secret) error {
-	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil || rc.Spec.PVCSync.SSH.KeySecretRef == nil {
+	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil {
 		return fmt.Errorf("PVCSync SSH configuration not found")
 	}
+
+	// Use the secret name and namespace from the provided secret
+	secretName := secret.Name
+	secretNamespace := secret.Namespace
 
 	// Check if secret already exists in remote cluster
 	remoteSecret := &corev1.Secret{}
 	err := remoteClient.Get(ctx, client.ObjectKey{
-		Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-		Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
+		Name:      secretName,
+		Namespace: secretNamespace,
 	}, remoteSecret)
 
 	// Create a new secret for the remote cluster
@@ -288,71 +337,141 @@ func (k *KeyManager) PushKeysToRemoteCluster(ctx context.Context, rc *drv1alpha1
 
 // EnsureKeysInControllerCluster ensures SSH public keys exist in the controller cluster
 func (k *KeyManager) EnsureKeysInControllerCluster(ctx context.Context, rc *drv1alpha1.RemoteCluster, secret *corev1.Secret) error {
-	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil || rc.Spec.PVCSync.SSH.KeySecretRef == nil {
+	if rc.Spec.PVCSync == nil || rc.Spec.PVCSync.SSH == nil {
 		return fmt.Errorf("PVCSync SSH configuration not found")
 	}
+
+	// Use a standardized naming convention for the SSH key secrets in the controller cluster
+	secretName := "dr-syncer-sshkey-" + rc.Name
+	secretNamespace := "dr-syncer" // Use the dr-syncer namespace for all controller cluster secrets
+
+	log.Infof("EnsureKeysInControllerCluster: Checking for public key secret %s/%s in controller cluster for remote cluster %s",
+		secretNamespace, secretName, rc.Name)
 
 	// Check if secret already exists in controller cluster
 	controllerSecret := &corev1.Secret{}
 	err := k.client.Get(ctx, client.ObjectKey{
-		Name:      rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-		Namespace: rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
+		Name:      secretName,
+		Namespace: secretNamespace,
 	}, controllerSecret)
 
 	// Create a new data map with only public keys
 	publicKeyData := map[string][]byte{}
 
-	// Add public keys only
+	// Log the keys found in the secret
+	log.Infof("EnsureKeysInControllerCluster: Secret %s/%s for remote cluster %s has keys: %v",
+		secretNamespace, secretName, rc.Name, getKeysFromSecret(secret))
+
+	// Add public keys only - check for both naming conventions
 	if publicKey, ok := secret.Data[publicKeyKey]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", publicKeyKey)
 		publicKeyData[publicKeyKey] = publicKey
+	} else if publicKey, ok := secret.Data["id_rsa.pub"]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found id_rsa.pub key in secret")
+		// If using the alternative naming convention, store under both names for compatibility
+		publicKeyData[publicKeyKey] = publicKey
+		publicKeyData["id_rsa.pub"] = publicKey
+	} else {
+		log.Warnf("EnsureKeysInControllerCluster: No public key found in secret %s/%s for remote cluster %s",
+			secretNamespace, secretName, rc.Name)
 	}
+	
 	if authorizedKey, ok := secret.Data[authorizedKeys]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", authorizedKeys)
 		publicKeyData[authorizedKeys] = authorizedKey
 	}
 	if hostRsaKeyPubData, ok := secret.Data[hostRsaKeyPub]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", hostRsaKeyPub)
 		publicKeyData[hostRsaKeyPub] = hostRsaKeyPubData
 	}
 	if hostEcdsaKeyPubData, ok := secret.Data[hostEcdsaKeyPub]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", hostEcdsaKeyPub)
 		publicKeyData[hostEcdsaKeyPub] = hostEcdsaKeyPubData
 	}
 	if hostEd25519KeyPubData, ok := secret.Data[hostEd25519KeyPub]; ok {
+		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", hostEd25519KeyPub)
 		publicKeyData[hostEd25519KeyPub] = hostEd25519KeyPubData
 	}
 
+	// Log the public keys we're going to store
+	log.Infof("EnsureKeysInControllerCluster: Will store public keys in controller cluster: %v",
+		getMapKeys(publicKeyData))
+
 	// If secret exists, update it
 	if err == nil {
-		log.Infof("Updating SSH public key secret %s/%s in controller cluster for remote cluster %s",
-			rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
-			rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-			rc.Name)
+		log.Infof("EnsureKeysInControllerCluster: Updating SSH public key secret %s/%s in controller cluster for remote cluster %s",
+			secretNamespace, secretName, rc.Name)
 
 		// Update the existing secret with only public keys
 		controllerSecret.Data = publicKeyData
 		controllerSecret.Labels = secret.Labels
-		return k.client.Update(ctx, controllerSecret)
+		
+		updateErr := k.client.Update(ctx, controllerSecret)
+		if updateErr != nil {
+			log.Errorf("EnsureKeysInControllerCluster: Failed to update secret %s/%s in controller cluster: %v",
+				secretNamespace, secretName, updateErr)
+			return fmt.Errorf("failed to update secret in controller cluster: %v", updateErr)
+		}
+		
+		log.Infof("EnsureKeysInControllerCluster: Successfully updated secret %s/%s in controller cluster",
+			secretNamespace, secretName)
+		return nil
 	}
 
 	// If error is not "not found", return the error
 	if client.IgnoreNotFound(err) != nil {
+		log.Errorf("EnsureKeysInControllerCluster: Error getting secret %s/%s from controller cluster: %v",
+			secretNamespace, secretName, err)
 		return fmt.Errorf("failed to check if secret exists in controller cluster: %v", err)
 	}
 
 	// Secret doesn't exist, create it
-	log.Infof("Creating SSH public key secret %s/%s in controller cluster for remote cluster %s",
-		rc.Spec.PVCSync.SSH.KeySecretRef.Namespace,
-		rc.Spec.PVCSync.SSH.KeySecretRef.Name,
-		rc.Name)
+	log.Infof("EnsureKeysInControllerCluster: Creating SSH public key secret %s/%s in controller cluster for remote cluster %s",
+		secretNamespace, secretName, rc.Name)
 
 	// Create a new secret for the controller cluster with only public keys
 	newSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      secret.Name,
-			Namespace: secret.Namespace,
-			Labels:    secret.Labels,
+			Name:      secretName,
+			Namespace: secretNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "pvc-syncer-agent",
+				"app.kubernetes.io/part-of":    "dr-syncer",
+				"app.kubernetes.io/managed-by": "dr-syncer-controller",
+				"dr-syncer.io/remote-cluster":  rc.Name,
+				"dr-syncer.io/public-keys":     "true", // Add a label to identify this as a public key secret
+			},
 		},
-		Type: secret.Type,
+		Type: corev1.SecretTypeOpaque,
 		Data: publicKeyData,
 	}
 
-	return k.client.Create(ctx, newSecret)
+	createErr := k.client.Create(ctx, newSecret)
+	if createErr != nil {
+		log.Errorf("EnsureKeysInControllerCluster: Failed to create secret %s/%s in controller cluster: %v",
+			secretNamespace, secretName, createErr)
+		return fmt.Errorf("failed to create secret in controller cluster: %v", createErr)
+	}
+	
+	log.Infof("EnsureKeysInControllerCluster: Successfully created secret %s/%s in controller cluster",
+		secretNamespace, secretName)
+	return nil
+}
+
+// Helper function to get keys from a secret for logging
+func getKeysFromSecret(secret *corev1.Secret) []string {
+	keys := []string{}
+	for k := range secret.Data {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// Helper function to get keys from a map for logging
+func getMapKeys(m map[string][]byte) []string {
+	keys := []string{}
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

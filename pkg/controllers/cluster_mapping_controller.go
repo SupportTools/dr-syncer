@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,12 +18,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	drsyncerio "github.com/supporttools/dr-syncer/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/util"
 )
+
+// log is defined in logger.go
 
 // ClusterMappingReconciler reconciles a ClusterMapping object
 type ClusterMappingReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// Concurrency control
+	workerPool    *util.WorkerPool
+	clusterMutexes *sync.Map // map[string]*sync.Mutex for cluster-level locking
 }
 
 // +kubebuilder:rbac:groups=dr-syncer.io,resources=clustermappings,verbs=get;list;watch;create;update;patch;delete
@@ -51,14 +59,43 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Errorf("Failed to get ClusterMapping: %v", err)
 		return ctrl.Result{}, err
 	}
+	
+	// Check if we should apply backoff
+	if clusterMapping.Status.ConsecutiveFailures > 0 && clusterMapping.Status.LastAttemptTime != nil {
+		// Calculate backoff using Kubernetes-style exponential backoff
+		backoff := util.CalculateBackoff(clusterMapping.Status.ConsecutiveFailures)
+		elapsed := time.Since(clusterMapping.Status.LastAttemptTime.Time)
+		
+		if elapsed < backoff {
+			// Too soon to retry, requeue after remaining backoff
+			log.Info(fmt.Sprintf("Applying backoff for %s/%s: %v remaining (failure count: %d)", 
+				req.Namespace, req.Name, backoff-elapsed, clusterMapping.Status.ConsecutiveFailures))
+			return ctrl.Result{RequeueAfter: backoff - elapsed}, nil
+		}
+	}
+	
+	// Update last attempt time as we proceed with reconciliation
+	err = r.updateLastAttemptTimeWithRetry(ctx, req.NamespacedName)
+	if err != nil {
+		log.Errorf("Failed to update LastAttemptTime: %v", err)
+		// Continue anyway, this isn't critical
+	}
 
 	// Initialize status if it's a new resource
 	if clusterMapping.Status.Phase == "" {
-		clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhasePending
-		if err := r.Status().Update(ctx, clusterMapping); err != nil {
-			log.Errorf("Failed to update ClusterMapping status: %v", err)
+		// Update status with retry
+		namespacedName := req.NamespacedName
+		err = r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+			cm.Status.Phase = drsyncerio.ClusterMappingPhasePending
+			cm.Status.Message = "Initializing ClusterMapping"
+			return nil
+		})
+
+		if err != nil {
+			log.Errorf("Failed to initialize ClusterMapping status: %v", err)
 			return ctrl.Result{}, err
 		}
+		
 		// Requeue to continue processing with the updated status
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -75,11 +112,24 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.handleFailedPhase(ctx, clusterMapping)
 	default:
 		log.Info(fmt.Sprintf("Unknown phase %s, setting to Pending", clusterMapping.Status.Phase))
-		clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhasePending
-		if err := r.Status().Update(ctx, clusterMapping); err != nil {
+		
+		// Update status with retry
+		namespacedName := types.NamespacedName{
+			Name:      clusterMapping.Name,
+			Namespace: clusterMapping.Namespace,
+		}
+
+		err = r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+			cm.Status.Phase = drsyncerio.ClusterMappingPhasePending
+			cm.Status.Message = "Resetting to Pending phase due to unknown phase"
+			return nil
+		})
+
+		if err != nil {
 			log.Errorf("Failed to update ClusterMapping status: %v", err)
 			return ctrl.Result{}, err
 		}
+		
 		return ctrl.Result{Requeue: true}, nil
 	}
 }
@@ -99,10 +149,19 @@ func (r *ClusterMappingReconciler) handlePendingPhase(ctx context.Context, clust
 	log.Info(fmt.Sprintf("Clusters validated successfully: source=%s, target=%s",
 		sourceCluster.Name, targetCluster.Name))
 
-	// Update status to Connecting
-	clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseConnecting
-	clusterMapping.Status.Message = "Starting key distribution and connectivity verification"
-	if err := r.Status().Update(ctx, clusterMapping); err != nil {
+	// Update status with retry
+	namespacedName := types.NamespacedName{
+		Name:      clusterMapping.Name,
+		Namespace: clusterMapping.Namespace,
+	}
+
+	err = r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+		cm.Status.Phase = drsyncerio.ClusterMappingPhaseConnecting
+		cm.Status.Message = "Starting key distribution and connectivity verification"
+		return nil
+	})
+
+	if err != nil {
 		log.Errorf("Failed to update ClusterMapping status: %v", err)
 		return ctrl.Result{}, err
 	}
@@ -136,47 +195,58 @@ func (r *ClusterMappingReconciler) handleConnectingPhase(ctx context.Context, cl
 		return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to distribute SSH keys: %v", err))
 	}
 
-	// Verify connectivity
+	// Verify connectivity and update status
+	var connectionStatus *drsyncerio.ConnectionStatus
+	var phase drsyncerio.ClusterMappingPhase
+	var message string
+	var requeueAfter time.Duration
+
 	if clusterMapping.Spec.VerifyConnectivity == nil || *clusterMapping.Spec.VerifyConnectivity {
-		connectionStatus, err := r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient)
+		connectionStatus, err = r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient)
 		if err != nil {
 			log.Errorf("Failed to verify connectivity: %v", err)
 			return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to verify connectivity: %v", err))
 		}
 
-		// Update status with connection results
-		clusterMapping.Status.ConnectionStatus = connectionStatus
-		clusterMapping.Status.LastVerified = &metav1.Time{Time: time.Now()}
-
 		// Check if all connections are successful
 		if connectionStatus.ConnectedAgents == connectionStatus.TotalTargetAgents && connectionStatus.TotalTargetAgents > 0 {
-			clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseConnected
-			clusterMapping.Status.Message = "All agents connected successfully"
+			phase = drsyncerio.ClusterMappingPhaseConnected
+			message = "All agents connected successfully"
+			requeueAfter = time.Hour
 		} else {
-			clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseFailed
-			clusterMapping.Status.Message = fmt.Sprintf("Only %d/%d agents connected successfully", connectionStatus.ConnectedAgents, connectionStatus.TotalTargetAgents)
+			phase = drsyncerio.ClusterMappingPhaseFailed
+			message = fmt.Sprintf("Only %d/%d agents connected successfully", connectionStatus.ConnectedAgents, connectionStatus.TotalTargetAgents)
+			requeueAfter = 5 * time.Minute
 		}
 	} else {
 		// Skip connectivity verification if disabled
-		clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseConnected
-		clusterMapping.Status.Message = "SSH key distribution completed (connectivity verification disabled)"
-		clusterMapping.Status.LastVerified = &metav1.Time{Time: time.Now()}
+		phase = drsyncerio.ClusterMappingPhaseConnected
+		message = "SSH key distribution completed (connectivity verification disabled)"
+		requeueAfter = time.Hour
 	}
 
-	// Update status
-	if err := r.Status().Update(ctx, clusterMapping); err != nil {
+	// Update status with retry
+	namespacedName := types.NamespacedName{
+		Name:      clusterMapping.Name,
+		Namespace: clusterMapping.Namespace,
+	}
+
+	err = r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+		if connectionStatus != nil {
+			cm.Status.ConnectionStatus = connectionStatus
+		}
+		cm.Status.LastVerified = &metav1.Time{Time: time.Now()}
+		cm.Status.Phase = phase
+		cm.Status.Message = message
+		return nil
+	})
+
+	if err != nil {
 		log.Errorf("Failed to update ClusterMapping status: %v", err)
 		return ctrl.Result{}, err
 	}
 
-	// Requeue based on the current phase
-	if clusterMapping.Status.Phase == drsyncerio.ClusterMappingPhaseConnected {
-		// Requeue after 1 hour for periodic verification
-		return ctrl.Result{RequeueAfter: time.Hour}, nil
-	} else {
-		// Requeue after 5 minutes for retry
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
-	}
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // handleConnectedPhase handles the Connected phase of the ClusterMapping
@@ -211,21 +281,33 @@ func (r *ClusterMappingReconciler) handleConnectedPhase(ctx context.Context, clu
 				return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to verify connectivity: %v", err))
 			}
 
-			// Update status with connection results
-			clusterMapping.Status.ConnectionStatus = connectionStatus
-			clusterMapping.Status.LastVerified = &metav1.Time{Time: time.Now()}
+			// Determine phase and message based on connection status
+			var phase drsyncerio.ClusterMappingPhase
+			var message string
 
-			// Check if all connections are successful
 			if connectionStatus.ConnectedAgents == connectionStatus.TotalTargetAgents && connectionStatus.TotalTargetAgents > 0 {
-				clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseConnected
-				clusterMapping.Status.Message = "All agents connected successfully"
+				phase = drsyncerio.ClusterMappingPhaseConnected
+				message = "All agents connected successfully"
 			} else {
-				clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseFailed
-				clusterMapping.Status.Message = fmt.Sprintf("Only %d/%d agents connected successfully", connectionStatus.ConnectedAgents, connectionStatus.TotalTargetAgents)
+				phase = drsyncerio.ClusterMappingPhaseFailed
+				message = fmt.Sprintf("Only %d/%d agents connected successfully", connectionStatus.ConnectedAgents, connectionStatus.TotalTargetAgents)
 			}
 
-			// Update status
-			if err := r.Status().Update(ctx, clusterMapping); err != nil {
+			// Update status with retry
+			namespacedName := types.NamespacedName{
+				Name:      clusterMapping.Name,
+				Namespace: clusterMapping.Namespace,
+			}
+
+			err = r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+				cm.Status.ConnectionStatus = connectionStatus
+				cm.Status.LastVerified = &metav1.Time{Time: time.Now()}
+				cm.Status.Phase = phase
+				cm.Status.Message = message
+				return nil
+			})
+
+			if err != nil {
 				log.Errorf("Failed to update ClusterMapping status: %v", err)
 				return ctrl.Result{}, err
 			}
@@ -240,10 +322,19 @@ func (r *ClusterMappingReconciler) handleConnectedPhase(ctx context.Context, clu
 func (r *ClusterMappingReconciler) handleFailedPhase(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping) (ctrl.Result, error) {
 	log.Info("Handling Failed phase")
 
-	// Retry after 5 minutes
-	clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhasePending
-	clusterMapping.Status.Message = "Retrying after failure"
-	if err := r.Status().Update(ctx, clusterMapping); err != nil {
+	// Update status with retry
+	namespacedName := types.NamespacedName{
+		Name:      clusterMapping.Name,
+		Namespace: clusterMapping.Namespace,
+	}
+
+	err := r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+		cm.Status.Phase = drsyncerio.ClusterMappingPhasePending
+		cm.Status.Message = "Retrying after failure"
+		return nil
+	})
+
+	if err != nil {
 		log.Errorf("Failed to update ClusterMapping status: %v", err)
 		return ctrl.Result{}, err
 	}
@@ -253,12 +344,8 @@ func (r *ClusterMappingReconciler) handleFailedPhase(ctx context.Context, cluste
 
 // setFailedStatus sets the status of the ClusterMapping to Failed with the given message
 func (r *ClusterMappingReconciler) setFailedStatus(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, message string) (ctrl.Result, error) {
-	clusterMapping.Status.Phase = drsyncerio.ClusterMappingPhaseFailed
-	clusterMapping.Status.Message = message
-	if err := r.Status().Update(ctx, clusterMapping); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Use the retry mechanism to handle conflicts
+	return r.setFailedStatusWithRetry(ctx, clusterMapping, message)
 }
 
 // validateClusters validates that the source and target clusters exist
@@ -512,47 +599,73 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 	verifyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Test connectivity from each target agent to each source agent
+	// Thread-safe structures for collecting results
+	var mu sync.Mutex
+	connectedTargets := make(map[string]bool)
+	var connectionDetails []drsyncerio.AgentConnectionDetail
+
+	// Create tasks for concurrent execution
+	var tasks []func()
+	
+	// Create a task for each target → source pod combination
 	for _, targetPod := range targetPods {
 		targetNode := targetPod.Spec.NodeName
-
-		// Track if this target pod has at least one successful connection
-		hasSuccessfulConnection := false
-
+		tpod := targetPod // Capture for closure
+		
 		for _, sourcePod := range sourcePods {
 			sourceNode := sourcePod.Spec.NodeName
 			sourcePodIP := sourcePod.Status.PodIP
-
-			// Create connection detail
-			connectionDetail := drsyncerio.AgentConnectionDetail{
-				SourceNode: sourceNode,
-				TargetNode: targetNode,
-				Connected:  false,
-			}
-
-			// Test SSH connection
-			connected, errMsg, err := r.testSSHConnection(verifyCtx, targetClient, targetPod, sourcePodIP)
-			if err != nil {
-				log.Errorf("Failed to test SSH connection from %s to %s: %v",
-					targetPod.Name, sourcePod.Name, err)
-				connectionDetail.Error = fmt.Sprintf("Error testing connection: %v", err)
-			} else if !connected {
-				connectionDetail.Error = fmt.Sprintf("Connection failed: %s", errMsg)
-			} else {
-				connectionDetail.Connected = true
-				hasSuccessfulConnection = true
-			}
-
-			// Add connection detail to status
-			connectionStatus.ConnectionDetails = append(connectionStatus.ConnectionDetails, connectionDetail)
-		}
-
-		// Increment connected agents count if this target pod has at least one successful connection
-		if hasSuccessfulConnection {
-			connectionStatus.ConnectedAgents++
+			
+			// Create a task for this target+source combination
+			tasks = append(tasks, func() {
+				// Create connection detail
+				connectionDetail := drsyncerio.AgentConnectionDetail{
+					SourceNode: sourceNode,
+					TargetNode: targetNode,
+					Connected:  false,
+				}
+				
+				// Test SSH connection
+				connected, errMsg, err := r.testSSHConnection(verifyCtx, targetClient, tpod, sourcePodIP)
+				
+				if err != nil {
+					log.Errorf("Failed to test SSH connection from %s to %s: %v",
+						tpod.Name, sourcePod.Name, err)
+					connectionDetail.Error = fmt.Sprintf("Error testing connection: %v", err)
+				} else if !connected {
+					connectionDetail.Error = fmt.Sprintf("Connection failed: %s", errMsg)
+				} else {
+					connectionDetail.Connected = true
+					
+					// Safely record this target pod has a successful connection
+					mu.Lock()
+					connectedTargets[tpod.Name] = true
+					mu.Unlock()
+				}
+				
+				// Add connection detail to results
+				mu.Lock()
+				connectionDetails = append(connectionDetails, connectionDetail)
+				mu.Unlock()
+			})
 		}
 	}
-
+	
+	// Execute all tasks concurrently with the worker pool
+	if r.workerPool != nil {
+		// Use the worker pool if initialized
+		r.workerPool.SubmitAndWait(tasks)
+	} else {
+		// Fallback to executing tasks sequentially if no worker pool
+		for _, task := range tasks {
+			task()
+		}
+	}
+	
+	// Update the connection status with collected results
+	connectionStatus.ConnectionDetails = connectionDetails
+	connectionStatus.ConnectedAgents = int32(len(connectedTargets))
+	
 	return connectionStatus, nil
 }
 
@@ -668,7 +781,19 @@ func (r *ClusterMappingReconciler) execCommandInPod(ctx context.Context, client 
 
 // SetupWithManager sets up the controller with the Manager
 func (r *ClusterMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Initialize worker pool with configurable concurrency (default 10 workers)
+	r.workerPool = util.NewWorkerPool(10)
+	
+	// Initialize cluster mutexes map for per-cluster locking
+	r.clusterMutexes = &sync.Map{}
+	
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&drsyncerio.ClusterMapping{}).
 		Complete(r)
+}
+
+// getClusterMutex gets or creates a mutex for a specific cluster
+func (r *ClusterMappingReconciler) getClusterMutex(clusterName string) *sync.Mutex {
+	actual, _ := r.clusterMutexes.LoadOrStore(clusterName, &sync.Mutex{})
+	return actual.(*sync.Mutex)
 }

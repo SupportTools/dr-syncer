@@ -422,6 +422,7 @@
    - Update test documentation
    - Implement consistent error handling
    - Complete PVC sync agent security enhancement tasks
+   - Improve test environment setup automation
 
 2. Medium Term
    - Add advanced test scenarios
@@ -439,3 +440,27 @@
      * Dynamic namespace discovery with label selectors
      * Destination namespace suffix pattern
      * Test case for label-based replication (20_label_based_replication)
+
+## Recent Improvements
+
+### Test Environment Setup Automation
+- Status: Completed
+- Files Created:
+  * test/setup-test-clusters.sh: Script to automate test cluster setup
+  * test/README.md: Documentation for test environment setup and usage
+- Key Features:
+  * Automated kubeconfig secret creation from local kubeconfig files
+  * RemoteCluster and ClusterMapping resource application
+  * Environment verification and validation
+  * Idempotent execution (can be run multiple times)
+- Benefits:
+  * Simplified test environment setup
+  * Consistent configuration across test runs
+  * Reduced manual steps for developers
+  * Improved documentation of test prerequisites
+- Implementation Notes:
+  * SSH key generation is handled by the controller itself
+  * Each RemoteCluster must have a unique SSH key secret name
+  * The controller creates and manages SSH key secrets for each RemoteCluster
+  * The controller pushes SSH keys to remote clusters
+  * The controller verifies SSH connectivity between clusters
