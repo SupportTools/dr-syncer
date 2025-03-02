@@ -42,6 +42,12 @@ type ClusterMappingSSHKeySecretRef struct {
 
 // ClusterMappingSpec defines the desired state of ClusterMapping
 type ClusterMappingSpec struct {
+	// Paused defines whether connectivity verification is paused
+	// When set to true, all connectivity verification and syncing operations will be skipped
+	// +optional
+	// +kubebuilder:default=false
+	Paused *bool `json:"paused,omitempty"`
+
 	// SourceCluster is the name of the source cluster
 	SourceCluster string `json:"sourceCluster"`
 

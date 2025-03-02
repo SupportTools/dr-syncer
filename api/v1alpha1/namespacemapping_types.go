@@ -23,6 +23,12 @@ type NamespaceMapping struct {
 }
 
 type NamespaceMappingSpec struct {
+	// Paused defines whether replication is paused
+	// When set to true, all replication operations will be skipped
+	// +optional
+	// +kubebuilder:default=false
+	Paused *bool `json:"paused,omitempty"`
+
 	// ReplicationMode defines how replication should be performed
 	// +kubebuilder:validation:Enum=Scheduled;Continuous;Manual
 	// +kubebuilder:default=Scheduled

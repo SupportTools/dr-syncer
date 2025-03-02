@@ -62,6 +62,12 @@ func (r *NamespaceMappingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return r.handleDeletion(ctx, &namespacemapping)
 	}
 
+	// Check if the NamespaceMapping is paused
+	if namespacemapping.Spec.Paused != nil && *namespacemapping.Spec.Paused {
+		log.Info(fmt.Sprintf("skipping reconciliation for paused NamespaceMapping %s/%s", namespacemapping.Namespace, namespacemapping.Name))
+		return ctrl.Result{}, nil
+	}
+
 	// Add finalizer if it doesn't exist
 	if !containsString(namespacemapping.Finalizers, NamespaceMappingFinalizerName) {
 		log.Info("adding finalizer")

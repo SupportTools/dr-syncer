@@ -74,6 +74,12 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 	
+	// Check if the ClusterMapping is paused
+	if clusterMapping.Spec.Paused != nil && *clusterMapping.Spec.Paused {
+		log.Info(fmt.Sprintf("skipping reconciliation for paused ClusterMapping %s/%s", clusterMapping.Namespace, clusterMapping.Name))
+		return ctrl.Result{}, nil
+	}
+
 	// Update last attempt time as we proceed with reconciliation
 	err = r.updateLastAttemptTimeWithRetry(ctx, req.NamespacedName)
 	if err != nil {
