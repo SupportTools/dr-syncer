@@ -276,7 +276,17 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 		findCmd,
 	}
 
-	stdout, stderr, err := executeCommandInPod(ctx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
+	// Put the PVCSyncer in the context for ExecuteCommandInPod
+	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Execute the command in agent pod with context that includes PVCSyncer
+	log.WithFields(logrus.Fields{
+		"agent_pod": agentPod.Name,
+		"namespace": agentPod.Namespace,
+		"source_config_host": p.SourceConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing command with source config context")
+	
+	stdout, stderr, err := executeCommandInPod(pvcSyncCtx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"agent_pod": agentPod.Name,
@@ -320,7 +330,17 @@ func (p *PVCSyncer) PushPublicKeyToAgent(ctx context.Context, agentPod *corev1.P
 		fmt.Sprintf("mkdir -p ~/.ssh && echo '%s %s' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys", publicKey, trackingInfo),
 	}
 
-	_, stderr, err := executeCommandInPod(ctx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
+	// Put the PVCSyncer in the context for ExecuteCommandInPod
+	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Execute the command with context that includes PVCSyncer
+	log.WithFields(logrus.Fields{
+		"agent_pod": agentPod.Name,
+		"namespace": agentPod.Namespace,
+		"source_config_host": p.SourceConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing command with source config context")
+	
+	_, stderr, err := executeCommandInPod(pvcSyncCtx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"stderr": stderr,
@@ -413,29 +433,86 @@ func executeCommandInPod(ctx context.Context, client kubernetes.Interface, names
 
 	// Get the config from context or use PVCSyncer configs
 	var config *rest.Config
+	
+	// First priority: explicit config in context
 	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
 		config = configFromCtx.(*rest.Config)
-	} else {
-		// Try to get config from PVCSyncer context
-		if syncerFromCtx := ctx.Value("pvcsync"); syncerFromCtx != nil {
-			syncer := syncerFromCtx.(*PVCSyncer)
-			
-			// Determine if this is the source or destination cluster
-			if strings.HasPrefix(namespace, syncer.SourceNamespace) {
-				config = syncer.SourceConfig
-			} else {
-				config = syncer.DestinationConfig
-			}
+		log.WithFields(logrus.Fields{
+			"host": config.Host,
+		}).Info("[DR-SYNC-INFO] Using explicit config from context")
+	} 
+	
+	// No explicit config provided - check for PVCSyncer in context
+	if config == nil && ctx.Value("pvcsync") != nil {
+		// Get config from PVCSyncer context
+		type ConfigProvider interface {
+			GetSourceConfig() *rest.Config
+			GetDestinationConfig() *rest.Config
+			GetSourceClient() kubernetes.Interface
+			GetDestinationClient() kubernetes.Interface
 		}
 		
-		// If still nil, create a default config
-		if config == nil {
-			var err error
-			config, err = rest.InClusterConfig()
-			if err != nil {
-				return "", "", fmt.Errorf("unable to get config for remote execution: %v", err)
+		if provider, ok := ctx.Value("pvcsync").(ConfigProvider); ok {
+			// Compare the client with source/destination clients to determine which to use
+			srcClient := provider.GetSourceClient()
+			destClient := provider.GetDestinationClient()
+			
+			// Compare client URLs to determine if we're using source or destination client
+			clientHost := client.CoreV1().RESTClient().Get().URL().Host
+			srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
+			destHost := destClient.CoreV1().RESTClient().Get().URL().Host
+			
+			if clientHost == srcHost {
+				config = provider.GetSourceConfig()
+				log.WithFields(logrus.Fields{
+					"host": config.Host,
+					"client_host": clientHost,
+				}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
+			} else if clientHost == destHost {
+				config = provider.GetDestinationConfig()
+				log.WithFields(logrus.Fields{
+					"host": config.Host,
+					"client_host": clientHost,
+				}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
+			} else {
+				// If no direct match, use simple namespace-based heuristic
+				usingNamespace := namespace
+				// Trim any pod-specific suffixes (for agent finding)
+				if strings.Contains(namespace, "/") {
+					parts := strings.Split(namespace, "/")
+					usingNamespace = parts[0]
+				}
+				
+				// Check if this is a source namespace
+				syncer, ok := ctx.Value("pvcsync").(*PVCSyncer)
+				if ok && syncer.SourceNamespace != "" && strings.HasPrefix(usingNamespace, syncer.SourceNamespace) {
+					config = provider.GetSourceConfig()
+					log.WithFields(logrus.Fields{
+						"host": config.Host,
+						"source_namespace": syncer.SourceNamespace,
+						"namespace": namespace,
+					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (namespace match)")
+				} else if ok && syncer.DestinationNamespace != "" {
+					config = provider.GetDestinationConfig()
+					log.WithFields(logrus.Fields{
+						"host": config.Host,
+						"dest_namespace": syncer.DestinationNamespace,
+						"namespace": namespace,
+					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (fallback)")
+				}
 			}
 		}
+	}
+	
+	// If no config is available, return an error
+	if config == nil {
+		clientHost := client.CoreV1().RESTClient().Get().URL().Host
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pod": podName,
+			"client_host": clientHost,
+		}).Error("[DR-SYNC-ERROR] No REST config found in context for client")
+		return "", "", fmt.Errorf("no REST config found in context for client %s", clientHost)
 	}
 
 	// Log the URL
@@ -532,8 +609,17 @@ func (p *PVCSyncer) AddPublicKeyToSourceAgent(ctx context.Context, publicKey, tr
 			publicKey, trackingInfo),
 	}
 
-	// Execute the command in the agent pod
-	stdout, stderr, err := executeCommandInPod(ctx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
+	// Put the PVCSyncer in the context for ExecuteCommandInPod
+	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Execute the command in agent pod with context that includes PVCSyncer
+	log.WithFields(logrus.Fields{
+		"agent_pod": agentPod.Name,
+		"namespace": agentPod.Namespace,
+		"source_config_host": p.SourceConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing command with source config context")
+	
+	stdout, stderr, err := executeCommandInPod(pvcSyncCtx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"stderr": stderr,

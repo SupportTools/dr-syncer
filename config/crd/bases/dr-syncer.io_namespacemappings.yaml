@@ -235,6 +235,12 @@ spec:
                 items:
                   type: string
                 type: array
+              paused:
+                default: false
+                description: |-
+                  Paused defines whether replication is paused
+                  When set to true, all replication operations will be skipped
+                type: boolean
               pvcConfig:
                 description: PVCConfig defines configuration for PVC replication
                 properties:

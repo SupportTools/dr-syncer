@@ -133,11 +133,21 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Execute command in rsync pod
 	cmd := []string{"sh", "-c", rsyncCmd}
 	
+	// Put the PVCSyncer in the context for ExecuteCommandInPod
+	pvcSyncCtx := context.WithValue(rsyncCtx, "pvcsync", p)
+	
 	// Execute with retry logic for transient failures
 	var stdout, stderr string
 	err = withRetry(ctx, 2, 10*time.Second, func() error {
 		var execErr error
-		stdout, stderr, execErr = rsyncpod.ExecuteCommandInPod(rsyncCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd)
+		log.WithFields(logrus.Fields{
+			"deployment": destDeployment.Name,
+			"namespace": destDeployment.Namespace,
+			"pod_name": destDeployment.PodName,
+			"dest_client_host": p.DestinationConfig.Host,
+		}).Info("[DR-SYNC-DETAIL] Executing rsync command with destination config")
+		
+		stdout, stderr, execErr = rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd)
 		
 		if execErr != nil {
 			// Check if the error is retryable
@@ -229,7 +239,15 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	// Verify the transfer by checking rsync exit code and log file
 	verifyCmd := []string{"sh", "-c", "if [ -f /var/log/rsync.log ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
-	verifyOut, _, err := rsyncpod.ExecuteCommandInPod(ctx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, verifyCmd)
+	
+	// Use the context with PVCSyncer for verification
+	pvcVerifyCtx := context.WithValue(ctx, "pvcsync", p)
+	log.WithFields(logrus.Fields{
+		"deployment": destDeployment.Name,
+		"namespace": destDeployment.Namespace,
+		"pod_name": destDeployment.PodName,
+	}).Info("[DR-SYNC-DETAIL] Verifying rsync result with destination config")
+	verifyOut, _, err := rsyncpod.ExecuteCommandInPod(pvcVerifyCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, verifyCmd)
 	if err != nil || !strings.Contains(verifyOut, "SUCCESS") {
 		log.WithFields(logrus.Fields{
 			"error": err,
@@ -269,8 +287,19 @@ func (p *PVCSyncer) TestSSHConnectivity(ctx context.Context, rsyncDeployment *rs
 
 	cmd := []string{"sh", "-c", sshCommand}
 
+	// Put the PVCSyncer in the context for ExecuteCommandInPod
+	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Log that we're using destination config
+	log.WithFields(logrus.Fields{
+		"deployment": rsyncDeployment.Name,
+		"namespace": rsyncDeployment.Namespace,
+		"pod_name": rsyncDeployment.PodName,
+		"dest_client_host": p.DestinationConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing SSH command with destination config")
+	
 	// Execute command in pod to generate SSH keys
-	stdout, stderr, err := rsyncpod.ExecuteCommandInPod(ctx, p.DestinationK8sClient, rsyncDeployment.Namespace, rsyncDeployment.PodName, cmd)
+	stdout, stderr, err := rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, rsyncDeployment.Namespace, rsyncDeployment.PodName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"stderr": stderr,

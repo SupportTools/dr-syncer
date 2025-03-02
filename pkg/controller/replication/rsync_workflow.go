@@ -408,8 +408,17 @@ func (p *PVCSyncer) generateSSHKeys(ctx context.Context, rsyncDeployment *rsyncp
 		"pod_name":   rsyncDeployment.PodName,
 	}).Info("[DR-SYNC-DETAIL] Generating SSH keys in rsync pod")
 
-	// Generate SSH keys
-	if err := rsyncDeployment.GenerateSSHKeys(ctx); err != nil {
+	// Put the PVCSyncer in the context for SSH key generation
+	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Generate SSH keys - use the context with PVCSyncer
+	log.WithFields(logrus.Fields{
+		"deployment": rsyncDeployment.Name,
+		"pod_name": rsyncDeployment.PodName,
+		"dest_config_host": p.DestinationConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing SSH key generation with destination config context")
+	
+	if err := rsyncDeployment.GenerateSSHKeys(syncerCtx); err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,
 			"pod_name":   rsyncDeployment.PodName,
@@ -433,8 +442,17 @@ func (p *PVCSyncer) getPublicKey(ctx context.Context, rsyncDeployment *rsyncpod.
 		"pod_name":   rsyncDeployment.PodName,
 	}).Info("[DR-SYNC-DETAIL] Getting public key from rsync pod")
 
-	// Get public key
-	publicKey, err := rsyncDeployment.GetPublicKey(ctx)
+	// Put the PVCSyncer in the context for getting public key
+	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Get public key - use the context with PVCSyncer
+	log.WithFields(logrus.Fields{
+		"deployment": rsyncDeployment.Name,
+		"pod_name": rsyncDeployment.PodName,
+		"dest_config_host": p.DestinationConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Getting public key with destination config context")
+	
+	publicKey, err := rsyncDeployment.GetPublicKey(syncerCtx)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,
@@ -459,8 +477,17 @@ func (p *PVCSyncer) cleanupResources(ctx context.Context, rsyncDeployment *rsync
 		"pod_name":   rsyncDeployment.PodName,
 	}).Info("[DR-SYNC-DETAIL] Cleaning up resources")
 
-	// Delete the rsync deployment
-	if err := rsyncDeployment.Cleanup(ctx); err != nil {
+	// Put the PVCSyncer in the context for cleanup
+	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	
+	// Delete the rsync deployment with context containing PVCSyncer
+	log.WithFields(logrus.Fields{
+		"deployment": rsyncDeployment.Name,
+		"pod_name": rsyncDeployment.PodName,
+		"dest_config_host": p.DestinationConfig.Host,
+	}).Info("[DR-SYNC-DETAIL] Executing cleanup with destination config context")
+	
+	if err := rsyncDeployment.Cleanup(syncerCtx); err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,
 			"pod_name":   rsyncDeployment.PodName,

@@ -65,6 +65,12 @@ spec:
                   for connectivity verification
                 format: int32
                 type: integer
+              paused:
+                default: false
+                description: |-
+                  Paused defines whether connectivity verification is paused
+                  When set to true, all connectivity verification and syncing operations will be skipped
+                type: boolean
               sourceCluster:
                 description: SourceCluster is the name of the source cluster
                 type: string

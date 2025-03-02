@@ -406,49 +406,75 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		SubResource("exec").
 		VersionedParams(execOpts, scheme.ParameterCodec)
 
-	// We need to find the REST config used by the client
-	// This is an internal structure, so we'll need to pass it
-	// Try to get the config from the client's REST client
+	// We need to get the REST config
 	var config *rest.Config
 	
-	// First try to get the config from context
+	// First priority: explicit config in context
 	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
 		config = configFromCtx.(*rest.Config)
-	} else if syncerFromCtx := ctx.Value("pvcsync"); syncerFromCtx != nil {
-		// Try to get config from PVCSyncer context - this needs to use type assertion to interface with required methods
+		log.WithFields(logrus.Fields{
+			"host": config.Host,
+		}).Info("[DR-SYNC-INFO] Using explicit config from context")
+	} 
+	
+	// No explicit config provided - check for PVCSyncer in context
+	if config == nil && ctx.Value("pvcsync") != nil {
+		// Get config from PVCSyncer context
 		type ConfigProvider interface {
 			GetSourceConfig() *rest.Config
 			GetDestinationConfig() *rest.Config
+			GetSourceClient() kubernetes.Interface
+			GetDestinationClient() kubernetes.Interface
 		}
 		
-		if provider, ok := syncerFromCtx.(ConfigProvider); ok {
-			sourceConfig := provider.GetSourceConfig()
-			destConfig := provider.GetDestinationConfig()
+		if provider, ok := ctx.Value("pvcsync").(ConfigProvider); ok {
+			// Compare the client with source/destination clients to determine which to use
+			srcClient := provider.GetSourceClient()
+			destClient := provider.GetDestinationClient()
 			
-			// Check which one matches our client's host
+			// Compare client URLs to determine if we're using source or destination client
 			clientHost := client.CoreV1().RESTClient().Get().URL().Host
-			if destConfig != nil && strings.Contains(clientHost, destConfig.Host) {
-				config = destConfig
-			} else if sourceConfig != nil {
-				config = sourceConfig
+			srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
+			destHost := destClient.CoreV1().RESTClient().Get().URL().Host
+			
+			if clientHost == srcHost {
+				config = provider.GetSourceConfig()
+				log.WithFields(logrus.Fields{
+					"host": config.Host,
+					"client_host": clientHost,
+				}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
+			} else if clientHost == destHost {
+				config = provider.GetDestinationConfig()
+				log.WithFields(logrus.Fields{
+					"host": config.Host,
+					"client_host": clientHost,
+				}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
+			} else {
+				// If no direct match, use simple heuristic - dest for rsync operations
+				if provider.GetDestinationConfig() != nil {
+					config = provider.GetDestinationConfig()
+					log.WithFields(logrus.Fields{
+						"host": config.Host,
+						"client_host": clientHost,
+						"src_host": srcHost,
+						"dest_host": destHost,
+					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (no direct match)")
+				} else if provider.GetSourceConfig() != nil {
+					config = provider.GetSourceConfig()
+					log.WithFields(logrus.Fields{
+						"host": config.Host,
+						"client_host": clientHost,
+						"src_host": srcHost,
+						"dest_host": destHost,
+					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (no direct match)")
+				}
 			}
 		}
 	}
 	
-	// If we still don't have a config, create one with TLS verification disabled
-	// This is not ideal but better than failing
+	// If no config is available, return an error
 	if config == nil {
-		// As a last resort, use the client's REST client URL but with TLS verification disabled
-		config = &rest.Config{
-			Host:    client.CoreV1().RESTClient().Get().URL().Host,
-			APIPath: "/api",
-			TLSClientConfig: rest.TLSClientConfig{
-				Insecure: true,
-			},
-		}
-		log.WithFields(logrus.Fields{
-			"host": config.Host,
-		}).Warn("[DR-SYNC-WARN] Using fallback REST config with TLS verification disabled")
+		return "", "", fmt.Errorf("no REST config found in context for client %s", client.CoreV1().RESTClient().Get().URL().Host)
 	}
 
 	// Log the URL
