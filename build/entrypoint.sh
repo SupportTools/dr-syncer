@@ -27,11 +27,10 @@ if [ -f /etc/ssh/keys/ssh_host_ed25519_key ]; then
     chmod 644 /etc/ssh/host_keys/ssh_host_ed25519_key.pub
 fi
 
-# Update syncer's authorized_keys if provided
+# Update root's authorized_keys if provided
 if [ -f /etc/ssh/keys/authorized_keys ]; then
-    cp /etc/ssh/keys/authorized_keys /home/syncer/.ssh/authorized_keys
-    chmod 600 /home/syncer/.ssh/authorized_keys
-    chown syncer:syncer /home/syncer/.ssh/authorized_keys
+    cp /etc/ssh/keys/authorized_keys /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
 fi
 
 # Install the SSH command handler
@@ -46,6 +45,12 @@ chmod 644 /var/log/ssh-command-handler.log
 
 # Install netcat for proxy functionality
 apk add --no-cache netcat-openbsd
+
+# Create and tail console log
+mkdir -p /var/log
+touch /var/log/console.log
+chmod 644 /var/log/console.log
+tail -f /var/log/console.log &
 
 # Start sshd
 exec /usr/sbin/sshd -D -e

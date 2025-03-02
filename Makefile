@@ -117,7 +117,7 @@ deploy-local: check-docker create-namespace manifests install-crds ## Build, pus
 		-f build/Dockerfile.rsync \
 		-t $(DOCKER_REGISTRY)/$(DOCKER_RSYNC_REPO):$(DEPLOY_TIMESTAMP) \
 		-t $(DOCKER_RSYNC_LATEST_TAG) .
-	
+
 	@echo "Pushing images..."
 	docker push $(if $(filter 0,$(DEBUG)),--quiet) $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DEPLOY_TIMESTAMP)
 	docker push $(if $(filter 0,$(DEBUG)),--quiet) $(DOCKER_LATEST_TAG)
@@ -136,8 +136,8 @@ deploy-local: check-docker create-namespace manifests install-crds ## Build, pus
 		--set image.tag=$(DEPLOY_TIMESTAMP) \
 		--set agent.image.repository=$(DOCKER_REGISTRY)/$(DOCKER_AGENT_REPO) \
 		--set agent.image.tag=$(DEPLOY_TIMESTAMP) \
-		--set rsync.image.repository=$(DOCKER_REGISTRY)/$(DOCKER_RSYNC_REPO) \
-		--set rsync.image.tag=$(DEPLOY_TIMESTAMP) \
+		--set rsyncPod.image.repository=$(DOCKER_REGISTRY)/$(DOCKER_RSYNC_REPO) \
+		--set rsyncPod.image.tag=$(DEPLOY_TIMESTAMP) \
 		--set version=$(VERSION) \
 		--set gitCommit=$(GIT_COMMIT) \
 		--set buildDate=$(BUILD_DATE) \

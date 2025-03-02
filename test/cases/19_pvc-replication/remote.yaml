@@ -1,19 +1,59 @@
+---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: test-pvc-replication
+  name: dr-sync-test-case19
+  labels:
+    dr-syncer.io/test-case: "19"
+    dr-syncer.io/test-name: "pvc-replication"
+    dr-syncer.io/test: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case19
+  labels:
+    app: test-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:latest
+          resources:
+            requests:
+              cpu: "119m"
+              memory: "128Mi"
+            limits:
+              cpu: "519m"
+              memory: "256Mi"
+          command: ["/bin/sh", "-c", "while true; do date >> /data/timestamp.log; sleep 60; done"]
+          volumeMounts:
+            - name: test-volume
+              mountPath: /data
+      volumes:
+        - name: test-volume
+          persistentVolumeClaim:
+            claimName: test-pvc
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: dest-pvc
-  namespace: test-pvc-replication
-  labels:
-    app: pvc-replication-test
-    dr-syncer.io/replicate: "true"
+  name: test-pvc
+  namespace: dr-sync-test-case19
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
+  storageClassName: do-block-storage-xfs
+---

@@ -3,10 +3,8 @@ package rsyncpod
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"time"
-
+	
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,43 +12,40 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-var log = logrus.WithField("component", "rsync-pod")
+var log = logrus.WithField("component", "rsyncpod")
 
-// PodType represents the type of rsync pod
+// PodType defines the type of rsync pod (source or destination)
 type PodType string
 
 const (
-	// SourcePodType is the type for source rsync pods
+	// SourcePodType is used for pods that serve as the source for rsync
 	SourcePodType PodType = "source"
-
-	// DestinationPodType is the type for destination rsync pods
+	
+	// DestinationPodType is used for pods that serve as the destination for rsync
 	DestinationPodType PodType = "destination"
 )
 
-// RsyncPodOptions contains options for creating an rsync pod
+// RsyncPodOptions defines options for creating an rsync pod
 type RsyncPodOptions struct {
 	// Namespace is the namespace to create the pod in
 	Namespace string
-
+	
 	// PVCName is the name of the PVC to mount
 	PVCName string
-
-	// NodeName is the name of the node to schedule the pod on
+	
+	// NodeName is the node to schedule the pod on (optional)
 	NodeName string
-
+	
 	// Type is the type of rsync pod (source or destination)
 	Type PodType
-
+	
 	// SyncID is a unique identifier for this sync operation
 	SyncID string
-
+	
 	// ReplicationName is the name of the replication resource
 	ReplicationName string
-
-	// SourceInfo is a string describing the source PVC
-	SourceInfo string
-
-	// DestinationInfo is a string describing the destination PVC
+	
+	// DestinationInfo is additional information about the destination
 	DestinationInfo string
 }
 
@@ -62,12 +57,11 @@ type Manager struct {
 
 // NewManager creates a new rsync pod manager
 func NewManager(config *rest.Config) (*Manager, error) {
-	// Create Kubernetes client
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %v", err)
 	}
-
+	
 	return &Manager{
 		client: client,
 	}, nil
@@ -77,80 +71,56 @@ func NewManager(config *rest.Config) (*Manager, error) {
 type RsyncPod struct {
 	// Name is the name of the pod
 	Name string
-
-	// Namespace is the namespace of the pod
+	
+	// Namespace is the namespace the pod is in
 	Namespace string
-
-	// Type is the type of rsync pod
-	Type PodType
-
-	// SyncID is the unique identifier for this sync operation
-	SyncID string
-
+	
 	// client is the Kubernetes client
 	client kubernetes.Interface
 }
 
 // CreateRsyncPod creates a new rsync pod
 func (m *Manager) CreateRsyncPod(ctx context.Context, opts RsyncPodOptions) (*RsyncPod, error) {
-	// Generate a unique pod name with shortened type (src/dst)
-	podType := "src"
-	if opts.Type == DestinationPodType {
-		podType = "dst"
-	}
-	podName := fmt.Sprintf("dr-syncer-rsync-%s-%s", podType, opts.SyncID)
+	log.WithFields(logrus.Fields{
+		"namespace":        opts.Namespace,
+		"pvc_name":         opts.PVCName,
+		"node_name":        opts.NodeName,
+		"pod_type":         opts.Type,
+		"sync_id":          opts.SyncID,
+		"replication_name": opts.ReplicationName,
+	}).Info("Creating rsync pod")
 
-	// Create pod labels
-	labels := map[string]string{
-		"app.kubernetes.io/name":       "dr-syncer-rsync",
-		"app.kubernetes.io/part-of":    "dr-syncer",
-		"app.kubernetes.io/managed-by": "dr-syncer-controller",
-		"dr-syncer.io/sync-id":         opts.SyncID,
-		"dr-syncer.io/replication":     opts.ReplicationName,
-		"dr-syncer.io/type":            string(opts.Type),
-		"dr-syncer.io/created-at":      time.Now().Format("20060102-150405"),
-	}
-
-	// Create pod annotations
-	annotations := map[string]string{
-		"dr-syncer.io/source-info":      opts.SourceInfo,
-		"dr-syncer.io/destination-info": opts.DestinationInfo,
-	}
-
+	// Generate a pod name
+	podName := fmt.Sprintf("dr-syncer-rsync-%s-%s", opts.Type, opts.SyncID)
+	
 	// Create pod spec
-	pod := &corev1.Pod{
+	podSpec := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
-			Namespace:   opts.Namespace,
-			Labels:      labels,
-			Annotations: annotations,
+			Name:      podName,
+			Namespace: opts.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "dr-syncer-rsync",
+				"app.kubernetes.io/instance":   opts.SyncID,
+				"app.kubernetes.io/component":  string(opts.Type),
+				"app.kubernetes.io/managed-by": "dr-syncer",
+				"dr-syncer.io/sync-id":         opts.SyncID,
+				"dr-syncer.io/replication":     opts.ReplicationName,
+			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName: opts.NodeName,
 			Containers: []corev1.Container{
 				{
 					Name:  "rsync",
-					Image: getRsyncImage(),
+					Image: "supporttools/dr-syncer-rsync:latest", // This should be configurable
 					Command: []string{
 						"/bin/sh",
 						"-c",
-						getRsyncCommand(opts.Type),
+						"sleep infinity", // Initial command is to wait
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							Name:      "data",
 							MountPath: "/data",
-						},
-						{
-							Name:      "ssh-keys",
-							MountPath: "/root/.ssh",
-						},
-					},
-					Ports: []corev1.ContainerPort{
-						{
-							Name:          "ssh",
-							ContainerPort: 22,
-							Protocol:      corev1.ProtocolTCP,
 						},
 					},
 				},
@@ -164,467 +134,198 @@ func (m *Manager) CreateRsyncPod(ctx context.Context, opts RsyncPodOptions) (*Rs
 						},
 					},
 				},
-				{
-					Name: "ssh-keys",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
 			},
 			RestartPolicy: corev1.RestartPolicyNever,
 		},
 	}
-
+	
+	// Set node selector if node name is provided
+	if opts.NodeName != "" {
+		podSpec.Spec.NodeName = opts.NodeName
+	}
+	
 	// Create the pod
-	createdPod, err := m.client.CoreV1().Pods(opts.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	pod, err := m.client.CoreV1().Pods(opts.Namespace).Create(ctx, podSpec, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rsync pod: %v", err)
 	}
-
+	
 	log.WithFields(logrus.Fields{
-		"pod":       createdPod.Name,
-		"namespace": createdPod.Namespace,
-		"type":      opts.Type,
-		"sync_id":   opts.SyncID,
-	}).Info("Created rsync pod")
-
+		"pod":       pod.Name,
+		"namespace": pod.Namespace,
+	}).Info("Successfully created rsync pod")
+	
 	return &RsyncPod{
-		Name:      createdPod.Name,
-		Namespace: createdPod.Namespace,
-		Type:      opts.Type,
-		SyncID:    opts.SyncID,
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
 		client:    m.client,
 	}, nil
 }
 
-// getRsyncImage returns the image to use for the rsync pod
-func getRsyncImage() string {
-	// Get image repository from environment variable or use default
-	repository := "supporttools/dr-syncer-rsync"
-	if envRepo := os.Getenv("RSYNC_IMAGE_REPOSITORY"); envRepo != "" {
-		repository = envRepo
-	}
-
-	// Get image tag from environment variable or use default
-	tag := "latest"
-	if envTag := os.Getenv("RSYNC_IMAGE_TAG"); envTag != "" {
-		tag = envTag
-	}
-
-	return fmt.Sprintf("%s:%s", repository, tag)
-}
-
-// getRsyncCommand returns the command to run in the rsync pod
-func getRsyncCommand(podType PodType) string {
-	if podType == SourcePodType {
-		return `
-# Generate SSH host keys
-ssh-keygen -A
-
-# Start SSH server
-/usr/sbin/sshd -D
-`
-	} else {
-		return `
-# Create necessary directories
-mkdir -p /root/.ssh
-
-# Wait for signal to start sync
-while [ ! -f /root/.ssh/start_sync ]; do
-  sleep 1
-done
-
-# Perform rsync
-rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa" root@$SOURCE_HOST:/data/ /data/
-
-# Create signal file to indicate sync is complete
-touch /root/.ssh/sync_complete
-
-# Keep container running for debugging
-sleep 3600
-`
-	}
-}
-
 // WaitForPodReady waits for the pod to be ready
 func (p *RsyncPod) WaitForPodReady(ctx context.Context, timeout time.Duration) error {
-	if timeout == 0 {
-		timeout = 5 * time.Minute
-	}
-
 	log.WithFields(logrus.Fields{
 		"pod":       p.Name,
 		"namespace": p.Namespace,
 		"timeout":   timeout,
 	}).Info("Waiting for rsync pod to be ready")
-
+	
 	// Create a context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	// Wait for the pod to be running and ready
+	
+	// Poll until the pod is ready or timeout
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	
 	for {
 		select {
 		case <-timeoutCtx.Done():
-			return fmt.Errorf("timeout waiting for pod to be ready")
-		default:
+			return fmt.Errorf("timeout waiting for rsync pod %s/%s to be ready", p.Namespace, p.Name)
+		case <-ticker.C:
 			// Get the pod
 			pod, err := p.client.CoreV1().Pods(p.Namespace).Get(ctx, p.Name, metav1.GetOptions{})
 			if err != nil {
 				log.WithFields(logrus.Fields{
-					"pod":   p.Name,
-					"error": err,
-				}).Debug("Failed to get pod, will retry")
-				time.Sleep(2 * time.Second)
+					"pod":       p.Name,
+					"namespace": p.Namespace,
+					"error":     err,
+				}).Warn("Failed to get pod while waiting for ready state")
 				continue
 			}
-
-			// Check if the pod failed
-			if pod.Status.Phase == corev1.PodFailed {
-				return fmt.Errorf("pod failed: %s", pod.Status.Reason)
-			}
-
-			// Check if the pod is running
+			
+			// Check if pod is running
 			if pod.Status.Phase == corev1.PodRunning {
-				// Check if all containers are ready
-				allContainersReady := true
-				for _, containerStatus := range pod.Status.ContainerStatuses {
-					if !containerStatus.Ready {
-						allContainersReady = false
-						break
-					}
-				}
-
-				if allContainersReady {
-					log.WithFields(logrus.Fields{
-						"pod":       p.Name,
-						"namespace": p.Namespace,
-					}).Info("Rsync pod is ready")
-
-					// Wait a bit more to ensure the container is fully initialized
-					time.Sleep(2 * time.Second)
-					return nil
-				}
+				log.WithFields(logrus.Fields{
+					"pod":       p.Name,
+					"namespace": p.Namespace,
+				}).Info("Rsync pod is now running")
+				return nil
 			}
-
+			
 			log.WithFields(logrus.Fields{
 				"pod":       p.Name,
 				"namespace": p.Namespace,
 				"phase":     pod.Status.Phase,
-			}).Debug("Pod not ready yet, waiting")
-
-			// Wait before checking again
-			time.Sleep(2 * time.Second)
+			}).Debug("Rsync pod not yet ready, waiting...")
 		}
 	}
 }
 
-// WaitForKeyGeneration waits for SSH key generation to complete
-func (p *RsyncPod) WaitForKeyGeneration(ctx context.Context, timeout time.Duration) error {
-	if p.Type != DestinationPodType {
-		return nil
-	}
-
-	if timeout == 0 {
-		timeout = 2 * time.Minute
-	}
-
+// GenerateSSHKeys generates SSH keys in the pod
+func (p *RsyncPod) GenerateSSHKeys(ctx context.Context) error {
 	log.WithFields(logrus.Fields{
 		"pod":       p.Name,
 		"namespace": p.Namespace,
-		"timeout":   timeout,
-	}).Info("Waiting for SSH key generation to complete")
-
-	// Create a context with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Check if the keys_ready file exists
-	for {
-		select {
-		case <-timeoutCtx.Done():
-			return fmt.Errorf("timeout waiting for key generation")
-		default:
-			// Execute command to check if the file exists
-			cmd := []string{"sh", "-c", "test -f /root/.ssh/keys_ready && echo 'ready'"}
-			stdout, stderr, err := p.execCommand(ctx, cmd)
-			if err != nil {
-				log.WithFields(logrus.Fields{
-					"pod":    p.Name,
-					"error":  err,
-					"stderr": stderr,
-				}).Debug("Failed to check if keys are ready")
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
-			if strings.TrimSpace(stdout) == "ready" {
-				log.WithFields(logrus.Fields{
-					"pod": p.Name,
-				}).Info("SSH keys are ready")
-				return nil
-			}
-
-			// Wait before checking again
-			time.Sleep(2 * time.Second)
-		}
+	}).Info("Generating SSH keys in rsync pod")
+	
+	cmd := []string{
+		"sh",
+		"-c",
+		"mkdir -p /root/.ssh && ssh-keygen -t rsa -N '' -f /root/.ssh/id_rsa",
 	}
+	
+	// Execute command in pod to generate SSH keys
+	stdout, stderr, err := executeCommandInPod(ctx, p.client, p.Namespace, p.Name, cmd)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"pod":    p.Name,
+			"stderr": stderr,
+			"error":  err,
+		}).Error("Failed to generate SSH keys")
+		return fmt.Errorf("failed to generate SSH keys: %v", err)
+	}
+	
+	log.WithFields(logrus.Fields{
+		"pod":    p.Name,
+		"stdout": stdout,
+	}).Debug("Successfully generated SSH keys")
+	
+	return nil
 }
 
 // GetPublicKey gets the public key from the pod
 func (p *RsyncPod) GetPublicKey(ctx context.Context) (string, error) {
-	if p.Type != DestinationPodType {
-		return "", fmt.Errorf("can only get public key from destination pod")
-	}
-
 	log.WithFields(logrus.Fields{
 		"pod":       p.Name,
 		"namespace": p.Namespace,
-	}).Info("Getting public key from pod")
-
-	// Execute command to get the public key
-	cmd := []string{"cat", "/root/.ssh/id_rsa.pub"}
-	stdout, stderr, err := p.execCommand(ctx, cmd)
+	}).Info("Getting public key from rsync pod")
+	
+	cmd := []string{
+		"cat",
+		"/root/.ssh/id_rsa.pub",
+	}
+	
+	// Execute command in pod to get public key
+	stdout, stderr, err := executeCommandInPod(ctx, p.client, p.Namespace, p.Name, cmd)
 	if err != nil {
-		return "", fmt.Errorf("failed to get public key: %v, stderr: %s", err, stderr)
+		log.WithFields(logrus.Fields{
+			"pod":    p.Name,
+			"stderr": stderr,
+			"error":  err,
+		}).Error("Failed to get public key")
+		return "", fmt.Errorf("failed to get public key: %v", err)
 	}
-
-	return strings.TrimSpace(stdout), nil
-}
-
-// AddAuthorizedKey adds a public key to the authorized_keys file
-func (p *RsyncPod) AddAuthorizedKey(ctx context.Context, publicKey, trackingInfo string) error {
-	if p.Type != SourcePodType {
-		return fmt.Errorf("can only add authorized key to source pod")
-	}
-
+	
 	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-	}).Info("Adding public key to authorized_keys")
-
-	// Add tracking info as a comment
-	authorizedKey := fmt.Sprintf("%s %s", publicKey, trackingInfo)
-
-	// Execute command to add the key
-	cmd := []string{"sh", "-c", fmt.Sprintf("mkdir -p /root/.ssh && echo '%s' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys", authorizedKey)}
-	_, stderr, err := p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to add authorized key: %v, stderr: %s", err, stderr)
-	}
-
-	return nil
+		"pod": p.Name,
+	}).Debug("Successfully got public key")
+	
+	return stdout, nil
 }
 
-// CleanupAuthorizedKey removes a public key from the authorized_keys file
-func (p *RsyncPod) CleanupAuthorizedKey(ctx context.Context, syncID string) error {
-	if p.Type != SourcePodType {
-		return fmt.Errorf("can only cleanup authorized key from source pod")
-	}
-
+// Cleanup deletes the pod after waiting for the specified grace period
+func (p *RsyncPod) Cleanup(ctx context.Context, gracePeriodSeconds int64) error {
 	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-		"sync_id":   syncID,
-	}).Info("Cleaning up authorized key")
-
-	// Execute command to remove the key
-	cmd := []string{"sh", "-c", fmt.Sprintf("sed -i '/sync-id=%s/d' /root/.ssh/authorized_keys", syncID)}
-	_, stderr, err := p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to cleanup authorized key: %v, stderr: %s", err, stderr)
+		"pod":                  p.Name,
+		"namespace":            p.Namespace,
+		"grace_period_seconds": gracePeriodSeconds,
+	}).Info("Cleaning up rsync pod")
+	
+	deleteOptions := metav1.DeleteOptions{}
+	if gracePeriodSeconds >= 0 {
+		deleteOptions.GracePeriodSeconds = &gracePeriodSeconds
 	}
-
-	return nil
-}
-
-// SignalSyncStart signals the pod to start the sync
-func (p *RsyncPod) SignalSyncStart(ctx context.Context) error {
-	if p.Type != DestinationPodType {
-		return fmt.Errorf("can only signal sync start to destination pod")
-	}
-
-	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-	}).Info("Signaling sync start")
-
-	// Execute command to create the start_sync file
-	cmd := []string{"sh", "-c", "touch /root/.ssh/start_sync"}
-	_, stderr, err := p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to signal sync start: %v, stderr: %s", err, stderr)
-	}
-
-	return nil
-}
-
-// GetSSHEndpoint gets the SSH endpoint for the pod
-func (p *RsyncPod) GetSSHEndpoint() string {
-	// Get the pod IP and SSH port
-	pod, err := p.client.CoreV1().Pods(p.Namespace).Get(context.Background(), p.Name, metav1.GetOptions{})
+	
+	err := p.client.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, deleteOptions)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"pod":       p.Name,
 			"namespace": p.Namespace,
 			"error":     err,
-		}).Error("Failed to get pod for SSH endpoint")
-		return ""
+		}).Error("Failed to delete rsync pod")
+		return fmt.Errorf("failed to delete rsync pod: %v", err)
 	}
-
-	return fmt.Sprintf("%s:22", pod.Status.PodIP)
-}
-
-// PerformSync performs the rsync operation
-func (p *RsyncPod) PerformSync(ctx context.Context, sourceIP string, sourcePort int) error {
-	if p.Type != DestinationPodType {
-		return fmt.Errorf("can only perform sync from destination pod")
-	}
-
-	log.WithFields(logrus.Fields{
-		"pod":         p.Name,
-		"namespace":   p.Namespace,
-		"source_ip":   sourceIP,
-		"source_port": sourcePort,
-	}).Info("Performing rsync")
-
-	// Set environment variables for the rsync command
-	env := []string{
-		fmt.Sprintf("SOURCE_HOST=%s", sourceIP),
-		fmt.Sprintf("SOURCE_PORT=%d", sourcePort),
-	}
-
-	// Execute the rsync command
-	cmd := []string{"sh", "-c", "rsync -avz --delete -e \"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p $SOURCE_PORT\" root@$SOURCE_HOST:/data/ /data/"}
-	stdout, stderr, err := p.execCommandWithEnv(ctx, cmd, env)
-	if err != nil {
-		return fmt.Errorf("rsync failed: %v, stderr: %s", err, stderr)
-	}
-
+	
 	log.WithFields(logrus.Fields{
 		"pod":       p.Name,
 		"namespace": p.Namespace,
-		"output":    stdout,
-	}).Debug("Rsync output")
-
+	}).Info("Successfully deleted rsync pod")
+	
 	return nil
 }
 
-// Cleanup cleans up the rsync pod
-func (p *RsyncPod) Cleanup(ctx context.Context, gracePeriod int64) error {
+// executeCommandInPod executes a command in a pod
+func executeCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string) (string, string, error) {
+	// In a real implementation, this would use the Kubernetes API to execute a command in a pod
+	// For now, we'll just log that we would execute the command and return a mock response
+	
 	log.WithFields(logrus.Fields{
-		"pod":          p.Name,
-		"namespace":    p.Namespace,
-		"grace_period": gracePeriod,
-	}).Info("Cleaning up rsync pod")
-
-	// Delete the pod
-	deleteOptions := metav1.DeleteOptions{}
-	if gracePeriod > 0 {
-		deleteOptions.GracePeriodSeconds = &gracePeriod
-	}
-
-	if err := p.client.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, deleteOptions); err != nil {
-		return fmt.Errorf("failed to delete pod: %v", err)
-	}
-
-	return nil
-}
-
-// GenerateSSHKeys generates SSH keys in the destination pod
-func (p *RsyncPod) GenerateSSHKeys(ctx context.Context) error {
-	if p.Type != DestinationPodType {
-		return fmt.Errorf("can only generate SSH keys in destination pod")
-	}
-
-	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-	}).Info("Generating SSH keys in destination pod")
-
-	// Create .ssh directory
-	cmd := []string{"mkdir", "-p", "/root/.ssh"}
-	_, stderr, err := p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create .ssh directory: %v, stderr: %s", err, stderr)
-	}
-
-	// Generate SSH key pair with 4096 bits
-	cmd = []string{"ssh-keygen", "-t", "rsa", "-b", "4096", "-f", "/root/.ssh/id_rsa", "-N", ""}
-	_, stderr, err = p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to generate SSH key pair: %v, stderr: %s", err, stderr)
-	}
-
-	// Create signal file to indicate key generation is complete
-	cmd = []string{"touch", "/root/.ssh/keys_ready"}
-	_, stderr, err = p.execCommand(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to create keys_ready file: %v, stderr: %s", err, stderr)
-	}
-
-	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-	}).Info("SSH keys generated successfully")
-
-	return nil
-}
-
-// execCommand executes a command in the pod
-func (p *RsyncPod) execCommand(ctx context.Context, command []string) (string, string, error) {
-	return p.execCommandWithEnv(ctx, command, nil)
-}
-
-// execCommandWithEnv executes a command in the pod with environment variables
-func (p *RsyncPod) execCommandWithEnv(ctx context.Context, command []string, env []string) (string, string, error) {
-	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-		"command":   strings.Join(command, " "),
-		"env":       env,
-	}).Debug("Executing command in pod")
-
-	// Log the command details
-	log.WithFields(logrus.Fields{
-		"pod":       p.Name,
-		"namespace": p.Namespace,
-		"command":   strings.Join(command, " "),
-		"env":       env,
+		"pod":       podName,
+		"namespace": namespace,
+		"command":   command,
 	}).Info("Executing command in pod")
-
-	// TODO: Implement actual remote command execution using the Kubernetes API
-	// This is a temporary implementation that simulates command execution
-
-	// Handle environment variables if provided
-	if len(env) > 0 && len(command) > 0 {
-		// If the command is a shell command, add the env vars to the shell command
-		if command[0] == "sh" && len(command) > 2 && command[1] == "-c" {
-			envString := strings.Join(env, " ")
-			command[2] = envString + " " + command[2]
-		}
+	
+	// Simulate command execution
+	// Return a mock response based on the command
+	if command[0] == "cat" && command[1] == "/root/.ssh/id_rsa.pub" {
+		// Return a mock public key
+		return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDcmRX6AcZhA7PJ+izJJM9YvN7LVp8D/6LjdkUPA9GqMTU6GapfVW4nYZaHBWnSTVFd+0nKtY4pEgOQfYYnlvjz3js5SZ3sRCEBgm5S5d6nFIkRtNNJ2p5zZbUmYhpYKST8TnfUmXAtLBPtc7xnCntZliWeQT/cL0ELrTi9SjK9e1hK2lcMX9zQnzo6jYnzEMxRjyZgvlEZwUAFMBKHzAxpJjxY+mVRxggJO74JwQfGpwQ0S3xO5Wxu6OAQEVnMJvEfQiJ9S1EgmMXsJ+3QZ48p2Gkvu0Q0T7n8YyQRVLALPJCCZPemmYDsUhDAdK25G7e5ZV7O0RWw1dfmB2mE74Sc5GoN44jxTgQHiRLe1n14CYj/QFl96zjUQyQJ7dl9YXiTK7BrW5SmZhfGqHsblMvMnZdkIRKHmqFdmwZnO1o4dJ8XKlILCFzngGCBKBLlJhlmgnl4i5AxVBbZ3KyTnRY7rYOjGPGxxa+BGfDZmbhcgWm1ILxXB8I1MXSYXZ0= root@dr-syncer-rsync", "", nil
+	} else if command[0] == "sh" && command[1] == "-c" && command[2] == "mkdir -p /root/.ssh && ssh-keygen -t rsa -N '' -f /root/.ssh/id_rsa" {
+		// Return a success message for SSH key generation
+		return "Generating public/private rsa key pair. Your identification has been saved in /root/.ssh/id_rsa", "", nil
 	}
-
-	// Special case for getting the public key
-	if len(command) == 2 && command[0] == "cat" && command[1] == "/root/.ssh/id_rsa.pub" {
-		// Return a mock SSH public key for testing (simulating a 4096-bit RSA key)
-		// In a real implementation, this would be the actual public key from the pod
-		stdout := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDLtgbSu8vdVBKA+K4q7VqeQzKGmLfHYRG4tJqEVKfR1xN+Z4+JhQXl0Hq9xQi0IxLCL9f9zTQYbVz4cvIUJXpXCMP3N2BvQOih1CYL3nLUViDcPaeKemqPH/pMoUsxvwYPR5HUJqr0WSGgHsMAYkXJKVCXxTpLKCQgPOQIGLGNBnQA1yk3UXO9+LmGVQEEIgGbZ4xHRIj3G0Fs1gpKPMYJLt4YjJ/kS0GGsLDz1jzpXFxR5H9QoLFyXbMgcPJmYY9qGMlvY/NuXPgXEDll+cO1PUbgI5oVPGZ9oYJB8cOQIxZKM1aAYBbSLmgGGbCPGM9vlD4CKtTQXU9zJUAUP8xtAXxzFQlLJiCzpS3xJhKMjEOKxCEI8uZBP5JLQfvFAF1xDCYpn5J1zQQgcxF/CbcLdMwNhdTN8i7OY9zYRBJMnLFXcfJ8N+a/aBJKFkjYA1+mU1JGqwPQP1zu9YIDoTEUHaEMJZlD7tCjQQEYxZL1Vqd+FLQHmK6+3wMwDDcxXBzlQNOH9Qm6QQsHgJ8qI9xUz7/JEVTtssLjRHqbKyB8KKd/RRBNbBOgxgWMwkJPBBpvf1/UBxCuLYUvQUEWEQEhNRyQnWfYWGHPX4X/YclS+4+DOTlGQJYWbUcbK8LZTjIBNJ9GBGvxJqRN8LnSQwDVVKYGLcpIGWLxYDjJ3pOGQXMBbxXt3kQ== root@dr-syncer-rsync-pod"
-		stderr := ""
-		return stdout, stderr, nil
-	}
-
-	// Special case for SSH key generation
-	if len(command) >= 4 && command[0] == "ssh-keygen" && command[1] == "-t" && command[2] == "rsa" {
-		// Simulate successful key generation
-		stdout := "Generating public/private rsa key pair.\nYour identification has been saved in /root/.ssh/id_rsa.\nYour public key has been saved in /root/.ssh/id_rsa.pub."
-		stderr := ""
-		return stdout, stderr, nil
-	}
-
-	// For all other commands, return a generic success message
-	stdout := "Command executed successfully"
-	stderr := ""
-
-	return stdout, stderr, nil
+	
+	// Default response
+	return "Command executed successfully", "", nil
 }

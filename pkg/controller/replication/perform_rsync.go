@@ -4,91 +4,150 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/supporttools/dr-syncer/pkg/agent/rsyncpod"
 )
 
 // performRsync performs the rsync operation between source and destination pods
-func (p *PVCSyncer) performRsync(ctx context.Context, sourcePod, destPod *rsyncpod.RsyncPod) error {
+func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.RsyncDeployment, agentPod, mountPath string) error {
 	log.WithFields(logrus.Fields{
-		"source_pod": sourcePod.Name,
-		"dest_pod":   destPod.Name,
-	}).Info("Performing rsync between pods")
+		"deployment": destDeployment.Name,
+		"pod_name":   destDeployment.PodName,
+		"agent_pod":  agentPod,
+		"mount_path": mountPath,
+	}).Info("[DR-SYNC-DETAIL] Starting rsync operation")
 
-	// Get the source pod's SSH endpoint
-	sourceSSHEndpoint := sourcePod.GetSSHEndpoint()
-	if sourceSSHEndpoint == "" {
-		return fmt.Errorf("failed to get SSH endpoint for source pod")
+	// Default rsync options
+	rsyncOptions := []string{
+		"--archive",
+		"--verbose",
+		"--delete",
+		"--human-readable",
 	}
 
-	// Parse the SSH endpoint to get IP and port
-	parts := strings.Split(sourceSSHEndpoint, ":")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid SSH endpoint format: %s", sourceSSHEndpoint)
+	// Test SSH connectivity first
+	log.Info("[DR-SYNC-DETAIL] Running pre-rsync SSH connectivity check")
+	if err := p.TestSSHConnectivity(ctx, destDeployment, agentPod, 2222); err != nil {
+		log.WithFields(logrus.Fields{
+			"error": err,
+		}).Error("[DR-SYNC-ERROR] Pre-rsync SSH connectivity check failed")
+		return fmt.Errorf("SSH connectivity test failed: %v", err)
+	}
+	log.Info("[DR-SYNC-DETAIL] Pre-rsync SSH connectivity check passed")
+
+	// Combine rsync options
+	rsyncOptsStr := strings.Join(rsyncOptions, " ")
+
+	// Build the rsync command with tee to log the output
+	// Use -a to preserve permissions, -v for verbose output, and --delete to remove files that don't exist in source
+	rsyncCmd := fmt.Sprintf("rsync %s -e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p 2222' root@%s:%s/ /data/ | tee /var/log/console.log",
+		rsyncOptsStr, agentPod, mountPath)
+
+	log.WithFields(logrus.Fields{
+		"rsync_cmd": rsyncCmd,
+		"dest_pod":  destDeployment.PodName,
+		"source":    fmt.Sprintf("root@%s:%s/", agentPod, mountPath),
+		"dest":      "/data/",
+	}).Info("[DR-SYNC-DETAIL] Executing rsync command with detailed info")
+
+	log.WithFields(logrus.Fields{
+		"rsync_cmd": rsyncCmd,
+	}).Info("[DR-SYNC-DETAIL] Executing rsync command")
+
+	// Execute command in rsync pod
+	cmd := []string{"sh", "-c", rsyncCmd}
+	stdout, stderr, err := executeCommandInPod(ctx, nil, destDeployment.Namespace, destDeployment.PodName, cmd)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"stderr": stderr,
+			"error":  err,
+		}).Error("[DR-SYNC-ERROR] Rsync command failed")
+		return fmt.Errorf("rsync command failed: %v", err)
 	}
 
-	// Note: We're not using the parsed IP and port directly since the rsyncpod package
-	// handles the SSH connection internally
+	// Check if rsync was successful
+	if strings.Contains(stderr, "rsync error") {
+		log.WithFields(logrus.Fields{
+			"stderr": stderr,
+		}).Error("[DR-SYNC-ERROR] Rsync error detected in output")
+		return fmt.Errorf("rsync error: %s", stderr)
+	}
 
-	// Wait for the sync to complete with a timeout
-	timeout := 30 * time.Minute
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	log.WithFields(logrus.Fields{
+		"deployment": destDeployment.Name,
+		"pod_name":   destDeployment.PodName,
+		"agent_pod":  agentPod,
+		"mount_path": mountPath,
+	}).Info("[DR-SYNC-DETAIL] Rsync command executed successfully")
 
-	// Record the start time for our simulation
-	startTime := time.Now()
+	// Output first 100 characters of stdout to help with debugging
+	if len(stdout) > 100 {
+		log.WithFields(logrus.Fields{
+			"stdout_preview": stdout[:100] + "...",
+		}).Info("[DR-SYNC-DETAIL] Rsync output preview")
 
-	// Poll until the sync is complete or timeout
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeoutCtx.Done():
-			return fmt.Errorf("timeout waiting for rsync to complete")
-		case <-ticker.C:
-			// Check if the sync_complete file exists in the destination pod
-			// We need to use a different approach since execCommand is unexported
-			// For now, we'll just simulate the check based on time
-			// In a real implementation, we would need to add a public method to the rsyncpod package
-
-			// Simulate checking for sync completion
-			// After 30 seconds, we'll consider the sync complete for this example
-			if time.Since(startTime) > 30*time.Second {
+		// Log the full output with multiple log entries for better visibility in logs
+		lines := strings.Split(stdout, "\n")
+		for i, line := range lines {
+			if len(line) > 0 {
 				log.WithFields(logrus.Fields{
-					"source_pod": sourcePod.Name,
-					"dest_pod":   destPod.Name,
-				}).Info("Rsync completed successfully")
-				return nil
+					"line_num": i + 1,
+					"content":  line,
+				}).Info("[DR-SYNC-OUTPUT] Rsync output line")
 			}
+		}
+	} else if len(stdout) > 0 {
+		log.WithFields(logrus.Fields{
+			"stdout": stdout,
+		}).Info("[DR-SYNC-DETAIL] Rsync output")
 
-			// For demonstration purposes, we'll simulate a response
-			stdout := ""
-			stderr := ""
-			err := error(nil)
-			if err != nil {
+		// Log each line separately for better visibility even for shorter outputs
+		lines := strings.Split(stdout, "\n")
+		for i, line := range lines {
+			if len(line) > 0 {
 				log.WithFields(logrus.Fields{
-					"pod":    destPod.Name,
-					"error":  err,
-					"stderr": stderr,
-				}).Debug("Failed to check if sync is complete")
-				continue
+					"line_num": i + 1,
+					"content":  line,
+				}).Info("[DR-SYNC-OUTPUT] Rsync output line")
 			}
-
-			if strings.TrimSpace(stdout) == "complete" {
-				log.WithFields(logrus.Fields{
-					"source_pod": sourcePod.Name,
-					"dest_pod":   destPod.Name,
-				}).Info("Rsync completed successfully")
-				return nil
-			}
-
-			log.WithFields(logrus.Fields{
-				"source_pod": sourcePod.Name,
-				"dest_pod":   destPod.Name,
-			}).Debug("Rsync still in progress, waiting...")
 		}
 	}
+
+	return nil
+}
+
+// TestSSHConnectivity tests SSH connectivity from the rsync pod to the agent pod
+func (p *PVCSyncer) TestSSHConnectivity(ctx context.Context, rsyncDeployment *rsyncpod.RsyncDeployment, agentIP string, port int) error {
+	log.WithFields(logrus.Fields{
+		"deployment": rsyncDeployment.Name,
+		"pod_name":   rsyncDeployment.PodName,
+		"agent_ip":   agentIP,
+		"port":       port,
+	}).Info("[DR-SYNC-DETAIL] Testing SSH connectivity")
+
+	// Construct SSH command
+	sshCommand := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d root@%s 'echo SSH connectivity test'", port, agentIP)
+
+	log.WithFields(logrus.Fields{
+		"ssh_command": sshCommand,
+	}).Info("[DR-SYNC-DETAIL] Executing SSH command")
+
+	cmd := []string{"sh", "-c", sshCommand}
+
+	// Execute command in pod to generate SSH keys
+	stdout, stderr, err := executeCommandInPod(ctx, nil, rsyncDeployment.Namespace, rsyncDeployment.PodName, cmd)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"stderr": stderr,
+			"error":  err,
+		}).Error("[DR-SYNC-ERROR] Failed to execute SSH command")
+		return fmt.Errorf("SSH connectivity test failed: %v", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"stdout": stdout,
+	}).Info("[DR-SYNC-DETAIL] SSH connectivity test successful")
+
+	return nil
 }

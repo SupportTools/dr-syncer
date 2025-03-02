@@ -16,13 +16,16 @@ agent:
     # tag will be overridden by deploy commands
     tag: "latest"
 
-# Rsync configuration
-rsync:
+# Rsync pod configuration
+rsyncPod:
   image:
     repository: docker.io/supporttools/dr-syncer-rsync
     pullPolicy: IfNotPresent
     # tag will be overridden by deploy commands
     tag: "latest"
+
+# Rsync configuration
+rsync:
   ssh:
     port: 2222
   concurrency: 3
@@ -40,6 +43,21 @@ rsync:
     retryAttempts: 3
     # Interval between retry attempts
     retryInterval: "30s"
+
+# PVC mount configuration
+pvcMount:
+  # Image to use for PVC mount pods
+  pauseImage: "k8s.gcr.io/pause:3.6"
+  # Resource requests and limits for mount pods
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "50m"
+      memory: "64Mi"
+  # Timeout for waiting for mount pods to be running
+  podRunningTimeout: "3m"
 
 # Image pull secrets
 imagePullSecrets: []

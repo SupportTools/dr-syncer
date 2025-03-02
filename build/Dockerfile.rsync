@@ -8,11 +8,9 @@ RUN apk add --no-cache \
     bash \
     curl
 
-# Create syncer user and configure SSH
-RUN adduser -D syncer && \
-    mkdir -p /home/syncer/.ssh && \
-    chmod 700 /home/syncer/.ssh && \
-    chown syncer:syncer /home/syncer/.ssh
+# Configure SSH for root
+RUN mkdir -p /root/.ssh && \
+    chmod 700 /root/.ssh
 
 # Configure SSH for proxy and rsync
 COPY build/sshd_config /etc/ssh/sshd_config

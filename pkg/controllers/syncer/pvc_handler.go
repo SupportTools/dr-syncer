@@ -8,21 +8,17 @@ import (
 	controller "github.com/supporttools/dr-syncer/pkg/controller/replication"
 	syncerrors "github.com/supporttools/dr-syncer/pkg/controllers/syncer/errors"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
-	"github.com/supporttools/dr-syncer/pkg/pvcmounter"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
-// syncPersistentVolumeClaimsWithMounting synchronizes PVCs between namespaces and ensures they're mounted
-// This is an enhanced version of syncPersistentVolumeClaims that uses the pvcmounter package
+// syncPersistentVolumeClaimsWithMounting synchronizes PVCs between namespaces
+// This uses the rsync deployment to handle direct mounting and data transfer
 func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *ResourceSyncer, sourceClient, targetClient kubernetes.Interface, 
 	srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig, config *drv1alpha1.ImmutableResourceConfig) error {
 	
-	log.Info(fmt.Sprintf("Syncing persistent volume claims from %s to %s with mount support", srcNamespace, dstNamespace))
-
-	// Initialize PVC mount manager
-	mountManager := NewPVCMountManager(sourceClient, targetClient)
+	log.Info(fmt.Sprintf("Syncing persistent volume claims from %s to %s", srcNamespace, dstNamespace))
 	
 	// Get PVCs from source namespace
 	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
@@ -194,13 +190,9 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 			log.Info(fmt.Sprintf("Found source PVC %s/%s (phase: %s, volumeName: %s)",
 				srcNamespace, sourcePVC.Name, sourcePVC.Status.Phase, sourcePVC.Spec.VolumeName))
 
-			// Ensure both source and target PVCs are mounted
-			log.Info(fmt.Sprintf("Ensuring PVCs are mounted for %s", sourcePVC.Name))
-			err = mountManager.EnsurePVCsMounted(ctx, sourcePVC, &destPVC)
-			if err != nil {
-				log.Errorf("Failed to mount PVCs for %s: %v", sourcePVC.Name, err)
-				continue
-			}
+			// Skip explicit PVC mounting as the rsync deployment will directly mount the destination PVC
+			// and we'll use the existing mount of the source PVC
+			log.Info(fmt.Sprintf("Skipping explicit mount for PVCs - rsync deployment will handle mounting for %s", sourcePVC.Name))
 
 			// Find nodes where PVCs are mounted - this will now succeed because we've mounted them
 			log.Info(fmt.Sprintf("Finding node for source PVC %s/%s", srcNamespace, sourcePVC.Name))
@@ -241,18 +233,11 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 				},
 			}
 
-			// Perform the actual data synchronization
+			// Perform the actual data synchronization using rsync deployment
 			if err := pvcSyncer.SyncPVCWithNamespaceMapping(ctx, dummyMapping, syncOpts); err != nil {
 				log.Errorf("Failed to sync data for PVC %s: %v", destPVC.Name, err)
 			} else {
 				log.Info(fmt.Sprintf("Successfully synced data for PVC %s", destPVC.Name))
-			}
-
-			// Cleanup mount pods after sync
-			log.Info(fmt.Sprintf("Cleaning up mount pods for PVC %s", destPVC.Name))
-			if err := mountManager.CleanupMountPods(ctx, sourcePVC, &destPVC); err != nil {
-				log.Warnf("Failed to cleanup mount pods for PVC %s: %v", destPVC.Name, err)
-				// Continue anyway, this is just cleanup
 			}
 		}
 	} else {
@@ -266,27 +251,4 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 	}
 
 	return nil
-}
-
-// createMountPodConfig creates configuration for mount pods
-func createMountPodConfig(pvc *corev1.PersistentVolumeClaim, isSource bool) *pvcmounter.MountPodConfig {
-	role := "target"
-	if isSource {
-		role = "source"
-	}
-
-	return &pvcmounter.MountPodConfig{
-		PodNamePrefix: fmt.Sprintf("dr-syncer-%s-mount", role),
-		Labels: map[string]string{
-			"app.kubernetes.io/managed-by": "dr-syncer",
-			"app.kubernetes.io/name":       fmt.Sprintf("dr-%s-mount-pod", role),
-			"app.kubernetes.io/part-of":    "dr-syncer",
-			"dr-syncer.io/role":            fmt.Sprintf("%s-mount", role),
-			"dr-syncer.io/pvc":             pvc.Name,
-		},
-		Annotations: map[string]string{
-			"dr-syncer.io/purpose": "pvc-mount",
-			"dr-syncer.io/pvc":     pvc.Name,
-		},
-	}
 }

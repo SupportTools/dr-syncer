@@ -12,7 +12,7 @@ PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 
 # Security
-PermitRootLogin no
+PermitRootLogin yes
 X11Forwarding no
 AllowTcpForwarding yes
 AllowAgentForwarding no
@@ -26,7 +26,7 @@ LogLevel INFO
 # SSH proxy configuration
 # Allow both rsync and proxy commands
 ForceCommand /bin/bash /usr/local/bin/ssh-command-handler.sh
-AllowUsers syncer
+AllowUsers root
 GatewayPorts yes
 StreamLocalBindUnlink yes
 

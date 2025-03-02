@@ -1,19 +1,54 @@
-apiVersion: v1
-kind: Namespace
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
 metadata:
-  name: test-pvc-replication
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: source-pvc
-  namespace: test-pvc-replication
+  name: pvc-replication
+  namespace: dr-syncer
   labels:
-    app: pvc-replication-test
-    dr-syncer.io/replicate: "true"
+    dr-syncer.io/test-case: "19"
+    dr-syncer.io/test-name: "pvc-replication"
+    dr-syncer.io/test: "true"
 spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
+  # Use scheduled mode for predictable testing
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *" # Run every 5 minutes
+
+  # Cluster configuration
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
+  sourceNamespace: dr-sync-test-case19
+  destinationNamespace: dr-sync-test-case19
+
+  # Resource types to sync
+  resourceTypes:
+    - PersistentVolumeClaims
+    - Deployments
+
+  # Scale deployments to zero in DR
+  scaleToZero: true
+
+  # Configure immutable resource handling
+  immutableResourceConfig:
+    defaultHandling: Recreate
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+
+  # PVC configuration with storage class mapping
+  pvcConfig:
+    preserveVolumeAttributes: false # Don't preserve volume attributes like volumeName
+    syncPersistentVolumes: false # Don't sync PVs, create new ones in DR
+
+    # Enable PVC data synchronization
+    syncData: true
+    dataSyncConfig:
+      concurrentSyncs: 1
+      timeout: "5m"
+      rsyncOptions:
+        - "--archive"
+        - "--verbose"
+        - "--human-readable"
+
+    # Storage class mapping
+    storageClassMappings:
+      - from: do-block-storage-xfs
+        to: do-block-storage-xfs

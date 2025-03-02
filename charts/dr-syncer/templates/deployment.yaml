@@ -108,10 +108,8 @@ spec:
               value: {{ .Values.agent.image.repository | quote }}
             - name: AGENT_IMAGE_TAG
               value: {{ .Values.agent.image.tag | quote }}
-            - name: RSYNC_IMAGE_REPOSITORY
-              value: {{ .Values.rsync.image.repository | quote }}
-            - name: RSYNC_IMAGE_TAG
-              value: {{ .Values.rsync.image.tag | quote }}
+            - name: DR_SYNCER_PAUSE_IMAGE
+              value: {{ .Values.pvcMount.pauseImage | quote }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
