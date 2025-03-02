@@ -406,14 +406,49 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		SubResource("exec").
 		VersionedParams(execOpts, scheme.ParameterCodec)
 
-	// Get a config, we'll try a few methods
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		// This is not great, but we need to have something to progress
+	// We need to find the REST config used by the client
+	// This is an internal structure, so we'll need to pass it
+	// Try to get the config from the client's REST client
+	var config *rest.Config
+	
+	// First try to get the config from context
+	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
+		config = configFromCtx.(*rest.Config)
+	} else if syncerFromCtx := ctx.Value("pvcsync"); syncerFromCtx != nil {
+		// Try to get config from PVCSyncer context - this needs to use type assertion to interface with required methods
+		type ConfigProvider interface {
+			GetSourceConfig() *rest.Config
+			GetDestinationConfig() *rest.Config
+		}
+		
+		if provider, ok := syncerFromCtx.(ConfigProvider); ok {
+			sourceConfig := provider.GetSourceConfig()
+			destConfig := provider.GetDestinationConfig()
+			
+			// Check which one matches our client's host
+			clientHost := client.CoreV1().RESTClient().Get().URL().Host
+			if destConfig != nil && strings.Contains(clientHost, destConfig.Host) {
+				config = destConfig
+			} else if sourceConfig != nil {
+				config = sourceConfig
+			}
+		}
+	}
+	
+	// If we still don't have a config, create one with TLS verification disabled
+	// This is not ideal but better than failing
+	if config == nil {
+		// As a last resort, use the client's REST client URL but with TLS verification disabled
 		config = &rest.Config{
 			Host:    client.CoreV1().RESTClient().Get().URL().Host,
 			APIPath: "/api",
+			TLSClientConfig: rest.TLSClientConfig{
+				Insecure: true,
+			},
 		}
+		log.WithFields(logrus.Fields{
+			"host": config.Host,
+		}).Warn("[DR-SYNC-WARN] Using fallback REST config with TLS verification disabled")
 	}
 
 	// Log the URL
