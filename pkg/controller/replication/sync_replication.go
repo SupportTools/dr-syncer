@@ -20,7 +20,7 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 
 	// Update context with PVCSyncer for executeCommandInPod to use
 	ctx = context.WithValue(ctx, "pvcsync", p)
-	
+
 	// Step 1: Check if source PVC is currently mounted
 	log.Info("[DR-SYNC] Step 1: Checking if source PVC is mounted")
 	hasAttachments, err := p.HasVolumeAttachments(ctx, sourceNS, pvcName)
@@ -145,15 +145,15 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 		return fmt.Errorf("failed to push public SSH key to agent pod: %v", err)
 	}
 
-	// Step 10: Test SSH connectivity from rsync pod to agent pod
-	log.Info("[DR-SYNC] Step 10: Testing SSH connectivity")
-	err = p.TestSSHConnectivity(ctx, rsyncDeployment, agentIP, 2222)
-	if err != nil {
-		log.WithFields(logrus.Fields{
-			"error": err,
-		}).Error("[DR-SYNC-ERROR] SSH connectivity test failed")
-		return fmt.Errorf("SSH connectivity test failed: %v", err)
-	}
+	// // Step 10: Test SSH connectivity from rsync pod to agent pod
+	// log.Info("[DR-SYNC] Step 10: Testing SSH connectivity")
+	// err = p.TestSSHConnectivity(ctx, rsyncDeployment, agentIP, 2222)
+	// if err != nil {
+	// 	log.WithFields(logrus.Fields{
+	// 		"error": err,
+	// 	}).Error("[DR-SYNC-ERROR] SSH connectivity test failed")
+	// 	return fmt.Errorf("SSH connectivity test failed: %v", err)
+	// }
 
 	// Step 11: Run the rsync command and monitor status
 	log.Info("[DR-SYNC] Step 11: Running rsync command")

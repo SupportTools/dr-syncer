@@ -1,16 +1,25 @@
-FROM alpine:latest
+FROM ubuntu:20.04
 
-# Install required packages
-RUN apk add --no-cache \
-    openssh-server \
-    openssh-client \
-    rsync \
-    bash \
-    curl
+# Prevent apt from asking questions during installation
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Configure SSH for root
+# Update package lists and install required packages (split for better debugging)
+RUN apt-get update -q && \
+    apt-get install -y --no-install-recommends openssh-server && \
+    apt-get install -y --no-install-recommends rsync && \
+    apt-get install -y --no-install-recommends netcat && \
+    apt-get install -y --no-install-recommends util-linux && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Configure SSH for root with proper permissions
 RUN mkdir -p /root/.ssh && \
     chmod 700 /root/.ssh
+
+# Create log directories with proper permissions
+RUN mkdir -p /var/log && \
+    touch /var/log/console.log /var/log/ssh-command-handler.log && \
+    chmod 644 /var/log/console.log /var/log/ssh-command-handler.log
 
 # Configure SSH for proxy and rsync
 COPY build/sshd_config /etc/ssh/sshd_config
@@ -19,12 +28,25 @@ COPY build/ssh-command-handler.sh /build/ssh-command-handler.sh
 
 # Set permissions
 RUN chmod +x /entrypoint.sh && \
+    chmod +x /build/ssh-command-handler.sh && \
     chown root:root /etc/ssh/sshd_config && \
-    chmod 644 /etc/ssh/sshd_config
+    chmod 644 /etc/ssh/sshd_config && \
+    mkdir -p /run/sshd
 
-# Create required directories
-RUN mkdir -p /run/sshd /var/lib/kubelet
+# Create required directories for operation
+RUN mkdir -p /var/lib/kubelet /data && \
+    chmod 755 /data 
 
+# Generate SSH host keys
+RUN ssh-keygen -A
+
+# Label the image for better identification
+LABEL maintainer="DR-Syncer Team" \
+      description="DR-Syncer Agent with enhanced logging (Ubuntu-based)" \
+      version="1.0"
+
+# Expose SSH port for the agent
 EXPOSE 2222
 
+# Start the container with our entrypoint script
 ENTRYPOINT ["/entrypoint.sh"]

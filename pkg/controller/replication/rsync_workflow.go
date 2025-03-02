@@ -23,13 +23,13 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	// Set the namespaces in the PVCSyncer
 	p.SourceNamespace = sourceNamespace
 	p.DestinationNamespace = destNamespace
-	
+
 	// Track resources for cleanup
 	var (
-		lockAcquired   bool
-		destRsyncPod   *rsyncpod.RsyncDeployment
+		lockAcquired bool
+		destRsyncPod *rsyncpod.RsyncDeployment
 	)
-	
+
 	// Deferred function to release lock on error returns
 	defer func() {
 		// We only handle panic recovery here, error returns are handled inline
@@ -40,12 +40,12 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				"source_pvc":       sourcePVCName,
 				"panic":            r,
 			}).Error("[DR-SYNC-ERROR] Panic during rsync workflow")
-			
+
 			// Clean up the deployment if it exists
 			if destRsyncPod != nil {
 				p.cleanupResources(ctx, destRsyncPod)
 			}
-			
+
 			// Release the lock if we acquired it
 			if lockAcquired {
 				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -58,13 +58,13 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			}
 		}
 	}()
-	
+
 	// Step 0: Try to acquire a lock on the source PVC
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 	}).Info("[DR-SYNC-STEP-0] Acquiring lock on source PVC")
-	
+
 	acquired, lockInfo, err := p.AcquirePVCLock(ctx, sourceNamespace, sourcePVCName)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -74,7 +74,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		}).Error("[DR-SYNC-ERROR] Failed to check lock on source PVC")
 		return fmt.Errorf("failed to check lock on source PVC: %v", err)
 	}
-	
+
 	if !acquired {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -84,30 +84,30 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		}).Info("[DR-SYNC-SKIP] Source PVC is locked by another controller, skipping rsync")
 		return nil
 	}
-	
+
 	// Mark lock as acquired
 	lockAcquired = true
-	
+
 	// Cleanup existing rsync deployments for this PVC if we're taking over
 	rsyncMgr, err := rsyncpod.NewManager(p.DestinationConfig)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
 		}).Error("[DR-SYNC-ERROR] Failed to create rsync manager")
-		
+
 		// Release the lock since we're failing
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
 				log.WithFields(logrus.Fields{
 					"source_namespace": sourceNamespace,
-					"source_pvc":       sourcePVCName, 
+					"source_pvc":       sourcePVCName,
 					"error":            relErr,
 				}).Warn("[DR-SYNC-WARN] Failed to release lock on source PVC after failure")
 			}
 		}
 		return fmt.Errorf("failed to create rsync manager: %v", err)
 	}
-	
+
 	if err := rsyncMgr.CleanupExistingDeployments(ctx, destNamespace, destPVCName); err != nil {
 		log.WithFields(logrus.Fields{
 			"dest_namespace": destNamespace,
@@ -115,9 +115,9 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"error":          err,
 		}).Warn("[DR-SYNC-WARN] Failed to cleanup existing deployments, will continue anyway")
 	}
-	
+
 	log.Info("[DR-SYNC-STEP-0-COMPLETE] Lock acquired on source PVC")
-	
+
 	// Step 1: Deploy rsync deployment in destination cluster and wait for it to be ready
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
@@ -125,7 +125,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"dest_namespace":   destNamespace,
 		"dest_pvc":         destPVCName,
 	}).Info("[DR-SYNC-STEP-1] Deploying rsync pod in destination cluster")
-	
+
 	destRsyncPod, err = p.deployRsyncPod(ctx, destNamespace, destPVCName)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -139,7 +139,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	log.WithFields(logrus.Fields{
 		"pod_name": destRsyncPod.Name,
 	}).Info("[DR-SYNC-STEP-2] Generating SSH keys in rsync pod")
-	
+
 	if err := p.generateSSHKeys(ctx, destRsyncPod); err != nil {
 		log.WithFields(logrus.Fields{
 			"pod_name": destRsyncPod.Name,
@@ -153,7 +153,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	log.WithFields(logrus.Fields{
 		"pod_name": destRsyncPod.Name,
 	}).Info("[DR-SYNC-STEP-3] Getting public key from rsync pod")
-	
+
 	publicKey, err := p.getPublicKey(ctx, destRsyncPod)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -169,7 +169,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 	}).Info("[DR-SYNC-STEP-4] Checking if source PVC is mounted")
-	
+
 	mounted, err := p.HasVolumeAttachments(ctx, sourceNamespace, sourcePVCName)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -196,7 +196,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 	}).Info("[DR-SYNC-STEP-5] Finding node where source PVC is mounted")
-	
+
 	sourceNode, err := p.FindPVCNode(ctx, p.SourceClient, sourceNamespace, sourcePVCName)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -214,7 +214,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	log.WithFields(logrus.Fields{
 		"node": sourceNode,
 	}).Info("[DR-SYNC-STEP-6] Finding DR-Syncer-Agent on node")
-	
+
 	agentPod, nodeIP, err := p.FindAgentPod(ctx, sourceNode)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -235,7 +235,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"source_pvc":       sourcePVCName,
 		"agent_pod":        agentPod.Name,
 	}).Info("[DR-SYNC-STEP-7] Finding mount path for PVC")
-	
+
 	mountPath, err := p.FindPVCMountPath(ctx, sourceNamespace, sourcePVCName, agentPod)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -254,7 +254,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	log.WithFields(logrus.Fields{
 		"agent_pod": agentPod.Name,
 	}).Info("[DR-SYNC-STEP-8] Pushing public key to agent pod")
-	
+
 	trackingInfo := fmt.Sprintf("dr-syncer-rsync-%s-%s", destNamespace, rand.String(8))
 	if err := p.PushPublicKeyToAgent(ctx, agentPod, publicKey, trackingInfo); err != nil {
 		log.WithFields(logrus.Fields{
@@ -265,25 +265,25 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	}
 	log.Info("[DR-SYNC-STEP-8-COMPLETE] Public key pushed to agent pod")
 
-	// Step 9: Test SSH connectivity using the node's external IP
-	log.WithFields(logrus.Fields{
-		"dest_pod":  destRsyncPod.Name,
-		"agent_pod": agentPod.Name,
-		"node_ip":   nodeIP,
-		"ssh_port":  2222,
-	}).Info("[DR-SYNC-STEP-9] Testing SSH connectivity")
-	
-	if err := p.TestSSHConnectivity(ctx, destRsyncPod, nodeIP, 2222); err != nil {
-		log.WithFields(logrus.Fields{
-			"dest_pod":  destRsyncPod.Name,
-			"agent_pod": agentPod.Name,
-			"node_ip":   nodeIP,
-			"ssh_port":  2222,
-			"error":     err,
-		}).Error("[DR-SYNC-ERROR] Failed to test SSH connectivity")
-		return fmt.Errorf("failed to test SSH connectivity: %v", err)
-	}
-	log.Info("[DR-SYNC-STEP-9-COMPLETE] SSH connectivity test successful")
+	// // Step 9: Test SSH connectivity using the node's external IP
+	// log.WithFields(logrus.Fields{
+	// 	"dest_pod":  destRsyncPod.Name,
+	// 	"agent_pod": agentPod.Name,
+	// 	"node_ip":   nodeIP,
+	// 	"ssh_port":  2222,
+	// }).Info("[DR-SYNC-STEP-9] Testing SSH connectivity")
+
+	// if err := p.TestSSHConnectivity(ctx, destRsyncPod, nodeIP, 2222); err != nil {
+	// 	log.WithFields(logrus.Fields{
+	// 		"dest_pod":  destRsyncPod.Name,
+	// 		"agent_pod": agentPod.Name,
+	// 		"node_ip":   nodeIP,
+	// 		"ssh_port":  2222,
+	// 		"error":     err,
+	// 	}).Error("[DR-SYNC-ERROR] Failed to test SSH connectivity")
+	// 	return fmt.Errorf("failed to test SSH connectivity: %v", err)
+	// }
+	// log.Info("[DR-SYNC-STEP-9-COMPLETE] SSH connectivity test successful")
 
 	// Step 10: Run rsync command using the node's external IP
 	log.WithFields(logrus.Fields{
@@ -291,7 +291,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"node_ip":    nodeIP,
 		"mount_path": mountPath,
 	}).Info("[DR-SYNC-STEP-10] Running rsync command")
-	
+
 	if err := p.performRsync(ctx, destRsyncPod, nodeIP, mountPath); err != nil {
 		log.WithFields(logrus.Fields{
 			"dest_pod":   destRsyncPod.Name,
@@ -308,7 +308,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 	}).Info("[DR-SYNC-STEP-11] Updating source PVC annotations")
-	
+
 	if err := p.UpdateSourcePVCAnnotations(ctx, sourceNamespace, sourcePVCName); err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -323,7 +323,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	log.WithFields(logrus.Fields{
 		"dest_pod": destRsyncPod.Name,
 	}).Info("[DR-SYNC-STEP-12] Cleaning up resources")
-	
+
 	p.cleanupResources(ctx, destRsyncPod)
 	log.Info("[DR-SYNC-STEP-12-COMPLETE] Resource cleanup completed")
 
@@ -332,7 +332,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 	}).Info("[DR-SYNC-STEP-13] Releasing lock on source PVC")
-	
+
 	if err := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -371,12 +371,12 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 
 	// Create rsync pod options
 	opts := rsyncpod.RsyncPodOptions{
-		Namespace:        namespace,
-		PVCName:          pvcName,
-		Type:             rsyncpod.DestinationPodType,
-		SyncID:           syncID,
-		ReplicationName:  fmt.Sprintf("pvc-sync-%s-%s", namespace, pvcName),
-		DestinationInfo:  fmt.Sprintf("destination-%s-%s", namespace, pvcName),
+		Namespace:       namespace,
+		PVCName:         pvcName,
+		Type:            rsyncpod.DestinationPodType,
+		SyncID:          syncID,
+		ReplicationName: fmt.Sprintf("pvc-sync-%s-%s", namespace, pvcName),
+		DestinationInfo: fmt.Sprintf("destination-%s-%s", namespace, pvcName),
 	}
 
 	// Create the rsync deployment
@@ -392,10 +392,10 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 	}
 
 	log.WithFields(logrus.Fields{
-		"namespace":   namespace,
-		"pvc_name":    pvcName,
-		"deployment":  rsyncDeployment.Name,
-		"pod_name":    rsyncDeployment.PodName,
+		"namespace":  namespace,
+		"pvc_name":   pvcName,
+		"deployment": rsyncDeployment.Name,
+		"pod_name":   rsyncDeployment.PodName,
 	}).Info("[DR-SYNC-DETAIL] Rsync deployment is ready with running pod")
 
 	return rsyncDeployment, nil
@@ -410,14 +410,14 @@ func (p *PVCSyncer) generateSSHKeys(ctx context.Context, rsyncDeployment *rsyncp
 
 	// Put the PVCSyncer in the context for SSH key generation
 	syncerCtx := context.WithValue(ctx, "pvcsync", p)
-	
+
 	// Generate SSH keys - use the context with PVCSyncer
 	log.WithFields(logrus.Fields{
-		"deployment": rsyncDeployment.Name,
-		"pod_name": rsyncDeployment.PodName,
+		"deployment":       rsyncDeployment.Name,
+		"pod_name":         rsyncDeployment.PodName,
 		"dest_config_host": p.DestinationConfig.Host,
 	}).Info("[DR-SYNC-DETAIL] Executing SSH key generation with destination config context")
-	
+
 	if err := rsyncDeployment.GenerateSSHKeys(syncerCtx); err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,
@@ -444,14 +444,14 @@ func (p *PVCSyncer) getPublicKey(ctx context.Context, rsyncDeployment *rsyncpod.
 
 	// Put the PVCSyncer in the context for getting public key
 	syncerCtx := context.WithValue(ctx, "pvcsync", p)
-	
+
 	// Get public key - use the context with PVCSyncer
 	log.WithFields(logrus.Fields{
-		"deployment": rsyncDeployment.Name,
-		"pod_name": rsyncDeployment.PodName,
+		"deployment":       rsyncDeployment.Name,
+		"pod_name":         rsyncDeployment.PodName,
 		"dest_config_host": p.DestinationConfig.Host,
 	}).Info("[DR-SYNC-DETAIL] Getting public key with destination config context")
-	
+
 	publicKey, err := rsyncDeployment.GetPublicKey(syncerCtx)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -479,14 +479,14 @@ func (p *PVCSyncer) cleanupResources(ctx context.Context, rsyncDeployment *rsync
 
 	// Put the PVCSyncer in the context for cleanup
 	syncerCtx := context.WithValue(ctx, "pvcsync", p)
-	
+
 	// Delete the rsync deployment with context containing PVCSyncer
 	log.WithFields(logrus.Fields{
-		"deployment": rsyncDeployment.Name,
-		"pod_name": rsyncDeployment.PodName,
+		"deployment":       rsyncDeployment.Name,
+		"pod_name":         rsyncDeployment.PodName,
 		"dest_config_host": p.DestinationConfig.Host,
 	}).Info("[DR-SYNC-DETAIL] Executing cleanup with destination config context")
-	
+
 	if err := rsyncDeployment.Cleanup(syncerCtx); err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,

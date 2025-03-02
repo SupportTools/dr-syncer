@@ -24,8 +24,6 @@ SyslogFacility AUTH
 LogLevel INFO
 
 # SSH proxy configuration
-# Allow both rsync and proxy commands
-ForceCommand /bin/bash /usr/local/bin/ssh-command-handler.sh
 AllowUsers root
 GatewayPorts yes
 StreamLocalBindUnlink yes

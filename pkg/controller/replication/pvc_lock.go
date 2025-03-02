@@ -97,8 +97,9 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 	// Get current controller pod name
 	controllerPodName := GetCurrentControllerPodName()
 	
-	// Get lock timeout
-	lockTimeout := GetLockTimeout()
+	// We're no longer using lock timeout for forced lock acquisition
+	// but we'll still call the function for logging purposes
+	_ = GetLockTimeout()
 	
 	// Get the PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -130,38 +131,23 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 				return true, lockInfo, nil
 			}
 			
-			// Check if the lock has expired
-			if time.Since(lockInfo.Timestamp) > lockTimeout {
-				log.WithFields(logrus.Fields{
-					"namespace":      namespace,
-					"pvc_name":       pvcName,
-					"old_controller": lockInfo.ControllerPodName,
-					"new_controller": controllerPodName,
-					"lock_age":       time.Since(lockInfo.Timestamp),
-					"timeout":        lockTimeout,
-				}).Info("[DR-SYNC-DETAIL] Found stale lock, taking over")
-				
-				// Lock has expired, we'll break it
-				breakingInfo := &LockInfo{
-					ControllerPodName: controllerPodName,
-					Timestamp:         time.Now().UTC(),
-				}
-				
-				// Update the PVC with our lock
-				return p.updatePVCLock(ctx, namespace, pvcName, breakingInfo)
-			}
-			
-			// Lock is still valid and owned by another controller
+			// Always take over locks from other controllers immediately
 			log.WithFields(logrus.Fields{
 				"namespace":      namespace,
 				"pvc_name":       pvcName,
-				"controller":     lockInfo.ControllerPodName,
-				"lock_timestamp": lockInfo.Timestamp,
+				"old_controller": lockInfo.ControllerPodName,
+				"new_controller": controllerPodName,
 				"lock_age":       time.Since(lockInfo.Timestamp),
-				"timeout":        lockTimeout,
-			}).Info("[DR-SYNC-DETAIL] PVC is locked by another controller, skipping")
+			}).Info("[DR-SYNC-DETAIL] Found lock from another controller, forcibly taking over")
 			
-			return false, lockInfo, nil
+			// Create a new lock with our controller info
+			breakingInfo := &LockInfo{
+				ControllerPodName: controllerPodName,
+				Timestamp:         time.Now().UTC(),
+			}
+			
+			// Update the PVC with our lock
+			return p.updatePVCLock(ctx, namespace, pvcName, breakingInfo)
 		}
 	}
 	

@@ -375,6 +375,46 @@ func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, opera
 	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)
 }
 
+// Enhanced loggers that ensure logs go to both log files and stdout/stderr
+type OutputCapture struct {
+	// The original buffer
+	buffer *bytes.Buffer
+	// The kind of output (stdout/stderr)
+	kind string
+	// Command info for logging
+	podName string
+	namespace string
+	command string
+}
+
+func (o *OutputCapture) Write(p []byte) (n int, err error) {
+	// First, write to the buffer
+	n, err = o.buffer.Write(p)
+	if err != nil {
+		return n, err
+	}
+	
+	// Then log to the logger with a prefix
+	output := string(p)
+	
+	// Use different log levels for stdout vs stderr
+	fields := logrus.Fields{
+		"pod":       o.podName,
+		"namespace": o.namespace,
+		"command":   o.command,
+		"output":    output,
+		"type":      o.kind,
+	}
+	
+	if o.kind == "stdout" {
+		log.WithFields(fields).Info(fmt.Sprintf("[REMOTE-EXEC-OUT] %s", strings.TrimSpace(output)))
+	} else {
+		log.WithFields(fields).Warn(fmt.Sprintf("[REMOTE-EXEC-ERR] %s", strings.TrimSpace(output)))
+	}
+	
+	return n, nil
+}
+
 // ExecuteCommandInPod executes a command in a pod using the Kubernetes API
 // This is exported so it can be used by other packages
 func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string) (string, string, error) {
@@ -383,10 +423,14 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 	}
 
 	commandStr := strings.Join(command, " ")
+	commandId := fmt.Sprintf("cmd-%s", rand.String(6))
+	
 	log.WithFields(logrus.Fields{
-		"pod":       podName,
-		"namespace": namespace,
-		"command":   commandStr,
+		"pod":         podName,
+		"namespace":   namespace,
+		"command":     commandStr,
+		"command_id":  commandId, 
+		"timestamp":   time.Now().Format(time.RFC3339),
 	}).Info("[DR-SYNC-EXEC] Executing command in pod")
 
 	// Set up the ExecOptions for the command
@@ -413,7 +457,8 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
 		config = configFromCtx.(*rest.Config)
 		log.WithFields(logrus.Fields{
-			"host": config.Host,
+			"host":       config.Host,
+			"command_id": commandId,
 		}).Info("[DR-SYNC-INFO] Using explicit config from context")
 	} 
 	
@@ -440,32 +485,36 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 			if clientHost == srcHost {
 				config = provider.GetSourceConfig()
 				log.WithFields(logrus.Fields{
-					"host": config.Host,
+					"host":       config.Host,
 					"client_host": clientHost,
+					"command_id": commandId,
 				}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
 			} else if clientHost == destHost {
 				config = provider.GetDestinationConfig()
 				log.WithFields(logrus.Fields{
-					"host": config.Host,
+					"host":       config.Host,
 					"client_host": clientHost,
+					"command_id": commandId,
 				}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
 			} else {
 				// If no direct match, use simple heuristic - dest for rsync operations
 				if provider.GetDestinationConfig() != nil {
 					config = provider.GetDestinationConfig()
 					log.WithFields(logrus.Fields{
-						"host": config.Host,
+						"host":       config.Host,
 						"client_host": clientHost,
-						"src_host": srcHost,
-						"dest_host": destHost,
+						"src_host":   srcHost,
+						"dest_host":  destHost,
+						"command_id": commandId,
 					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (no direct match)")
 				} else if provider.GetSourceConfig() != nil {
 					config = provider.GetSourceConfig()
 					log.WithFields(logrus.Fields{
-						"host": config.Host,
+						"host":       config.Host,
 						"client_host": clientHost,
-						"src_host": srcHost,
-						"dest_host": destHost,
+						"src_host":   srcHost,
+						"dest_host":  destHost,
+						"command_id": commandId,
 					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (no direct match)")
 				}
 			}
@@ -479,26 +528,61 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 
 	// Log the URL
 	log.WithFields(logrus.Fields{
-		"url": req.URL().String(),
+		"url":        req.URL().String(),
+		"command_id": commandId,
 	}).Debug("[DR-SYNC-EXEC] Preparing execution URL")
 
 	// Create a SPDY executor
 	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
 	if err != nil {
 		log.WithFields(logrus.Fields{
-			"error": err,
+			"error":      err,
+			"command_id": commandId,
 		}).Error("[DR-SYNC-ERROR] Failed to create SPDY executor")
 		return "", "", &RetryableError{Err: fmt.Errorf("failed to create SPDY executor: %v", err)}
 	}
 
-	// Create buffers for stdout and stderr
-	var stdout, stderr bytes.Buffer
+	// Create buffers for stdout and stderr with enhanced logging capability
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	stdout := &OutputCapture{
+		buffer:    &stdoutBuffer,
+		kind:      "stdout",
+		podName:   podName,
+		namespace: namespace,
+		command:   commandStr,
+	}
+	stderr := &OutputCapture{
+		buffer:    &stderrBuffer,
+		kind:      "stderr",
+		podName:   podName,
+		namespace: namespace,
+		command:   commandStr,
+	}
 
 	// Execute the command
+	log.WithFields(logrus.Fields{
+		"command_id": commandId,
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}).Info("[DR-SYNC-EXEC] Starting command execution...")
+	
 	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Stdout: stdout,
+		Stderr: stderr,
 	})
+
+	// Generate execution summary regardless of whether the command succeeded
+	summary := fmt.Sprintf("Command execution summary (ID: %s):\n"+
+		"Pod: %s/%s\n"+
+		"Command: %s\n"+
+		"Exit Code: %v\n"+
+		"Stdout Size: %d bytes\n"+
+		"Stderr Size: %d bytes\n"+
+		"Execution Time: %s",
+		commandId, namespace, podName, commandStr, 
+		err != nil, stdoutBuffer.Len(), stderrBuffer.Len(),
+		time.Now().Format(time.RFC3339))
+	
+	log.Info("[DR-SYNC-EXEC-SUMMARY] " + summary)
 
 	// Check for errors
 	if err != nil {
@@ -506,36 +590,41 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		if strings.Contains(err.Error(), "connection refused") || 
 		   strings.Contains(err.Error(), "connection reset") || 
 		   strings.Contains(err.Error(), "broken pipe") {
-			return stdout.String(), stderr.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
+			return stdoutBuffer.String(), stderrBuffer.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
 		}
 		
 		log.WithFields(logrus.Fields{
-			"error":  err,
-			"stderr": stderr.String(),
+			"error":      err,
+			"stderr":     stderrBuffer.String(),
+			"command_id": commandId,
+			"timestamp":  time.Now().Format(time.RFC3339),
 		}).Error("[DR-SYNC-ERROR] Failed to execute command")
-		return stdout.String(), stderr.String(), fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderr.String())
+		return stdoutBuffer.String(), stderrBuffer.String(), fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderrBuffer.String())
 	}
 
 	// Log completion
 	log.WithFields(logrus.Fields{
-		"pod":       podName,
-		"namespace": namespace,
-		"command":   commandStr,
-		"stdout_len": stdout.Len(),
-		"stderr_len": stderr.Len(),
-	}).Debug("[DR-SYNC-EXEC] Command execution completed")
+		"pod":        podName,
+		"namespace":  namespace,
+		"command":    commandStr,
+		"stdout_len": stdoutBuffer.Len(),
+		"stderr_len": stderrBuffer.Len(),
+		"command_id": commandId,
+		"timestamp":  time.Now().Format(time.RFC3339),
+	}).Info("[DR-SYNC-EXEC] Command execution completed successfully")
 
 	// If there's content in stderr but no error was returned, log it as a warning
-	if stderr.Len() > 0 && err == nil {
+	if stderrBuffer.Len() > 0 && err == nil {
 		log.WithFields(logrus.Fields{
-			"pod":       podName,
-			"namespace": namespace,
-			"command":   commandStr,
-			"stderr":    stderr.String(),
+			"pod":        podName,
+			"namespace":  namespace,
+			"command":    commandStr,
+			"stderr":     stderrBuffer.String(),
+			"command_id": commandId,
 		}).Warn("[DR-SYNC-EXEC] Command produced stderr output but no error")
 	}
 
-	return stdout.String(), stderr.String(), nil
+	return stdoutBuffer.String(), stderrBuffer.String(), nil
 }
 
 // GenerateSSHKeys generates SSH keys in the deployment's pod
