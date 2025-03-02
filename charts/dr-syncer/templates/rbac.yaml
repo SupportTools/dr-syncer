@@ -19,12 +19,15 @@ rules:
 - apiGroups:
   - "dr-syncer.io"
   resources:
-  - replications
-  - replications/status
-  - replications/finalizers
   - remoteclusters
   - remoteclusters/status
   - remoteclusters/finalizers
+  - namespacemappings
+  - namespacemappings/status
+  - namespacemappings/finalizers
+  - clustermappings
+  - clustermappings/status
+  - clustermappings/finalizers
   verbs:
   - get
   - list
