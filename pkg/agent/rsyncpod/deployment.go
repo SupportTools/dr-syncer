@@ -1,8 +1,10 @@
 package rsyncpod
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -10,10 +12,68 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 )
+
+var log = logrus.WithField("component", "rsyncpod")
+
+// PodType defines the type of rsync pod (source or destination)
+type PodType string
+
+const (
+	// SourcePodType is used for pods that serve as the source for rsync
+	SourcePodType PodType = "source"
+	
+	// DestinationPodType is used for pods that serve as the destination for rsync
+	DestinationPodType PodType = "destination"
+)
+
+// RsyncPodOptions defines options for creating an rsync pod
+type RsyncPodOptions struct {
+	// Namespace is the namespace to create the pod in
+	Namespace string
+	
+	// PVCName is the name of the PVC to mount
+	PVCName string
+	
+	// NodeName is the node to schedule the pod on (optional)
+	NodeName string
+	
+	// Type is the type of rsync pod (source or destination)
+	Type PodType
+	
+	// SyncID is a unique identifier for this sync operation
+	SyncID string
+	
+	// ReplicationName is the name of the replication resource
+	ReplicationName string
+	
+	// DestinationInfo is additional information about the destination
+	DestinationInfo string
+}
+
+// Manager manages rsync operations
+type Manager struct {
+	// client is the Kubernetes client
+	client kubernetes.Interface
+}
+
+// NewManager creates a new rsync pod manager
+func NewManager(config *rest.Config) (*Manager, error) {
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes client: %v", err)
+	}
+	
+	return &Manager{
+		client: client,
+	}, nil
+}
 
 // RsyncDeployment represents an rsync deployment
 type RsyncDeployment struct {
@@ -31,6 +91,9 @@ type RsyncDeployment struct {
 
 	// PVCName is the name of the PVC being synced
 	PVCName string
+	
+	// SyncID is a unique identifier for this sync operation
+	SyncID string
 }
 
 // CreateRsyncDeployment creates a new rsync deployment
@@ -175,13 +238,14 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 		Namespace: createdDeployment.Namespace,
 		client:    m.client,
 		PVCName:   opts.PVCName,
+		SyncID:    opts.SyncID,
 	}
 	
 	return rsyncDeployment, nil
 }
 
-// WaitForDeploymentReady waits for the deployment pod to be ready
-func (d *RsyncDeployment) WaitForDeploymentReady(ctx context.Context, timeout time.Duration) error {
+// WaitForPodReady waits for the deployment's pod to be ready - new signature that's compatible with rsync controller
+func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Duration) error {
 	log.WithFields(logrus.Fields{
 		"deployment": d.Name,
 		"namespace":  d.Namespace,
@@ -192,7 +256,7 @@ func (d *RsyncDeployment) WaitForDeploymentReady(ctx context.Context, timeout ti
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	
-	// Poll until the deployment is available or timeout
+	// Poll until a pod is ready or timeout
 	var podName string
 	err := wait.PollUntilContextCancel(timeoutCtx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		// Get the deployment
@@ -202,59 +266,53 @@ func (d *RsyncDeployment) WaitForDeploymentReady(ctx context.Context, timeout ti
 				"deployment": d.Name,
 				"namespace":  d.Namespace,
 				"error":      err,
-			}).Warn("[DR-SYNC-DETAIL] Failed to get deployment while waiting for ready state")
+			}).Warn("[DR-SYNC] Failed to get deployment")
+			return false, nil
+		}
+
+		// Check if deployment is available
+		if deployment.Status.AvailableReplicas == 0 {
+			log.WithFields(logrus.Fields{
+				"deployment":        d.Name,
+				"namespace":         d.Namespace,
+				"available_replicas": deployment.Status.AvailableReplicas,
+				"ready_replicas":    deployment.Status.ReadyReplicas,
+			}).Debug("[DR-SYNC] Deployment not yet ready")
+			return false, nil
+		}
+
+		// Get pods for this deployment
+		labelSelector := metav1.FormatLabelSelector(deployment.Spec.Selector)
+		pods, err := d.client.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+		
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"deployment": d.Name,
+				"namespace":  d.Namespace,
+				"error":      err,
+			}).Warn("[DR-SYNC-DETAIL] Failed to list pods for deployment")
 			return false, nil
 		}
 		
-		// Check if deployment is available
-		for _, condition := range deployment.Status.Conditions {
-			if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
+		// Find a running pod
+		for _, pod := range pods.Items {
+			if pod.Status.Phase == corev1.PodRunning {
+				podName = pod.Name
 				log.WithFields(logrus.Fields{
 					"deployment": d.Name,
 					"namespace":  d.Namespace,
-				}).Info("[DR-SYNC-DETAIL] Deployment is available, checking for running pod")
-				
-				// Get the pods for this deployment
-				labelSelector := fmt.Sprintf("app.kubernetes.io/name=dr-syncer-rsync,dr-syncer.io/pvc-name=%s", sanitizeNameForLabel(d.PVCName))
-				pods, err := d.client.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{
-					LabelSelector: labelSelector,
-				})
-				
-				if err != nil {
-					log.WithFields(logrus.Fields{
-						"deployment": d.Name,
-						"namespace":  d.Namespace,
-						"error":      err,
-					}).Warn("[DR-SYNC-DETAIL] Failed to list pods for deployment")
-					return false, nil
-				}
-				
-				// Find a running pod
-				for _, pod := range pods.Items {
-					if pod.Status.Phase == corev1.PodRunning {
-						podName = pod.Name
-						log.WithFields(logrus.Fields{
-							"deployment": d.Name,
-							"namespace":  d.Namespace,
-							"pod":        podName,
-						}).Info("[DR-SYNC-DETAIL] Found running pod for deployment")
-						return true, nil
-					}
-				}
-				
-				log.WithFields(logrus.Fields{
-					"deployment": d.Name,
-					"namespace":  d.Namespace,
-				}).Info("[DR-SYNC-DETAIL] Deployment is available but no running pods found yet")
-				return false, nil
+					"pod":        podName,
+				}).Info("[DR-SYNC-DETAIL] Found running pod for deployment")
+				return true, nil
 			}
 		}
 		
 		log.WithFields(logrus.Fields{
 			"deployment": d.Name,
 			"namespace":  d.Namespace,
-			"status":     deployment.Status,
-		}).Debug("[DR-SYNC-DETAIL] Deployment not ready yet, waiting...")
+		}).Info("[DR-SYNC-DETAIL] Deployment is available but no running pods found yet")
 		return false, nil
 	})
 	
@@ -274,10 +332,155 @@ func (d *RsyncDeployment) WaitForDeploymentReady(ctx context.Context, timeout ti
 	return nil
 }
 
+// RetryableError represents an error that can be retried
+type RetryableError struct {
+	Err error
+}
+
+func (e *RetryableError) Error() string {
+	return e.Err.Error()
+}
+
+// withRetry executes a function with retries
+func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, operation func() error) error {
+	var err error
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = operation()
+		if err == nil {
+			return nil
+		}
+		
+		// Check if error is retryable
+		if _, ok := err.(*RetryableError); !ok {
+			return err // Non-retryable error, return immediately
+		}
+		
+		// Log retry attempt
+		log.WithFields(logrus.Fields{
+			"attempt": attempt + 1,
+			"max_retries": maxRetries,
+			"error": err,
+		}).Info("[DR-SYNC-RETRY] Operation failed, retrying...")
+		
+		// Wait before retrying with exponential backoff
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff * time.Duration(1<<attempt)):
+			// Continue to next attempt
+		}
+	}
+	
+	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)
+}
+
+// ExecuteCommandInPod executes a command in a pod using the Kubernetes API
+// This is exported so it can be used by other packages
+func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string) (string, string, error) {
+	if client == nil {
+		return "", "", fmt.Errorf("kubernetes client is nil")
+	}
+
+	commandStr := strings.Join(command, " ")
+	log.WithFields(logrus.Fields{
+		"pod":       podName,
+		"namespace": namespace,
+		"command":   commandStr,
+	}).Info("[DR-SYNC-EXEC] Executing command in pod")
+
+	// Set up the ExecOptions for the command
+	execOpts := &corev1.PodExecOptions{
+		Command: command,
+		Stdin:   false,
+		Stdout:  true,
+		Stderr:  true,
+		TTY:     false,
+	}
+
+	// Create the URL for the exec request
+	req := client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(execOpts, scheme.ParameterCodec)
+
+	// Get a config, we'll try a few methods
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		// This is not great, but we need to have something to progress
+		config = &rest.Config{
+			Host:    client.CoreV1().RESTClient().Get().URL().Host,
+			APIPath: "/api",
+		}
+	}
+
+	// Log the URL
+	log.WithFields(logrus.Fields{
+		"url": req.URL().String(),
+	}).Debug("[DR-SYNC-EXEC] Preparing execution URL")
+
+	// Create a SPDY executor
+	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"error": err,
+		}).Error("[DR-SYNC-ERROR] Failed to create SPDY executor")
+		return "", "", &RetryableError{Err: fmt.Errorf("failed to create SPDY executor: %v", err)}
+	}
+
+	// Create buffers for stdout and stderr
+	var stdout, stderr bytes.Buffer
+
+	// Execute the command
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	// Check for errors
+	if err != nil {
+		// Determine if the error is retryable
+		if strings.Contains(err.Error(), "connection refused") || 
+		   strings.Contains(err.Error(), "connection reset") || 
+		   strings.Contains(err.Error(), "broken pipe") {
+			return stdout.String(), stderr.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
+		}
+		
+		log.WithFields(logrus.Fields{
+			"error":  err,
+			"stderr": stderr.String(),
+		}).Error("[DR-SYNC-ERROR] Failed to execute command")
+		return stdout.String(), stderr.String(), fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderr.String())
+	}
+
+	// Log completion
+	log.WithFields(logrus.Fields{
+		"pod":       podName,
+		"namespace": namespace,
+		"command":   commandStr,
+		"stdout_len": stdout.Len(),
+		"stderr_len": stderr.Len(),
+	}).Debug("[DR-SYNC-EXEC] Command execution completed")
+
+	// If there's content in stderr but no error was returned, log it as a warning
+	if stderr.Len() > 0 && err == nil {
+		log.WithFields(logrus.Fields{
+			"pod":       podName,
+			"namespace": namespace,
+			"command":   commandStr,
+			"stderr":    stderr.String(),
+		}).Warn("[DR-SYNC-EXEC] Command produced stderr output but no error")
+	}
+
+	return stdout.String(), stderr.String(), nil
+}
+
 // GenerateSSHKeys generates SSH keys in the deployment's pod
 func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context) error {
 	if d.PodName == "" {
-		return fmt.Errorf("no pod found for deployment, ensure WaitForDeploymentReady was called")
+		return fmt.Errorf("no pod found for deployment, ensure WaitForPodReady was called")
 	}
 	
 	log.WithFields(logrus.Fields{
@@ -293,7 +496,7 @@ func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context) error {
 	}
 	
 	// Execute command in pod to generate SSH keys
-	stdout, stderr, err := executeCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
+	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"pod":    d.PodName,
@@ -314,7 +517,7 @@ func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context) error {
 // GetPublicKey gets the public key from the deployment's pod
 func (d *RsyncDeployment) GetPublicKey(ctx context.Context) (string, error) {
 	if d.PodName == "" {
-		return "", fmt.Errorf("no pod found for deployment, ensure WaitForDeploymentReady was called")
+		return "", fmt.Errorf("no pod found for deployment, ensure WaitForPodReady was called")
 	}
 	
 	log.WithFields(logrus.Fields{
@@ -329,7 +532,7 @@ func (d *RsyncDeployment) GetPublicKey(ctx context.Context) (string, error) {
 	}
 	
 	// Execute command in pod to get public key
-	stdout, stderr, err := executeCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
+	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"pod":    d.PodName,
@@ -346,22 +549,18 @@ func (d *RsyncDeployment) GetPublicKey(ctx context.Context) (string, error) {
 	return stdout, nil
 }
 
-// Cleanup deletes the deployment
-func (d *RsyncDeployment) Cleanup(ctx context.Context, gracePeriodSeconds int64) error {
+// Cleanup deletes the deployment - new signature with no grace period
+func (d *RsyncDeployment) Cleanup(ctx context.Context) error {
 	log.WithFields(logrus.Fields{
-		"deployment":           d.Name,
-		"namespace":            d.Namespace,
-		"grace_period_seconds": gracePeriodSeconds,
-	}).Info("[DR-SYNC-DETAIL] Cleaning up rsync deployment")
-	
-	deleteOptions := metav1.DeleteOptions{}
-	if gracePeriodSeconds >= 0 {
-		deleteOptions.GracePeriodSeconds = &gracePeriodSeconds
+		"deployment": d.Name,
+		"namespace":  d.Namespace,
+	}).Info("[DR-SYNC] Cleaning up rsync deployment")
+
+	// Set foreground deletion to ensure pods are deleted first
+	deletePolicy := metav1.DeletePropagationForeground
+	deleteOptions := metav1.DeleteOptions{
+		PropagationPolicy: &deletePolicy,
 	}
-	
-	// Set foreground deletion to ensure pods are deleted
-	deletionPropagation := metav1.DeletePropagationForeground
-	deleteOptions.PropagationPolicy = &deletionPropagation
 	
 	err := d.client.AppsV1().Deployments(d.Namespace).Delete(ctx, d.Name, deleteOptions)
 	if err != nil {

@@ -264,6 +264,13 @@ spec:
                       DataSyncConfig defines configuration for PVC data synchronization.
                       Only used when SyncData is true.
                     properties:
+                      bandwidthLimit:
+                        description: |-
+                          BandwidthLimit sets a maximum transfer rate in kilobytes per second.
+                          This is passed to rsync as --bwlimit=<value>.
+                        format: int32
+                        minimum: 0
+                        type: integer
                       concurrentSyncs:
                         default: 2
                         description: ConcurrentSyncs is the maximum number of concurrent

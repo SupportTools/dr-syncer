@@ -1,53 +1,53 @@
-# PVC Data Replication Test
+# PVC Replication Test Case
 
-This test verifies the functionality of PVC data replication between clusters. It tests the ability to synchronize the actual data inside Persistent Volume Claims from a source cluster to a destination cluster using the enhanced PVC mounting and rsync functionality.
+This test case verifies the PVC replication functionality using the rsync deployment controller.
 
-## What this test does
+## Test Overview
 
-1. Creates a namespace and PVCs in both source and destination clusters
-2. Creates a pod in the source cluster that writes various test data to the source PVC:
-   - Simple text files
-   - Large binary files (1MB)
-   - Nested directory structures
-   - Files with special characters
-   - Symlinks
-   - Files with different permissions
-3. Creates a replication resource with `syncData: true` and enhanced rsync options
-4. Triggers the replication process
-5. Creates a pod in the destination cluster to read data from the destination PVC
-6. Performs comprehensive verification of the replicated data:
-   - Content verification for text files
-   - Checksum verification for binary files
-   - Directory structure verification
-   - Symlink preservation verification
-   - File permission preservation verification
-7. Verifies replication status and statistics
+This test simulates a disaster recovery scenario where persistent volume data needs to be replicated from a source cluster to a destination cluster. It tests the complete flow of:
 
-## Components tested
+1. Deploying an rsync deployment on the destination cluster and namespace
+2. Starting with a pod in a waiting state
+3. Generating SSH keys and establishing secure connectivity between clusters
+4. Finding the source PVC mount path
+5. Performing data synchronization using rsync
+6. Verifying successful replication of data
 
-- PVC data synchronization using rsync with enhanced options
-- SSH key management for secure data transfer
-- Node affinity for optimal PVC mounting
-- Resource management for mount pods
-- Replication status updates for PVC sync operations
-- Error handling and recovery
-- File metadata preservation (permissions, symlinks)
+## What This Test Validates
 
-## Enhanced Features Tested
+- PVC discovery in source cluster
+- Node selection where the PVC is mounted
+- Agent pod discovery on source node
+- Deployment creation on destination cluster
+- SSH key generation and exchange
+- Rsync data transfer process
+- Annotation updates on source PVC
 
-- Node affinity for PVC mounting
-- Resource limits for mount pods
-- Improved error handling and logging
-- Configurable rsync options
-- Comprehensive data verification
+## Test Steps
 
-## Expected outcome
+1. **Setup**: Creates namespaces, PVCs, and a pod in the source cluster that writes test data
+2. **Deploy**: Applies a NamespaceMapping CR to trigger PVC replication
+3. **Verify**: Creates a test pod in the destination cluster to verify data was replicated correctly
+4. **Cleanup**: Removes all test resources
 
-The test is successful if all aspects of the data written to the source PVC are correctly replicated to the destination PVC, including:
-- File content
-- File sizes
-- Directory structures
-- Symlinks
-- File permissions
+## Usage
 
-This demonstrates that the enhanced PVC data synchronization mechanism works as expected and preserves all important file attributes.
+Run this test directly:
+
+```bash
+./test.sh
+```
+
+Or as part of the test suite:
+
+```bash
+../run-tests.sh 19_pvc-replication
+```
+
+## Expected Output
+
+Successful test execution will show:
+- Creation of test resources
+- Progress of replication process
+- Verification that test data was successfully replicated
+- "✅ PVC replication test passed!" message

@@ -132,37 +132,14 @@ func (p *PVCSyncer) FindPVCNode(ctx context.Context, client client.Client, names
 		}
 	}
 
-	// If a ready node is found, create a temporary pod to mount the PVC
+	// If a ready node is found, use it directly (no need for a temporary pod)
 	if readyNode != "" {
 		log.WithFields(logrus.Fields{
 			"namespace": namespace,
 			"pvc_name":  pvcName,
 			"node_name": readyNode,
-		}).Info("Creating temporary pod to mount PVC")
-
-		tempPod, err := p.CreateTempPodForPVC(ctx, namespace, pvcName, readyNode)
-		if err != nil {
-			log.WithFields(logrus.Fields{
-				"namespace": namespace,
-				"pvc_name":  pvcName,
-				"node_name": readyNode,
-				"error":     err,
-			}).Error("Failed to create temporary pod")
-			// Continue with the ready node even if we couldn't create a temp pod
-			return readyNode, nil
-		}
-
-		// Clean up the pod when we're done with it
-		defer func() {
-			if err := p.CleanupTempPod(ctx, namespace, tempPod.Name); err != nil {
-				log.WithFields(logrus.Fields{
-					"namespace": namespace,
-					"pod_name":  tempPod.Name,
-					"error":     err,
-				}).Error("Failed to clean up temporary pod")
-			}
-		}()
-
+		}).Info("Using ready node for PVC operation")
+		
 		return readyNode, nil
 	}
 

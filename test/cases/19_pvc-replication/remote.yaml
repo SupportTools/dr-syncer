@@ -1,59 +1,30 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: controller-cluster
+spec:
+  kubeConfigSecret:
+    name: controller-kubeconfig
+    namespace: dr-syncer
+  agentEnabled: true
+  agentOptions:
+    image: supporttools/dr-syncer-agent:latest
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    # SSH port on which agent listens for rsync connections
+    sshPort: 2222
 ---
 apiVersion: v1
-kind: Namespace
+kind: Secret
 metadata:
-  name: dr-sync-test-case19
-  labels:
-    dr-syncer.io/test-case: "19"
-    dr-syncer.io/test-name: "pvc-replication"
-    dr-syncer.io/test: "true"
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: test-deployment
-  namespace: dr-sync-test-case19
-  labels:
-    app: test-app
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: test-app
-  template:
-    metadata:
-      labels:
-        app: test-app
-    spec:
-      containers:
-        - name: busybox
-          image: busybox:latest
-          resources:
-            requests:
-              cpu: "119m"
-              memory: "128Mi"
-            limits:
-              cpu: "519m"
-              memory: "256Mi"
-          command: ["/bin/sh", "-c", "while true; do date >> /data/timestamp.log; sleep 60; done"]
-          volumeMounts:
-            - name: test-volume
-              mountPath: /data
-      volumes:
-        - name: test-volume
-          persistentVolumeClaim:
-            claimName: test-pvc
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-pvc
-  namespace: dr-sync-test-case19
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: do-block-storage-xfs
----
+  name: controller-kubeconfig
+  namespace: dr-syncer
+type: Opaque
+data:
+  kubeconfig: REPLACE_WITH_BASE64_ENCODED_KUBECONFIG

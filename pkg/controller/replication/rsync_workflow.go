@@ -387,7 +387,7 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 
 	// Wait for the deployment to be ready
 	timeout := 5 * time.Minute
-	if err := rsyncDeployment.WaitForDeploymentReady(ctx, timeout); err != nil {
+	if err := rsyncDeployment.WaitForPodReady(ctx, timeout); err != nil {
 		return nil, fmt.Errorf("timeout waiting for rsync deployment to be ready: %v", err)
 	}
 
@@ -459,11 +459,8 @@ func (p *PVCSyncer) cleanupResources(ctx context.Context, rsyncDeployment *rsync
 		"pod_name":   rsyncDeployment.PodName,
 	}).Info("[DR-SYNC-DETAIL] Cleaning up resources")
 
-	// Give the deployment a grace period of 30 seconds
-	gracePeriod := int64(30)
-
 	// Delete the rsync deployment
-	if err := rsyncDeployment.Cleanup(ctx, gracePeriod); err != nil {
+	if err := rsyncDeployment.Cleanup(ctx); err != nil {
 		log.WithFields(logrus.Fields{
 			"deployment": rsyncDeployment.Name,
 			"pod_name":   rsyncDeployment.PodName,

@@ -110,6 +110,12 @@ type PVCDataSyncConfig struct {
 	// +optional
 	RsyncOptions []string `json:"rsyncOptions,omitempty"`
 
+	// BandwidthLimit sets a maximum transfer rate in kilobytes per second.
+	// This is passed to rsync as --bwlimit=<value>.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	BandwidthLimit *int32 `json:"bandwidthLimit,omitempty"`
+
 	// Timeout is the maximum time to wait for a sync operation to complete.
 	// +optional
 	// +kubebuilder:default="30m"
@@ -133,6 +139,11 @@ func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 		in, out := &in.RsyncOptions, &out.RsyncOptions
 		*out = make([]string, len(*in))
 		copy(*out, *in)
+	}
+	if in.BandwidthLimit != nil {
+		in, out := &in.BandwidthLimit, &out.BandwidthLimit
+		*out = new(int32)
+		**out = **in
 	}
 	if in.Timeout != nil {
 		in, out := &in.Timeout, &out.Timeout

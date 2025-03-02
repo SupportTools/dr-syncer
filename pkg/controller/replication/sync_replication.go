@@ -66,14 +66,14 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 		return fmt.Errorf("failed to find mount path for source PVC: %v", err)
 	}
 
-	// Step 5: Create rsync pod on the destination cluster and namespace
-	log.Info("[DR-SYNC] Step 5: Deploying rsync pod on destination cluster")
+	// Step 5: Create rsync deployment on the destination cluster and namespace
+	log.Info("[DR-SYNC] Step 5: Deploying rsync deployment on destination cluster")
 	rsyncMgr, err := rsyncpod.NewManager(p.DestinationConfig)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
-		}).Error("[DR-SYNC-ERROR] Failed to create rsync pod manager")
-		return fmt.Errorf("failed to create rsync pod manager: %v", err)
+		}).Error("[DR-SYNC-ERROR] Failed to create rsync manager")
+		return fmt.Errorf("failed to create rsync manager: %v", err)
 	}
 
 	opts := rsyncpod.RsyncPodOptions{
@@ -84,39 +84,39 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 		ReplicationName: pvcName,
 	}
 
-	// Create the rsync pod that mounts the destination PVC
-	rsyncPod, err := rsyncMgr.CreateRsyncPod(ctx, opts)
+	// Create the rsync deployment that mounts the destination PVC
+	rsyncDeployment, err := rsyncMgr.CreateRsyncDeployment(ctx, opts)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
-		}).Error("[DR-SYNC-ERROR] Failed to create rsync pod on destination cluster")
-		return fmt.Errorf("failed to create rsync pod on destination cluster: %v", err)
+		}).Error("[DR-SYNC-ERROR] Failed to create rsync deployment on destination cluster")
+		return fmt.Errorf("failed to create rsync deployment on destination cluster: %v", err)
 	}
 
-	// Ensure we clean up the rsync pod at the end
+	// Ensure we clean up the rsync deployment at the end
 	defer func() {
-		log.Info("[DR-SYNC] Cleaning up rsync pod")
-		cleanupErr := rsyncPod.Cleanup(ctx, 30)
+		log.Info("[DR-SYNC] Cleaning up rsync deployment")
+		cleanupErr := rsyncDeployment.Cleanup(ctx)
 		if cleanupErr != nil {
 			log.WithFields(logrus.Fields{
 				"error": cleanupErr,
-			}).Error("[DR-SYNC-ERROR] Failed to cleanup rsync pod")
+			}).Error("[DR-SYNC-ERROR] Failed to cleanup rsync deployment")
 		}
 	}()
 
-	// Step 6: Wait for the rsync pod to be ready
-	log.Info("[DR-SYNC] Step 6: Waiting for rsync pod to become ready")
-	err = rsyncPod.WaitForPodReady(ctx, 5*time.Minute)
+	// Step 6: Wait for the rsync deployment's pod to be ready
+	log.Info("[DR-SYNC] Step 6: Waiting for rsync deployment to become ready")
+	err = rsyncDeployment.WaitForPodReady(ctx, 5*time.Minute)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
-		}).Error("[DR-SYNC-ERROR] Rsync pod failed to become ready")
-		return fmt.Errorf("rsync pod failed to become ready: %v", err)
+		}).Error("[DR-SYNC-ERROR] Rsync deployment failed to become ready")
+		return fmt.Errorf("rsync deployment failed to become ready: %v", err)
 	}
 
-	// Step 7: Generate SSH keys in the rsync pod
+	// Step 7: Generate SSH keys in the rsync deployment's pod
 	log.Info("[DR-SYNC] Step 7: Generating SSH keys in rsync pod")
-	err = rsyncPod.GenerateSSHKeys(ctx)
+	err = rsyncDeployment.GenerateSSHKeys(ctx)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
@@ -124,9 +124,9 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 		return fmt.Errorf("failed to generate SSH keys in rsync pod: %v", err)
 	}
 
-	// Step 8: Get the public SSH key from the rsync pod
+	// Step 8: Get the public SSH key from the rsync deployment's pod
 	log.Info("[DR-SYNC] Step 8: Getting public SSH key from rsync pod")
-	publicKey, err := rsyncPod.GetPublicKey(ctx)
+	publicKey, err := rsyncDeployment.GetPublicKey(ctx)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
@@ -147,15 +147,7 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 
 	// Step 10: Test SSH connectivity from rsync pod to agent pod
 	log.Info("[DR-SYNC] Step 10: Testing SSH connectivity")
-	// We need to adapt our TestSSHConnectivity method to work with the RsyncPod type
-	// Create a temporary RsyncDeployment struct with needed fields
-	tempDeployment := &rsyncpod.RsyncDeployment{
-		Name:      rsyncPod.Name,
-		Namespace: rsyncPod.Namespace,
-		PodName:   rsyncPod.Name,
-	}
-	
-	err = p.TestSSHConnectivity(ctx, tempDeployment, agentIP, 2222)
+	err = p.TestSSHConnectivity(ctx, rsyncDeployment, agentIP, 2222)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
@@ -165,7 +157,7 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 
 	// Step 11: Run the rsync command and monitor status
 	log.Info("[DR-SYNC] Step 11: Running rsync command")
-	err = p.performRsync(ctx, tempDeployment, agentIP, mountPath)
+	err = p.performRsync(ctx, rsyncDeployment, agentIP, mountPath)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,

@@ -1,54 +1,50 @@
 apiVersion: dr-syncer.io/v1alpha1
 kind: NamespaceMapping
 metadata:
-  name: pvc-replication
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "19"
-    dr-syncer.io/test-name: "pvc-replication"
-    dr-syncer.io/test: "true"
+  name: pvc-replication-test
+  annotations:
+    dr-syncer.io/description: "Test case for PVC replication with rsync deployment"
 spec:
-  # Use scheduled mode for predictable testing
-  replicationMode: Scheduled
-  schedule: "*/5 * * * *" # Run every 5 minutes
-
-  # Cluster configuration
-  clusterMappingRef:
-    name: nyc3-to-sfo3
-    namespace: dr-syncer
-  sourceNamespace: dr-sync-test-case19
-  destinationNamespace: dr-sync-test-case19
-
-  # Resource types to sync
-  resourceTypes:
-    - PersistentVolumeClaims
-    - Deployments
-
-  # Scale deployments to zero in DR
-  scaleToZero: true
-
-  # Configure immutable resource handling
-  immutableResourceConfig:
-    defaultHandling: Recreate
-    drainTimeout: 5m
-    forceDeleteTimeout: 2m
-
-  # PVC configuration with storage class mapping
+  # Source and destination namespace settings
+  sourceNamespace: pvc-source-ns
+  destinationNamespace: pvc-dest-ns
+  
+  # Replication mode: Manual, Scheduled, or Continuous
+  replicationMode: Manual
+  
+  # PVC configuration
   pvcConfig:
-    preserveVolumeAttributes: false # Don't preserve volume attributes like volumeName
-    syncPersistentVolumes: false # Don't sync PVs, create new ones in DR
-
-    # Enable PVC data synchronization
+    # Enable data synchronization for PVCs
     syncData: true
+    
+    # Detailed configuration for PVC data synchronization
     dataSyncConfig:
-      concurrentSyncs: 1
-      timeout: "5m"
+      # Limit bandwidth usage for rsync (in KB/s)
+      bandwidthLimit: 5000
+      
+      # Additional rsync options for fine-grained control
       rsyncOptions:
-        - "--archive"
-        - "--verbose"
-        - "--human-readable"
-
-    # Storage class mapping
+        - --archive
+        - --verbose
+        - --delete
+        - --human-readable
+        - --checksum
+      
+      # Exclude certain paths from synchronization
+      excludePaths:
+        - tmp/**
+        - cache/**
+      
+      # Set maximum number of concurrent PVC syncs
+      concurrentSyncs: 2
+      
+      # Maximum time to wait for sync operation to complete
+      timeout: "2h"
+      
+    # Storage class mappings (if needed)
     storageClassMappings:
-      - from: do-block-storage-xfs
-        to: do-block-storage-xfs
+      - from: standard
+        to: standard-dest
+        
+    # Preserve volume attributes for better fidelity
+    preserveVolumeAttributes: true

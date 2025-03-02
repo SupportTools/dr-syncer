@@ -1,8 +1,10 @@
 package replication
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,7 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
@@ -334,9 +338,55 @@ func (p *PVCSyncer) PushPublicKeyToAgent(ctx context.Context, agentPod *corev1.P
 	return nil
 }
 
+// RetryableError represents an error that can be retried
+type RetryableError struct {
+	Err error
+}
+
+func (e *RetryableError) Error() string {
+	return e.Err.Error()
+}
+
+// withRetry executes a function with retries
+func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, operation func() error) error {
+	var err error
+	
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = operation()
+		if err == nil {
+			return nil
+		}
+		
+		// Check if error is retryable
+		if _, ok := err.(*RetryableError); !ok {
+			return err // Non-retryable error, return immediately
+		}
+		
+		// Log retry attempt
+		log.WithFields(logrus.Fields{
+			"attempt": attempt + 1,
+			"max_retries": maxRetries,
+			"error": err,
+		}).Info("Operation failed, retrying...")
+		
+		// Wait before retrying with exponential backoff
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff * time.Duration(1<<attempt)):
+			// Continue to next attempt
+		}
+	}
+	
+	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)
+}
+
 // executeCommandInPod executes a command in a pod
-// This is a temporary implementation for testing, in production this would use the Kubernetes API
 func executeCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string) (string, string, error) {
+	if client == nil {
+		return "", "", fmt.Errorf("kubernetes client is nil")
+	}
+
 	commandStr := strings.Join(command, " ")
 	log.WithFields(logrus.Fields{
 		"pod":       podName,
@@ -344,82 +394,116 @@ func executeCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		"command":   commandStr,
 	}).Info("[DR-SYNC-EXEC] Executing command in pod")
 
-	// Real implementation would use client and execute the command
-	// For now, we're using this implementation to make sure the data flow is correct
-
-	// Simulate command execution based on the command
-	if strings.Contains(commandStr, "findmnt") {
-		// Return a real PVC mount path for debugging
-		mountPath := "/var/lib/kubelet/pods/52a8de79-9e31-4449-b13c-e9dc2dc28b6d/volumes/kubernetes.io~csi/pvc-d57edf20-1b06-4333-b5bc-f647be5a1b2f/mount"
-		log.WithFields(logrus.Fields{
-			"mount_path": mountPath,
-		}).Info("[DR-SYNC-EXEC] Found PVC mount path")
-		return mountPath, "", nil
-	} else if strings.Contains(commandStr, "mkdir -p ~/.ssh") {
-		// Return success for adding the SSH key
-		log.Info("[DR-SYNC-EXEC] Added SSH key to authorized_keys")
-		return "Key added successfully", "", nil
-	} else if strings.Contains(commandStr, "ssh") && !strings.Contains(commandStr, "rsync") {
-		// Return success for SSH command (but not for rsync which uses ssh)
-		log.Info("[DR-SYNC-EXEC] SSH connection test successful")
-		return "SSH connectivity test\nConnection successful", "", nil
-	} else if strings.Contains(commandStr, "rsync") {
-		// Extract the source and destination paths for logging
-		rsyncParts := strings.Split(commandStr, " ")
-		var sourcePath, destPath string
-		
-		for i, part := range rsyncParts {
-			if strings.Contains(part, "root@") && i+1 < len(rsyncParts) {
-				sourcePath = part
-				destPath = rsyncParts[i+1]
-				break
-			}
-		}
-		
-		// Log the rsync details
-		log.WithFields(logrus.Fields{
-			"source_path": sourcePath,
-			"dest_path":   destPath,
-		}).Info("[DR-SYNC-EXEC] Rsync details")
-		
-		// Simulate rsync output
-		output := `sending incremental file list
-./
-file1.txt
-          1,024 100%    0.00kB/s    0:00:00 (xfr#1, to-chk=99/101)
-file2.txt
-         10,240 100%   10.00MB/s    0:00:00 (xfr#2, to-chk=98/101)
-dir1/
-dir1/subfile1.txt
-          8,192 100%    8.00MB/s    0:00:00 (xfr#3, to-chk=96/101)
-...
-sent 1,048,576 bytes  received 2,048 bytes  699,082.67 bytes/sec
-total size is 5,242,880  speedup is 4.99`
-
-		// Log each line of rsync output
-		lines := strings.Split(output, "\n")
-		for i, line := range lines {
-			if len(line) > 0 {
-				log.WithFields(logrus.Fields{
-					"line_num": i + 1,
-					"content":  line,
-				}).Info("[DR-SYNC-OUTPUT] Rsync output line")
-			}
-		}
-		
-		return output, "", nil
+	// Set up the ExecOptions for the command
+	execOpts := &corev1.PodExecOptions{
+		Command: command,
+		Stdin:   false,
+		Stdout:  true,
+		Stderr:  true,
+		TTY:     false,
 	}
 
-	// Default success response
-	log.Info("[DR-SYNC-EXEC] Command executed successfully")
-	return "Command executed successfully", "", nil
+	// Create the URL for the exec request
+	req := client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(execOpts, scheme.ParameterCodec)
+
+	// Get the config from context or use PVCSyncer configs
+	var config *rest.Config
+	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
+		config = configFromCtx.(*rest.Config)
+	} else {
+		// Try to get config from PVCSyncer context
+		if syncerFromCtx := ctx.Value("pvcsync"); syncerFromCtx != nil {
+			syncer := syncerFromCtx.(*PVCSyncer)
+			
+			// Determine if this is the source or destination cluster
+			if strings.HasPrefix(namespace, syncer.SourceNamespace) {
+				config = syncer.SourceConfig
+			} else {
+				config = syncer.DestinationConfig
+			}
+		}
+		
+		// If still nil, create a default config
+		if config == nil {
+			var err error
+			config, err = rest.InClusterConfig()
+			if err != nil {
+				return "", "", fmt.Errorf("unable to get config for remote execution: %v", err)
+			}
+		}
+	}
+
+	// Log the URL
+	log.WithFields(logrus.Fields{
+		"url": req.URL().String(),
+	}).Debug("[DR-SYNC-EXEC] Preparing execution URL")
+
+	// Create a SPDY executor
+	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"error": err,
+		}).Error("[DR-SYNC-ERROR] Failed to create SPDY executor")
+		return "", "", &RetryableError{Err: fmt.Errorf("failed to create SPDY executor: %v", err)}
+	}
+
+	// Create buffers for stdout and stderr
+	var stdout, stderr bytes.Buffer
+
+	// Execute the command
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	// Check for errors
+	if err != nil {
+		// Determine if the error is retryable
+		if strings.Contains(err.Error(), "connection refused") || 
+		   strings.Contains(err.Error(), "connection reset") || 
+		   strings.Contains(err.Error(), "broken pipe") {
+			return stdout.String(), stderr.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
+		}
+		
+		log.WithFields(logrus.Fields{
+			"error":  err,
+			"stderr": stderr.String(),
+		}).Error("[DR-SYNC-ERROR] Failed to execute command")
+		return stdout.String(), stderr.String(), fmt.Errorf("failed to execute command: %v, stderr: %s", err, stderr.String())
+	}
+
+	// Log completion
+	log.WithFields(logrus.Fields{
+		"pod":       podName,
+		"namespace": namespace,
+		"command":   commandStr,
+		"stdout_len": stdout.Len(),
+		"stderr_len": stderr.Len(),
+	}).Debug("[DR-SYNC-EXEC] Command execution completed")
+
+	// If there's content in stderr but no error was returned, log it as a warning
+	if stderr.Len() > 0 && err == nil {
+		log.WithFields(logrus.Fields{
+			"pod":       podName,
+			"namespace": namespace,
+			"command":   commandStr,
+			"stderr":    stderr.String(),
+		}).Warn("[DR-SYNC-EXEC] Command produced stderr output but no error")
+	}
+
+	return stdout.String(), stderr.String(), nil
 }
 
 // AddPublicKeyToSourceAgent adds a public key to the agent in the source cluster
 func (p *PVCSyncer) AddPublicKeyToSourceAgent(ctx context.Context, publicKey, trackingInfo string) error {
 	log.WithFields(logrus.Fields{
 		"tracking_info": trackingInfo,
-	}).Info("Adding public key to agent in source cluster")
+	}).Info("[DR-SYNC] Adding public key to agent in source cluster")
 
 	// Find the agent pod in the source cluster
 	podList, err := p.SourceK8sClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
@@ -438,7 +522,7 @@ func (p *PVCSyncer) AddPublicKeyToSourceAgent(ctx context.Context, publicKey, tr
 	log.WithFields(logrus.Fields{
 		"pod":       agentPod.Name,
 		"namespace": agentPod.Namespace,
-	}).Info("Found agent pod in source cluster")
+	}).Info("[DR-SYNC] Found agent pod in source cluster")
 
 	// Create command to add the public key to the agent's authorized_keys file
 	cmd := []string{
@@ -448,36 +532,21 @@ func (p *PVCSyncer) AddPublicKeyToSourceAgent(ctx context.Context, publicKey, tr
 			publicKey, trackingInfo),
 	}
 
-	// Prepare the command execution
-	// Note: We're not actually executing the command in this implementation
-	// This is just to show how it would be done
-	_ = p.SourceK8sClient.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(agentPod.Name).
-		Namespace(agentPod.Namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Command: cmd,
-			Stdin:   false,
-			Stdout:  true,
-			Stderr:  true,
-			TTY:     false,
-		}, metav1.ParameterCodec)
+	// Execute the command in the agent pod
+	stdout, stderr, err := executeCommandInPod(ctx, p.SourceK8sClient, agentPod.Namespace, agentPod.Name, cmd)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"stderr": stderr,
+			"error":  err,
+		}).Error("[DR-SYNC-ERROR] Failed to add public key to agent pod")
+		return fmt.Errorf("failed to add public key to agent pod: %v", err)
+	}
 
-	// TODO: Implement proper command execution
-	// For now, we'll just log that we would execute the command
 	log.WithFields(logrus.Fields{
 		"pod":       agentPod.Name,
 		"namespace": agentPod.Namespace,
-		"command":   strings.Join(cmd, " "),
-	}).Info("Would execute command in agent pod")
-
-	// In a real implementation, we would execute the command and check the result
-	// For now, we'll just return success
-	log.WithFields(logrus.Fields{
-		"pod":       agentPod.Name,
-		"namespace": agentPod.Namespace,
-	}).Info("Successfully added public key to agent pod")
+		"stdout":    stdout,
+	}).Info("[DR-SYNC] Successfully added public key to agent pod")
 
 	return nil
 }
@@ -487,14 +556,39 @@ func (p *PVCSyncer) CompleteNamespaceMappingPVCSync(ctx context.Context, repl *d
 	log.WithFields(logrus.Fields{
 		"namespacemapping": repl.Name,
 		"sync_id":          syncID,
-	}).Info("Updating namespace mapping status after PVC sync")
+	}).Info("[DR-SYNC] Updating namespace mapping status after PVC sync")
 
-	// In a real implementation, we would update the namespace mapping status
-	// For now, we'll just log that we would update the status
+	// Get the latest version of the namespace mapping
+	var nm drv1alpha1.NamespaceMapping
+	err := p.DestinationClient.Get(ctx, client.ObjectKey{Name: repl.Name}, &nm)
+	if err != nil {
+		return fmt.Errorf("failed to get namespace mapping: %v", err)
+	}
+
+	// Update the status
+	now := metav1.Now()
+	
+	// Initialize annotations if not present
+	if nm.Annotations == nil {
+		nm.Annotations = make(map[string]string)
+	}
+	
+	// Update annotations with sync information
+	nm.Annotations["dr-syncer.io/last-pvc-sync-time"] = now.Format(time.RFC3339)
+	nm.Annotations["dr-syncer.io/last-pvc-sync-id"] = syncID
+	nm.Annotations["dr-syncer.io/last-pvc-sync-status"] = "Completed"
+
+	// Update the namespace mapping
+	err = p.DestinationClient.Update(ctx, &nm)
+	if err != nil {
+		return fmt.Errorf("failed to update namespace mapping status: %v", err)
+	}
+
 	log.WithFields(logrus.Fields{
 		"namespacemapping": repl.Name,
 		"sync_id":          syncID,
-	}).Info("Would update namespace mapping status")
+		"sync_time":        now.Format(time.RFC3339),
+	}).Info("[DR-SYNC] Successfully updated namespace mapping status")
 
 	return nil
 }
@@ -503,13 +597,60 @@ func (p *PVCSyncer) CompleteNamespaceMappingPVCSync(ctx context.Context, repl *d
 func (p *PVCSyncer) ScheduleNextPVCSync(ctx context.Context, repl *drv1alpha1.NamespaceMapping) error {
 	log.WithFields(logrus.Fields{
 		"namespacemapping": repl.Name,
-	}).Info("Scheduling next PVC sync")
+	}).Info("[DR-SYNC] Scheduling next PVC sync")
 
-	// In a real implementation, we would schedule the next sync based on the namespace mapping's schedule
-	// For now, we'll just log that we would schedule the next sync
+	// Get the latest version of the namespace mapping
+	var nm drv1alpha1.NamespaceMapping
+	err := p.DestinationClient.Get(ctx, client.ObjectKey{Name: repl.Name}, &nm)
+	if err != nil {
+		return fmt.Errorf("failed to get namespace mapping: %v", err)
+	}
+
+	// Calculate next sync time based on schedule
+	var nextSyncTime metav1.Time
+	
+	// Default to 24 hours from now if no schedule is specified
+	nextSyncTime = metav1.NewTime(time.Now().Add(24 * time.Hour))
+	
+	// If schedule is specified, parse and use it
+	if repl.Spec.Schedule != "" {
+		// Simple schedule parser (enhance as needed)
+		// Format: "interval:value" e.g. "hours:6" or "minutes:30"
+		parts := strings.Split(repl.Spec.Schedule, ":")
+		if len(parts) == 2 {
+			unit := parts[0]
+			value, err := strconv.Atoi(parts[1])
+			if err == nil {
+				switch strings.ToLower(unit) {
+				case "minutes":
+					nextSyncTime = metav1.NewTime(time.Now().Add(time.Duration(value) * time.Minute))
+				case "hours":
+					nextSyncTime = metav1.NewTime(time.Now().Add(time.Duration(value) * time.Hour))
+				case "days":
+					nextSyncTime = metav1.NewTime(time.Now().Add(time.Duration(value) * 24 * time.Hour))
+				}
+			}
+		}
+	}
+
+	// Initialize annotations if not present
+	if nm.Annotations == nil {
+		nm.Annotations = make(map[string]string)
+	}
+	
+	// Update annotation with next sync time
+	nm.Annotations["dr-syncer.io/next-pvc-sync-time"] = nextSyncTime.Format(time.RFC3339)
+
+	// Update the namespace mapping
+	err = p.DestinationClient.Update(ctx, &nm)
+	if err != nil {
+		return fmt.Errorf("failed to update namespace mapping with next sync time: %v", err)
+	}
+
 	log.WithFields(logrus.Fields{
 		"namespacemapping": repl.Name,
-	}).Info("Would schedule next PVC sync")
+		"next_sync_time":   nextSyncTime.Format(time.RFC3339),
+	}).Info("[DR-SYNC] Successfully scheduled next PVC sync")
 
 	return nil
 }
@@ -684,9 +825,9 @@ func (p *PVCSyncer) HasVolumeAttachments(ctx context.Context, namespace, pvcName
 }
 
 // RunSSHCommand runs an SSH command from the rsync pod to the agent pod
-func (p *PVCSyncer) RunSSHCommand(ctx context.Context, rsyncPod *rsyncpod.RsyncPod, agentIP string, port int, command string) (string, error) {
+func (p *PVCSyncer) RunSSHCommand(ctx context.Context, rsyncDeployment *rsyncpod.RsyncDeployment, agentIP string, port int, command string) (string, error) {
 	log.WithFields(logrus.Fields{
-		"rsync_pod": rsyncPod.Name,
+		"rsync_pod": rsyncDeployment.PodName,
 		"agent_ip":  agentIP,
 		"port":      port,
 		"command":   command,
@@ -697,7 +838,7 @@ func (p *PVCSyncer) RunSSHCommand(ctx context.Context, rsyncPod *rsyncpod.RsyncP
 	cmd := []string{"sh", "-c", sshCommand}
 
 	// Execute command in rsync pod
-	stdout, stderr, err := executeCommandInPod(ctx, p.DestinationK8sClient, rsyncPod.Namespace, rsyncPod.Name, cmd)
+	stdout, stderr, err := rsyncpod.ExecuteCommandInPod(ctx, p.DestinationK8sClient, rsyncDeployment.Namespace, rsyncDeployment.PodName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"stderr": stderr,
