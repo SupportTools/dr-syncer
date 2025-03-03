@@ -60,6 +60,14 @@
 
    # Generate CRDs (remoteclusters and replications)
    controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
+   
+   # Create kubeconfig directory
+   mkdir -p kubeconfig
+   
+   # Setup kubeconfig files for different environments
+   # - controller: Controller cluster kubeconfig
+   # - dr: DR cluster kubeconfig
+   # - prod: Production cluster kubeconfig
    ```
 
 ### Build Process
@@ -70,12 +78,34 @@
 
 2. Running Tests
    ```bash
+   # Run tests with default verbosity
    go test ./...
+   
+   # Run tests with verbose output
+   go test -v ./...
    ```
 
 3. CRD Generation
    ```bash
    controller-gen crd paths="./..." output:crd:artifacts:config=config/crd/bases
+   ```
+
+4. Makefile Options
+   ```bash
+   # Build with minimal output
+   make build
+   
+   # Build with verbose output
+   make build DEBUG=1
+   
+   # Deploy to controller cluster
+   make deploy-local
+   
+   # Deploy to DR cluster
+   make deploy-dr
+   
+   # Deploy to production cluster
+   make deploy-prod
    ```
 
 ## Deployment
@@ -120,6 +150,24 @@
    kubectl apply -f config/rbac/
    ```
 
+## PVC Sync Components
+
+1. Agent Container
+   - Base: Alpine Linux
+   - Key packages:
+     * OpenSSH server
+     * rsync
+     * bash
+   - Configuration:
+     * Custom SSH port
+     * Restricted shell access
+     * rsync-only commands
+
+2. Build Process
+   - Separate agent image build
+   - Version alignment with controller
+   - Multi-stage build optimization
+
 ## Technical Constraints
 
 1. Resource Limitations
@@ -156,12 +204,21 @@
    │   ├── remotecluster/     # RemoteCluster controller
    │   └── replication/       # Replication controller
    ├── pkg/
-   │   ├── config/
-   │   └── logging/
+   │   ├── config/            # Configuration management
+   │   └── logging/           # Logging setup and adapters
+   │       ├── logging.go     # Logrus logger setup
+   │       └── controller_runtime.go # Controller-runtime integration
    └── charts/
        └── dr-syncer/
            └── crds/          # Generated CRDs
    ```
+
+2. Logging Integration
+   - Logrus for application logging
+   - Controller-runtime logging integration via custom adapter
+   - LogrusLogAdapter implements logr.LogSink interface
+   - Centralized logging configuration
+   - Debug mode support via environment variables
 
 2. Testing Strategy
    - Unit tests for business logic

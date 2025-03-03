@@ -1,0 +1,1 @@
+command="if [[ \"${SSH_ORIGINAL_COMMAND}\" == \"test-connection\" ]]; then echo 'SSH proxy connection successful'; elif [[ \"${SSH_ORIGINAL_COMMAND}\" == rsync* ]]; then /usr/bin/rsync ${SSH_ORIGINAL_COMMAND#rsync}; else echo 'Unauthorized command' >&2; exit 1; fi" %s

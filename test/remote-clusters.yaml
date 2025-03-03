@@ -3,6 +3,7 @@ apiVersion: dr-syncer.io/v1alpha1
 kind: RemoteCluster
 metadata:
   name: dr-syncer-nyc3
+  namespace: dr-syncer
 spec:
   kubeconfigSecretRef:
     name: dr-syncer-nyc3-kubeconfig
@@ -14,11 +15,38 @@ spec:
     - deployments
     - services
     - ingresses
+  pvcSync:
+    enabled: true
+    image:
+      repository: docker.io/supporttools/dr-syncer-agent
+      tag: latest
+      pullPolicy: Always
+    ssh:
+      port: 2222
+    concurrency: 3
+    deployment:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+      priorityClassName: "system-node-critical"
+      privileged: true
 ---
 apiVersion: dr-syncer.io/v1alpha1
 kind: RemoteCluster
 metadata:
   name: dr-syncer-sfo3
+  namespace: dr-syncer
 spec:
   kubeconfigSecretRef:
     name: dr-syncer-sfo3-kubeconfig
@@ -30,4 +58,40 @@ spec:
     - deployments
     - services
     - ingresses
+  pvcSync:
+    enabled: true
+    image:
+      repository: docker.io/supporttools/dr-syncer-agent
+      tag: latest
+      pullPolicy: Always
+    ssh:
+      port: 2222
+    concurrency: 3
+    deployment:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+      priorityClassName: "system-node-critical"
+      privileged: true
 ---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: nyc3-to-sfo3
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr-syncer-nyc3
+  targetCluster: dr-syncer-sfo3
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60

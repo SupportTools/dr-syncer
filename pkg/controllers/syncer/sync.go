@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -76,7 +77,17 @@ func EnsureNamespaceExists(ctx context.Context, client kubernetes.Interface, dst
 
 // verifyClusterAccess checks if the cluster has access to required resources
 func verifyClusterAccess(ctx context.Context, client kubernetes.Interface, dynamicClient dynamic.Interface, resourceTypes []string) error {
-	log.Info("verifying cluster resource permissions")
+	//log.Info("verifying cluster resource permissions")
+
+	// Check if client is nil
+	if client == nil {
+		return fmt.Errorf("kubernetes client is nil")
+	}
+
+	// Check if dynamicClient is nil
+	if dynamicClient == nil {
+		return fmt.Errorf("dynamic client is nil")
+	}
 
 	// First verify API groups exist
 	groups, err := client.Discovery().ServerGroups()
@@ -178,14 +189,17 @@ func syncCustomResourceDefinitions(ctx context.Context, syncer *ResourceSyncer, 
 }
 
 // SyncNamespaceResources synchronizes resources between source and destination namespaces
-func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig, replicationSpec *drv1alpha1.ReplicationSpec) ([]DeploymentScale, error) {
+func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig, namespaceMappingSpec *drv1alpha1.NamespaceMappingSpec, sourceConfig, destConfig *rest.Config) ([]DeploymentScale, error) {
 	var deploymentScales []DeploymentScale
 
 	// Create resource syncer using the passed-in clients
 	syncer := NewResourceSyncer(ctrlClient, sourceDynamic, destDynamic, sourceClient, destClient, runtime.NewScheme())
 
+	// Set the REST configs for PVC data sync
+	syncer.SetConfigs(sourceConfig, destConfig)
+
 	// If SyncCRDs is enabled, sync CRDs first
-	if replicationSpec != nil && replicationSpec.SyncCRDs != nil && *replicationSpec.SyncCRDs {
+	if namespaceMappingSpec != nil && namespaceMappingSpec.SyncCRDs != nil && *namespaceMappingSpec.SyncCRDs {
 		log.Info("syncing CRDs")
 		if err := syncCustomResourceDefinitions(ctx, syncer, sourceClient, sourceDynamic); err != nil {
 			return nil, fmt.Errorf("failed to sync CRDs: %w", err)
@@ -320,7 +334,8 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 				return nil, fmt.Errorf("failed to sync Ingresses: %w", err)
 			}
 		case "persistentvolumeclaims", "persistentvolumeclaim", "pvc":
-			if err := syncPersistentVolumeClaims(ctx, syncer, sourceClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig); err != nil {
+			// Use the new PVC handler with mounting support
+			if err := syncPersistentVolumeClaimsWithMounting(ctx, syncer, sourceClient, destClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig); err != nil {
 				return nil, fmt.Errorf("failed to sync PVCs: %w", err)
 			}
 		}
@@ -508,6 +523,84 @@ func (r *ResourceSyncer) syncNamespaceScopedResource(ctx context.Context, source
 
 // SyncResource syncs a single resource between clusters
 func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, config *drv1alpha1.ImmutableResourceConfig) error {
+	// Special handling for PVCs
+	if pvc, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+		log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Processing PVC %s/%s", pvc.Namespace, pvc.Name))
+
+		// Validate storage class before proceeding
+		if err := validation.ValidateStorageClass(ctx, r.destClient, pvc.Spec.StorageClassName); err != nil {
+			return syncerrors.NewNonRetryableError(err, fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name))
+		}
+
+		// Check if PVC already exists in destination cluster
+		existingPVC, err := r.destClient.CoreV1().PersistentVolumeClaims(pvc.Namespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+		if err == nil {
+			// PVC exists, only update mutable fields
+			log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: PVC %s/%s already exists, updating only mutable fields", pvc.Namespace, pvc.Name))
+
+			if existingPVC.Spec.VolumeName != "" {
+				log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Existing PVC has volumeName: %s", existingPVC.Spec.VolumeName))
+			}
+
+			// Create a copy of the existing PVC
+			updatePVC := existingPVC.DeepCopy()
+
+			// Update only mutable fields
+			updatePVC.Spec.Resources = pvc.Spec.Resources
+
+			// Update the PVC
+			log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Updating PVC %s/%s with only mutable fields", pvc.Namespace, pvc.Name))
+			_, err = r.destClient.CoreV1().PersistentVolumeClaims(pvc.Namespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
+			if err != nil {
+				log.Error(fmt.Sprintf("SPECIAL PVC HANDLING: Failed to update PVC %s/%s: %v", pvc.Namespace, pvc.Name, err))
+				return syncerrors.NewRetryableError(
+					fmt.Errorf("failed to update PVC %s: %w", pvc.Name, err),
+					fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name),
+				)
+			}
+
+			log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Successfully updated PVC %s/%s", pvc.Namespace, pvc.Name))
+			return nil
+		} else if !apierrors.IsNotFound(err) {
+			// Error getting PVC
+			return syncerrors.NewRetryableError(
+				fmt.Errorf("failed to get PVC %s: %w", pvc.Name, err),
+				fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name),
+			)
+		}
+
+		// PVC doesn't exist, create it
+		log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: PVC %s/%s doesn't exist, creating it", pvc.Namespace, pvc.Name))
+
+		// Clear volumeName to allow dynamic provisioning
+		pvc.Spec.VolumeName = ""
+
+		// Clear binding annotations
+		if pvc.Annotations == nil {
+			pvc.Annotations = make(map[string]string)
+		}
+		delete(pvc.Annotations, "pv.kubernetes.io/bind-completed")
+		delete(pvc.Annotations, "pv.kubernetes.io/bound-by-controller")
+		delete(pvc.Annotations, "volume.kubernetes.io/selected-node")
+
+		// Clear resourceVersion before creating
+		pvc.ResourceVersion = ""
+
+		// Create the PVC
+		log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Creating PVC %s/%s", pvc.Namespace, pvc.Name))
+		_, err = r.destClient.CoreV1().PersistentVolumeClaims(pvc.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
+		if err != nil {
+			log.Error(fmt.Sprintf("SPECIAL PVC HANDLING: Failed to create PVC %s/%s: %v", pvc.Namespace, pvc.Name, err))
+			return syncerrors.NewRetryableError(
+				fmt.Errorf("failed to create PVC %s: %w", pvc.Name, err),
+				fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name),
+			)
+		}
+
+		log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Successfully created PVC %s/%s", pvc.Namespace, pvc.Name))
+		return nil
+	}
+
 	// Get GVK from the object
 	gvk := obj.GetObjectKind().GroupVersionKind()
 	if gvk.Empty() {
@@ -661,9 +754,9 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return syncerrors.NewNonRetryableError(
-				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
-				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
-			)
+					fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+					fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+				)
 			}
 			return syncerrors.NewRetryableError(
 				fmt.Errorf("failed to create resource: %w", err),
@@ -691,13 +784,61 @@ func (r *ResourceSyncer) SyncResource(ctx context.Context, obj runtime.Object, c
 
 		u.SetUID(existingUID)
 		u.SetResourceVersion(existing.GetResourceVersion())
+
+		// Special handling for PVCs to avoid updating immutable fields
+		if gvk.Kind == "PersistentVolumeClaim" {
+			log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Processing PVC %s/%s", u.GetNamespace(), u.GetName()))
+
+			// For existing PVCs, we need to be careful with immutable fields
+			// Only update mutable fields (resources.requests)
+			resourcesRequests, found, err := unstructured.NestedFieldNoCopy(u.Object, "spec", "resources", "requests")
+			if err != nil {
+				log.Error(fmt.Sprintf("SPECIAL PVC HANDLING: Error getting resources.requests for PVC %s/%s: %v", u.GetNamespace(), u.GetName(), err))
+			} else if found {
+				log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Found resources.requests for PVC %s/%s", u.GetNamespace(), u.GetName()))
+
+				// Create a copy of the existing object with only mutable fields updated
+				updateObj := existing.DeepCopy()
+
+				// Update only resources.requests (mutable field)
+				if err := unstructured.SetNestedField(updateObj.Object, resourcesRequests, "spec", "resources", "requests"); err != nil {
+					log.Error(fmt.Sprintf("SPECIAL PVC HANDLING: Failed to set resources.requests for PVC %s/%s: %v", u.GetNamespace(), u.GetName(), err))
+					return syncerrors.NewRetryableError(
+						fmt.Errorf("failed to set resources.requests for PVC %s: %w", u.GetName(), err),
+						fmt.Sprintf("PersistentVolumeClaim/%s", u.GetName()),
+					)
+				} else {
+					log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Successfully set resources.requests for PVC %s/%s", u.GetNamespace(), u.GetName()))
+
+					// Log the resources.requests value for debugging
+					log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Resources.requests value: %v", resourcesRequests))
+				}
+
+				// Update the PVC in the destination cluster
+				log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Updating PVC %s/%s with only mutable fields", u.GetNamespace(), u.GetName()))
+				_, err = r.destDynamic.Resource(gvr).Namespace(u.GetNamespace()).Update(ctx, updateObj, metav1.UpdateOptions{})
+				if err != nil {
+					log.Error(fmt.Sprintf("SPECIAL PVC HANDLING: Failed to update PVC %s/%s: %v", u.GetNamespace(), u.GetName(), err))
+					return syncerrors.NewRetryableError(
+						fmt.Errorf("failed to update PVC %s: %w", u.GetName(), err),
+						fmt.Sprintf("PersistentVolumeClaim/%s", u.GetName()),
+					)
+				}
+
+				log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: Successfully updated PVC %s/%s", u.GetNamespace(), u.GetName()))
+				return nil
+			} else {
+				log.Info(fmt.Sprintf("SPECIAL PVC HANDLING: No resources.requests found for PVC %s/%s", u.GetNamespace(), u.GetName()))
+			}
+		}
+
 		_, err = r.destDynamic.Resource(gvr).Namespace(u.GetNamespace()).Update(ctx, u, metav1.UpdateOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return syncerrors.NewNonRetryableError(
-				fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
-				fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
-			)
+					fmt.Errorf("resource type %s not found in destination cluster", gvk.Kind),
+					fmt.Sprintf("%s/%s", gvk.Kind, u.GetName()),
+				)
 			}
 			return syncerrors.NewRetryableError(
 				fmt.Errorf("failed to update resource: %w", err),

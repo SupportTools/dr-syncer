@@ -10,14 +10,15 @@ metadata:
 spec:
   # Use scheduled mode for predictable testing
   replicationMode: Scheduled
-  schedule: "*/5 * * * *"  # Run every 5 minutes
-  
+  schedule: "*/5 * * * *" # Run every 5 minutes
+
   # Cluster configuration
-  sourceCluster: dr-syncer-nyc3
-  destinationCluster: dr-syncer-sfo3
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
   sourceNamespace: dr-sync-test-case00
   destinationNamespace: dr-sync-test-case00
-  
+
   # Resource types to test status tracking
   resourceTypes:
     - ConfigMaps
@@ -25,10 +26,10 @@ spec:
     - Deployments
     - Services
     - Ingresses
-  
+
   # Scale deployments to zero in DR
   scaleToZero: true
-  
+
   # Configure immutable resource handling
   immutableResourceConfig:
     defaultHandling: NoChange

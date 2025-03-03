@@ -95,11 +95,13 @@ func syncPersistentVolumeClaims(ctx context.Context, sourceClient, destClient ku
 		if !syncPV {
 			destPVC.Spec.VolumeName = ""
 
-			// Always clear volume attributes for now since we don't have PreserveVolumeAttributes yet
-			destPVC.Spec.VolumeMode = nil
-			destPVC.Spec.Selector = nil
-			destPVC.Spec.DataSource = nil
-			destPVC.Spec.DataSourceRef = nil
+			// Clear volume attributes if PreserveVolumeAttributes is false
+			if pvcConfig == nil || !pvcConfig.PreserveVolumeAttributes {
+				destPVC.Spec.VolumeMode = nil
+				destPVC.Spec.Selector = nil
+				destPVC.Spec.DataSource = nil
+				destPVC.Spec.DataSourceRef = nil
+			}
 		}
 
 		// Create or update PVC in destination

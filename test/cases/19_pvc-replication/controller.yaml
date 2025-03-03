@@ -1,0 +1,50 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: pvc-replication-test
+  annotations:
+    dr-syncer.io/description: "Test case for PVC replication with rsync deployment"
+spec:
+  # Source and destination namespace settings
+  sourceNamespace: pvc-source-ns
+  destinationNamespace: pvc-dest-ns
+  
+  # Replication mode: Manual, Scheduled, or Continuous
+  replicationMode: Manual
+  
+  # PVC configuration
+  pvcConfig:
+    # Enable data synchronization for PVCs
+    syncData: true
+    
+    # Detailed configuration for PVC data synchronization
+    dataSyncConfig:
+      # Limit bandwidth usage for rsync (in KB/s)
+      bandwidthLimit: 5000
+      
+      # Additional rsync options for fine-grained control
+      rsyncOptions:
+        - --archive
+        - --verbose
+        - --delete
+        - --human-readable
+        - --checksum
+      
+      # Exclude certain paths from synchronization
+      excludePaths:
+        - tmp/**
+        - cache/**
+      
+      # Set maximum number of concurrent PVC syncs
+      concurrentSyncs: 2
+      
+      # Maximum time to wait for sync operation to complete
+      timeout: "2h"
+      
+    # Storage class mappings (if needed)
+    storageClassMappings:
+      - from: standard
+        to: standard-dest
+        
+    # Preserve volume attributes for better fidelity
+    preserveVolumeAttributes: true

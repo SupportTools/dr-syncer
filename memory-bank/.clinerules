@@ -66,6 +66,15 @@
    - Implement thorough logging
    - Maintain clear status updates
    - Follow controller-runtime patterns
+   - Integrate controller-runtime logging with application logging:
+     * Create adapter that implements logr.LogSink interface
+     * Initialize controller-runtime logging in main.go
+     * Call logging.SetupControllerRuntimeLogging() after setting up logrus
+     * Prevents "log.SetLogger(...) was never called" panics
+   - Log command usage:
+     * Always use --tail to limit log output size
+     * Never use -f/--follow in scripts (will never return)
+     * Use appropriate tail sizes (100 for normal, 1000 for debugging)
 
 ## Tool Usage
 

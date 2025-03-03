@@ -3,14 +3,64 @@
 replicaCount: 1
 
 image:
-  repository: harbor.support.tools/dr-syncer/controller
+  repository: docker.io/supporttools/dr-syncer
   pullPolicy: IfNotPresent
   # tag will be overridden by deploy commands
   tag: "latest"
 
-# Harbor registry credentials secret
-imagePullSecrets:
-  - name: harbor-registry
+# Agent configuration
+agent:
+  image:
+    repository: docker.io/supporttools/dr-syncer-agent
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "latest"
+
+# Rsync pod configuration
+rsyncPod:
+  image:
+    repository: docker.io/supporttools/dr-syncer-rsync
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "latest"
+
+# Rsync configuration
+rsync:
+  ssh:
+    port: 2222
+  concurrency: 3
+  retryConfig:
+    maxRetries: 5
+    initialDelay: "5s"
+    maxDelay: "5m"
+  # Health check configuration
+  healthCheck:
+    # Interval between health checks
+    interval: "5m"
+    # SSH connection timeout
+    sshTimeout: "10s"
+    # Number of retry attempts for failed health checks
+    retryAttempts: 3
+    # Interval between retry attempts
+    retryInterval: "30s"
+
+# PVC mount configuration
+pvcMount:
+  # Image to use for PVC mount pods
+  pauseImage: "k8s.gcr.io/pause:3.6"
+  # Resource requests and limits for mount pods
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "50m"
+      memory: "64Mi"
+  # Timeout for waiting for mount pods to be running
+  podRunningTimeout: "3m"
+
+# Image pull secrets
+imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
@@ -18,9 +68,7 @@ serviceAccount:
   # Specifies whether a service account should be created
   create: true
   # Annotations to add to the service account
-  annotations:
-    # Add Harbor registry credentials to service account
-    secret.kubernetes.io/dockerconfigjson: harbor-registry
+  annotations: {}
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: "dr-syncer"

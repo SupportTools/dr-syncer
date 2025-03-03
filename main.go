@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/supporttools/dr-syncer/pkg/config"
+	"github.com/supporttools/dr-syncer/pkg/controller/remotecluster"
 	"github.com/supporttools/dr-syncer/pkg/logging"
 	"github.com/supporttools/dr-syncer/pkg/version"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +42,9 @@ func main() {
 
 	// Initialize logging
 	log := logging.SetupLogging()
+
+	// Set up controller-runtime logging to use our logger
+	logging.SetupControllerRuntimeLogging(log)
 
 	// Log startup information
 	log.Info("starting DR Syncer controller")
@@ -92,15 +97,25 @@ func main() {
 	}
 	log.Info("configured RemoteCluster controller")
 
-	// Set up Replication controller
-	if err = (&controllers.ReplicationReconciler{
+	// Set up NamespaceMapping controller
+	if err = (&controllers.NamespaceMappingReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		log.Error("unable to create Replication controller")
+		log.Error("unable to create NamespaceMapping controller")
 		os.Exit(1)
 	}
-	log.Info("configured Replication controller")
+	log.Info("configured NamespaceMapping controller")
+
+	// Set up ClusterMapping controller
+	if err = (&controllers.ClusterMappingReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error("unable to create ClusterMapping controller")
+		os.Exit(1)
+	}
+	log.Info("configured ClusterMapping controller")
 
 	// Set up health checks
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -114,6 +129,12 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("configured readiness check endpoint")
+
+	log.Info("performing initial agent sync")
+	if err := remotecluster.SyncAllAgents(context.Background(), mgr.GetClient()); err != nil {
+		log.Warnf("initial agent sync encountered issues: %v", err)
+		// Continue anyway, as normal reconciliation will retry
+	}
 
 	log.Info("starting manager")
 

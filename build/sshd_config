@@ -1,0 +1,36 @@
+# Basic SSH configuration
+Port 2222
+Protocol 2
+HostKey /etc/ssh/host_keys/ssh_host_rsa_key
+HostKey /etc/ssh/host_keys/ssh_host_ecdsa_key
+HostKey /etc/ssh/host_keys/ssh_host_ed25519_key
+
+# Authentication
+PubkeyAuthentication yes
+PasswordAuthentication no
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+
+# Security
+PermitRootLogin yes
+X11Forwarding no
+AllowTcpForwarding yes
+AllowAgentForwarding no
+PermitTunnel no
+MaxAuthTries 3
+
+# Logging
+SyslogFacility AUTH
+LogLevel INFO
+
+# SSH proxy configuration
+AllowUsers root
+GatewayPorts yes
+StreamLocalBindUnlink yes
+
+# Environment
+AcceptEnv LANG LC_*
+
+# Idle timeout
+ClientAliveInterval 300
+ClientAliveCountMax 2

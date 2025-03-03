@@ -1,0 +1,30 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: controller-cluster
+spec:
+  kubeConfigSecret:
+    name: controller-kubeconfig
+    namespace: dr-syncer
+  agentEnabled: true
+  agentOptions:
+    image: supporttools/dr-syncer-agent:latest
+    imagePullPolicy: IfNotPresent
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    # SSH port on which agent listens for rsync connections
+    sshPort: 2222
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: controller-kubeconfig
+  namespace: dr-syncer
+type: Opaque
+data:
+  kubeconfig: REPLACE_WITH_BASE64_ENCODED_KUBECONFIG

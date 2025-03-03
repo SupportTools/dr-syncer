@@ -1,4 +1,3 @@
-{{- if .Values.crds.install }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -26,6 +25,14 @@ spec:
       jsonPath: .status.lastSyncTime
       name: Last Sync
       type: date
+    - description: PVC sync status
+      jsonPath: .status.pvcSync.phase
+      name: PVC Sync
+      type: string
+    - description: Number of ready PVC sync agents
+      jsonPath: .status.pvcSync.agentStatus.readyNodes
+      name: Ready Agents
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -79,6 +86,179 @@ spec:
                 required:
                 - name
                 - namespace
+                type: object
+              pvcSync:
+                description: PVCSync configures PVC synchronization for this cluster
+                properties:
+                  concurrency:
+                    description: Concurrency is the maximum number of concurrent PVC
+                      syncs
+                    format: int32
+                    type: integer
+                  deployment:
+                    description: Deployment configures the agent deployment options
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations is a map of pod annotations
+                        type: object
+                      extraEnv:
+                        description: ExtraEnv is a list of additional environment
+                          variables
+                        items:
+                          description: EnvVar represents an environment variable
+                          properties:
+                            name:
+                              description: Name of the environment variable
+                              type: string
+                            value:
+                              description: Value of the environment variable
+                              type: string
+                            valueFrom:
+                              description: ValueFrom source for the environment variable's
+                                value
+                              properties:
+                                fieldRef:
+                                  description: FieldRef selects a field of the pod
+                                  properties:
+                                    fieldPath:
+                                      description: Path of the field to select in
+                                        the specified API version
+                                      type: string
+                                  required:
+                                  - fieldPath
+                                  type: object
+                              type: object
+                          required:
+                          - name
+                          type: object
+                        type: array
+                      hostNetwork:
+                        default: true
+                        description: HostNetwork determines whether to use host network
+                          for agent pods
+                        type: boolean
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: Labels is a map of pod labels
+                        type: object
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: NodeSelector is a map of node selector labels
+                        type: object
+                      priorityClassName:
+                        description: PriorityClassName is the priority class for agent
+                          pods
+                        type: string
+                      privileged:
+                        default: true
+                        description: Privileged determines whether the container should
+                          run in privileged mode
+                        type: boolean
+                      resources:
+                        description: Resources defines resource requirements for agent
+                          containers
+                        properties:
+                          limits:
+                            additionalProperties:
+                              type: string
+                            description: Limits describes the maximum amount of compute
+                              resources allowed
+                            type: object
+                          requests:
+                            additionalProperties:
+                              type: string
+                            description: Requests describes the minimum amount of
+                              compute resources required
+                            type: object
+                        type: object
+                      tolerations:
+                        description: Tolerations is a list of pod tolerations in JSON
+                          format
+                        items:
+                          additionalProperties:
+                            type: string
+                          type: object
+                        type: array
+                    type: object
+                  enabled:
+                    description: Enabled indicates whether PVC synchronization is
+                      enabled
+                    type: boolean
+                  healthCheck:
+                    description: HealthCheck configures health checking behavior
+                    properties:
+                      interval:
+                        description: Interval is the time between health checks
+                        type: string
+                      retryAttempts:
+                        description: RetryAttempts is the number of times to retry
+                          failed health checks
+                        format: int32
+                        type: integer
+                      retryInterval:
+                        description: RetryInterval is the time to wait between retry
+                          attempts
+                        type: string
+                      sshTimeout:
+                        description: SSHTimeout is the timeout for SSH connection
+                          attempts
+                        type: string
+                    type: object
+                  image:
+                    description: Image specifies the PVC sync agent image
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy defines the image pull policy
+                        type: string
+                      repository:
+                        description: Repository is the image repository
+                        type: string
+                      tag:
+                        description: Tag is the image tag
+                        type: string
+                    type: object
+                  retryConfig:
+                    description: RetryConfig configures retry behavior for failed
+                      syncs
+                    properties:
+                      initialDelay:
+                        description: InitialDelay is the initial delay between retries
+                        type: string
+                      maxDelay:
+                        description: MaxDelay is the maximum delay between retries
+                        type: string
+                      maxRetries:
+                        description: MaxRetries is the maximum number of retry attempts
+                        format: int32
+                        type: integer
+                    type: object
+                  ssh:
+                    description: SSH configures the SSH service for rsync
+                    properties:
+                      keySecretRef:
+                        description: KeySecretRef references a secret containing SSH
+                          keys
+                        properties:
+                          name:
+                            description: Name is the name of the secret
+                            type: string
+                          namespace:
+                            description: Namespace is the namespace of the secret
+                            type: string
+                        required:
+                        - name
+                        - namespace
+                        type: object
+                      port:
+                        default: 2222
+                        description: Port is the SSH service port
+                        format: int32
+                        type: integer
+                    type: object
                 type: object
             required:
             - kubeconfigSecretRef
@@ -164,6 +344,104 @@ spec:
                 description: LastSyncTime is the last time the cluster was synced
                 format: date-time
                 type: string
+              pvcSync:
+                description: PVCSync represents the status of PVC synchronization
+                properties:
+                  agentStatus:
+                    description: AgentStatus contains the status of PVC sync agents
+                    properties:
+                      nodeStatuses:
+                        additionalProperties:
+                          description: PVCSyncNodeStatus contains status information
+                            for a node's PVC sync agent
+                          properties:
+                            lastHeartbeat:
+                              description: LastHeartbeat is the last time the agent
+                                reported status
+                              format: date-time
+                              type: string
+                            message:
+                              description: Message provides additional status information
+                              type: string
+                            podStatus:
+                              description: PodStatus contains the agent pod status
+                              properties:
+                                lastTransitionTime:
+                                  description: LastTransitionTime is when the pod
+                                    last changed state
+                                  format: date-time
+                                  type: string
+                                phase:
+                                  description: Phase is the current phase of the pod
+                                  type: string
+                                ready:
+                                  description: Ready indicates if the pod is ready
+                                  type: boolean
+                                restartCount:
+                                  description: RestartCount is the number of times
+                                    the pod has restarted
+                                  format: int32
+                                  type: integer
+                              required:
+                              - phase
+                              - ready
+                              type: object
+                            ready:
+                              description: Ready indicates whether the agent is ready
+                              type: boolean
+                            sshStatus:
+                              description: SSHStatus contains SSH connectivity information
+                              properties:
+                                connected:
+                                  description: Connected indicates if SSH connection
+                                    was successful
+                                  type: boolean
+                                error:
+                                  description: Error provides error information if
+                                    connection failed
+                                  type: string
+                                lastCheckTime:
+                                  description: LastCheckTime is when SSH connectivity
+                                    was last verified
+                                  format: date-time
+                                  type: string
+                              required:
+                              - connected
+                              type: object
+                          type: object
+                        description: NodeStatuses contains per-node agent status
+                        type: object
+                      readyNodes:
+                        description: ReadyNodes is the number of nodes with ready
+                          agents
+                        format: int32
+                        type: integer
+                      totalNodes:
+                        description: TotalNodes is the total number of nodes that
+                          should have agents
+                        format: int32
+                        type: integer
+                    type: object
+                  failedSyncs:
+                    description: FailedSyncs is the number of failed sync attempts
+                    format: int32
+                    type: integer
+                  lastDeploymentTime:
+                    description: LastDeploymentTime is when the agent was last deployed
+                    format: date-time
+                    type: string
+                  lastSuccessfulSync:
+                    description: LastSuccessfulSync is the last time a PVC sync was
+                      successful
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message provides additional status information
+                    type: string
+                  phase:
+                    description: Phase is the current phase of PVC sync agent deployment
+                    type: string
+                type: object
             type: object
         required:
         - spec
@@ -172,4 +450,3 @@ spec:
     storage: true
     subresources:
       status: {}
-{{- end }}

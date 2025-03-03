@@ -21,5 +21,6 @@ var (
 
 func init() {
 	SchemeBuilder.Register(&RemoteCluster{}, &RemoteClusterList{})
-	SchemeBuilder.Register(&Replication{}, &ReplicationList{})
+	SchemeBuilder.Register(&NamespaceMapping{}, &NamespaceMappingList{})
+	SchemeBuilder.Register(&ClusterMapping{}, &ClusterMappingList{})
 }

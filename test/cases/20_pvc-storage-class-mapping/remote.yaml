@@ -1,0 +1,84 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case20
+  labels:
+    dr-syncer.io/test-case: "20"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+---
+# PVC for storage class mapping
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-storage-class
+  namespace: dr-sync-test-case20
+  labels:
+    app: test-app
+    test-type: pvc-replication
+  annotations:
+    description: "PVC for storage class mapping"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: do-block-storage-xfs
+  volumeMode: Filesystem
+---
+# Deployment using the storage class PVC
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: dr-sync-test-case20
+  labels:
+    app: test-app
+    test-type: pvc-replication
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          volumeMounts:
+            - name: storage-class-storage
+              mountPath: /data/storage-class
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: storage-class-storage
+          persistentVolumeClaim:
+            claimName: test-pvc-storage-class
+---
+# Service for the deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-service
+  namespace: dr-sync-test-case20
+  labels:
+    app: test-app
+    test-type: pvc-replication
+spec:
+  selector:
+    app: test-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP

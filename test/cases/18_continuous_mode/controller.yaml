@@ -18,8 +18,9 @@ spec:
     watchResources: true
   
   # Cluster configuration
-  sourceCluster: dr-syncer-nyc3
-  destinationCluster: dr-syncer-sfo3
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
   sourceNamespace: dr-sync-test-case18
   destinationNamespace: dr-sync-test-case18
   

@@ -16,6 +16,7 @@ import (
 	configCli "github.com/supporttools/dr-syncer/pkg/config"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controller/remotecluster"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,13 +25,17 @@ import (
 // RemoteClusterReconciler reconciles a RemoteCluster object
 type RemoteClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme         *runtime.Scheme
+	pvcSyncManager *remotecluster.PVCSyncManager
 }
 
 // +kubebuilder:rbac:groups=dr-syncer.io,resources=remoteclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=dr-syncer.io,resources=remoteclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=dr-syncer.io,resources=remoteclusters/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Fetch the RemoteCluster instance
 	var cluster drv1alpha1.RemoteCluster
@@ -198,6 +203,51 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	latest.Status = cluster.Status
+
+	// Create a controller-runtime client for the remote cluster
+	remoteRuntimeClient, err := client.New(config, client.Options{})
+	if err != nil {
+		log.Errorf("[Reconcile][NewClient] unable to create controller-runtime client for cluster %s: %v", cluster.Name, err)
+		setRemoteClusterCondition(&latest, "KubeconfigValid", metav1.ConditionFalse, "InvalidKubeconfig", err.Error())
+		_ = r.Status().Update(ctx, &latest)
+		return ctrl.Result{RequeueAfter: time.Minute}, err
+	}
+
+	// Handle PVC sync reconciliation
+	// Always create a new PVCSyncManager with the remote client for this reconciliation
+	pvcSyncManager := remotecluster.NewPVCSyncManager(remoteRuntimeClient, r.Client)
+
+	if err := pvcSyncManager.Reconcile(ctx, &latest); err != nil {
+		log.Errorf("[Reconcile][PVCSync] failed to reconcile PVC sync for cluster %s: %v", cluster.Name, err)
+		setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionFalse, "ReconciliationFailed", err.Error())
+	} else {
+		// Check if any nodes are not ready
+		if latest.Status.PVCSync != nil && latest.Status.PVCSync.AgentStatus != nil {
+			readyNodes := latest.Status.PVCSync.AgentStatus.ReadyNodes
+			totalNodes := latest.Status.PVCSync.AgentStatus.TotalNodes
+
+			if readyNodes == 0 && totalNodes > 0 {
+				setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionFalse, "NoReadyAgents",
+					"No agent nodes are ready")
+			} else if readyNodes < totalNodes {
+				setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionFalse, "PartiallyReady",
+					fmt.Sprintf("%d/%d agent nodes are ready", readyNodes, totalNodes))
+			} else if readyNodes > 0 {
+				setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionTrue, "ReconciliationSuccessful",
+					"PVC sync agent deployed successfully")
+			} else {
+				// No nodes yet, but reconciliation was successful
+				setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionTrue, "ReconciliationSuccessful",
+					"PVC sync agent deployed successfully")
+			}
+		} else {
+			// No status yet, but reconciliation was successful
+			setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionTrue, "ReconciliationSuccessful",
+				"PVC sync agent deployed successfully")
+		}
+	}
+
+	// Update status
 	if err := r.Status().Update(ctx, &latest); err != nil {
 		if apierrors.IsConflict(err) {
 			log.Info(fmt.Sprintf("[Reconcile][Update] conflict updating status for cluster %s, will retry", cluster.Name))
@@ -208,8 +258,8 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	cluster.Status = latest.Status
 
-	// Requeue after 5 minutes to validate connection and schedule again
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Requeue after the default sync period to validate connection and schedule again
+	return ctrl.Result{RequeueAfter: remotecluster.DefaultSyncPeriod}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager

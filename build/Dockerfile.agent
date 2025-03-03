@@ -1,0 +1,52 @@
+FROM ubuntu:20.04
+
+# Prevent apt from asking questions during installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update package lists and install required packages (split for better debugging)
+RUN apt-get update -q && \
+    apt-get install -y --no-install-recommends openssh-server && \
+    apt-get install -y --no-install-recommends rsync && \
+    apt-get install -y --no-install-recommends netcat && \
+    apt-get install -y --no-install-recommends util-linux && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Configure SSH for root with proper permissions
+RUN mkdir -p /root/.ssh && \
+    chmod 700 /root/.ssh
+
+# Create log directories with proper permissions
+RUN mkdir -p /var/log && \
+    touch /var/log/console.log && \
+    chmod 644 /var/log/console.log
+
+# Configure SSH for proxy and rsync
+COPY build/sshd_config /etc/ssh/sshd_config
+COPY build/entrypoint.sh /entrypoint.sh
+COPY build/authorized_keys.template /build/authorized_keys.template
+
+# Set permissions
+RUN chmod +x /entrypoint.sh && \
+    chown root:root /etc/ssh/sshd_config && \
+    chmod 644 /etc/ssh/sshd_config && \
+    chmod 644 /build/authorized_keys.template && \
+    mkdir -p /run/sshd
+
+# Create required directories for operation
+RUN mkdir -p /var/lib/kubelet /data && \
+    chmod 755 /data 
+
+# Generate SSH host keys
+RUN ssh-keygen -A
+
+# Label the image for better identification
+LABEL maintainer="DR-Syncer Team" \
+      description="DR-Syncer Agent with enhanced logging (Ubuntu-based)" \
+      version="1.0"
+
+# Expose SSH port for the agent
+EXPOSE 2222
+
+# Start the container with our entrypoint script
+ENTRYPOINT ["/entrypoint.sh"]

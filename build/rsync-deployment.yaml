@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dr-syncer-rsync
+  labels:
+    app.kubernetes.io/name: dr-syncer-rsync
+    app.kubernetes.io/component: rsync
+    app.kubernetes.io/managed-by: dr-syncer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dr-syncer-rsync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dr-syncer-rsync
+        app.kubernetes.io/component: rsync
+        app.kubernetes.io/managed-by: dr-syncer
+    spec:
+      containers:
+      - name: rsync
+        image: supporttools/dr-syncer-rsync:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - sleep infinity # Initial command is to wait
+        securityContext:
+          privileged: false
+          runAsUser: 0 # Run as root for rsync permissions handling
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: ${PVC_NAME} # To be replaced with actual PVC name

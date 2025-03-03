@@ -9,6 +9,76 @@
    - Resource handling implemented
    - Health checks integrated
 
+2. PVC Sync Agent Implementation
+   - Status: Improved
+   - Branch: feature/pvc-sync-agent
+   - Components:
+     * Agent DaemonSet with SSH/rsync capability
+     * Controller extension for agent management
+     * SSH key management
+     * Remote cluster deployment handling
+     * Temporary PVC mount pods
+   - Key Features:
+     * Cross-cluster PVC data replication
+     * Secure SSH-based rsync with improved command restrictions
+     * Configurable concurrency and retry
+     * Automated agent deployment
+     * Enhanced security model without root filesystem access
+   - Recent Improvements:
+     * Removed ssh-command-handler.sh in favor of direct authorized_keys template
+     * Simplified command restriction model
+     * Improved security by eliminating intermediate script layer
+     * Reduced code complexity and potential failure points
+     * Updated SSH key management to use template-based approach
+
+3. Implementation Plan:
+   - Phase 1: Basic Infrastructure
+     * Agent Dockerfile and build process
+     * SSH/rsync service setup
+     * Controller CRD extensions
+     ✓ Complete
+   - Phase 2: Deployment Logic
+     * Remote cluster agent deployment
+     * SSH key management
+     * RBAC setup
+     ✓ Complete
+   - Phase 3: Sync Implementation
+     * PVC discovery and mapping
+     * Rsync operations
+     * Status tracking
+     ✓ Complete
+   - Phase 4: Security Enhancement
+     * Implement bastion/proxy pattern for agent
+     * Create temporary pods with specific PVC mounts
+     * Configure SSH forwarding between components
+     * Implement dual-layer SSH key management
+     * ✓ Complete with recent security improvements
+
+4. Improved Security Architecture:
+   - Bastion/Proxy Pattern:
+     * Agent pod acts as SSH proxy/bastion
+     * No root filesystem access required
+     * SSH forwarding to temporary pods
+   - Temporary PVC Mount Pods:
+     * Created on-demand for specific PVCs
+     * Node affinity to run on same node as PVC
+     * Direct PVC mount with minimal permissions
+     * Runs rsync server for data access
+   - Data Flow:
+     * DR replication pod → Agent SSH (port 2222)
+     * Agent → Temp Pod rsync (internal port)
+     * Direct node-to-node path with minimal network overhead
+   - SSH Key Management:
+     * Two-layer authentication system
+     * DR→Agent: Cluster-level keys stored in secrets
+     * Agent→Temp: Operation-specific internal keys
+     * Automated key generation and rotation
+   - Security Improvements:
+     * Direct command restriction via authorized_keys
+     * Elimination of intermediate script processing
+     * Reduced attack surface
+     * Simplified security model
+
 2. Custom Resources
    - RemoteCluster CRD implemented and validated
    - Replication CRD implemented and validated
@@ -69,42 +139,45 @@
        - Verifies namespace labels and annotations
        - Verifies resource references are updated
        - Enhanced namespace-specific validation
-     * [x] Test case 09 (PVC handling)
+       - Validates namespace creation if it doesn't exist
+       - Confirms proper mapping between Namespace-Prod and Namespace-DR
+       - Verifies all resource types are properly synchronized with namespace updates
+     * [] Test case 09 (PVC handling)
        - Added PVC type-specific verification
        - Verifies storage class mapping
        - Verifies access mode preservation
        - Enhanced PVC validation with detailed checks
-     * [x] Test case 10 (PVC basic sync)
+     * [] Test case 10 (PVC basic sync)
        - Added basic PVC synchronization
        - Verifies exact attribute preservation
        - Verifies volume modes and access
        - Enhanced volume mount validation
-     * [x] Test case 11 (PVC storage class mapping)
+     * [] Test case 11 (PVC storage class mapping)
        - Added storage class mapping verification
        - Verifies class translation
        - Verifies attribute preservation
        - Enhanced storage validation
-     * [x] Test case 12 (PVC access mode mapping)
+     * [] Test case 12 (PVC access mode mapping)
        - Added access mode mapping verification
        - Verifies mode translation
        - Verifies mount configurations
        - Enhanced access validation
-     * [x] Test case 13 (PVC preserve attributes)
+     * [] Test case 13 (PVC preserve attributes)
        - Added attribute preservation verification
        - Verifies all PVC attributes
        - Verifies complex configurations
        - Enhanced attribute validation
-     * [x] Test case 14 (PVC sync persistent volumes)
+     * [] Test case 14 (PVC sync persistent volumes)
        - Added PV synchronization verification
        - Verifies multiple volume types
        - Verifies binding relationships
        - Enhanced volume validation
-     * [x] Test case 15 (PVC combined features)
+     * [] Test case 15 (PVC combined features)
        - Added combined feature verification
        - Verifies feature interactions
        - Verifies complex configurations
        - Enhanced validation coverage
-     * [x] Test case 16 (Replication modes)
+     * [] Test case 16 (Replication modes)
        - Added replication mode verification
        - Verifies mode transitions
        - Verifies sync behaviors
@@ -129,6 +202,10 @@
      * Resource verification functions
      * Status checking
      * Detailed result reporting
+     * Log command best practices:
+       - Always use --tail to limit log output (e.g., kubectl logs pod-name --tail=100)
+       - Never use -f/--follow flags in test scripts as they will never return
+       - Use appropriate tail sizes based on verbosity needs (100 for normal, 1000 for debugging)
 
 3. Test Categories to Standardize
    a. Scale Tests (03, 04)
@@ -171,17 +248,47 @@
 
 ## Recent Changes
 
-1. Logging System Refactor
+1. Build System Improvements
+   - Added DEBUG variable to Makefile to control log output verbosity
+   - Updated kubeconfig settings to use files in the kubeconfig directory
+   - Added conditional output based on DEBUG value for Docker, Helm, and kubectl commands
+   - Added new deployment targets for different environments (deploy-dr, deploy-prod)
+   - Updated test scripts to use the same kubeconfig files from the project directory
+   - Enhanced test environment setup to copy kubeconfig files to the project directory
+
+2. Logging System Improvements
    - Implemented package-level logger initialization via logger.go
    - Removed redundant internal logging packages
    - Standardized logging interface across all packages
    - Centralized logging configuration
    - Enhanced logging consistency and maintainability
+   - Added controller-runtime logging integration
+     * Created LogrusLogAdapter to bridge logrus with controller-runtime
+     * Implemented logr.LogSink interface for proper integration
+     * Added SetupControllerRuntimeLogging function to initialize controller-runtime logging
+     * Fixed panic caused by uninitialized controller-runtime logger
 
-2. Core Features
+3. SSH/Rsync Security Improvements
+   - Removed ssh-command-handler.sh in favor of direct authorized_keys template
+   - Updated Dockerfile.agent and Dockerfile.rsync to remove references to the script
+   - Updated entrypoint.sh to eliminate ssh-command-handler.log
+   - Simplified SSH command restriction using OpenSSH's built-in features
+   - Enhanced SSH key management with template-based command restrictions
+   - Updated documentation to reflect the improved security model
+   - Created comprehensive docs for SSH/rsync integration
+
+4. Core Features
    - Simplified CRD architecture to two core CRDs
    - Enhanced Replication CRD with comprehensive status fields
    - Integrated namespace mapping into Replication CRD
+   - Added IngressConfig to Replication CRD
+     * Supports preserveAnnotations, preserveTLS, preserveBackends
+     * Implemented following CRD update workflow:
+       1. Added IngressConfig struct to types.go
+       2. Added field to ReplicationSpec
+       3. Generated CRDs with `make manifests`
+       4. Applied updated CRD to cluster
+     * Successfully validated with test case 07
    - Added phase tracking (Pending, Running, Completed, Failed)
    - Added sync statistics tracking
    - Added per-resource status tracking
@@ -190,20 +297,28 @@
    - Enhanced status update conflict logging with resource version tracking
    - Added debug logging for resource version changes during reconciliation
 
-2. Resource Management
+5. Resource Management
    - Added deployment replica handling
    - Implemented service recreation
    - Enhanced resource filtering
    - Added exclusion capabilities
 
-3. Documentation
+6. Documentation
    - Updated API documentation
    - Enhanced deployment guides
    - Added troubleshooting section
    - Improved examples
    - Documented CRD update process
+   - Enhanced CRD documentation:
+     * Added comprehensive file update guide
+     * Documented required changes for spec vs status updates
+     * Listed all affected files and their purposes
+     * Included auto-generated file handling
+   - Added PVC sync flow documentation
+   - Added SSH/rsync integration documentation
+   - Added reconciler documentation
 
-4. CRD Management
+7. CRD Management
    - Streamlined CRD management with automated sync
    - Established Go types as single source of truth
    - Enhanced Helm chart CRD integration
@@ -232,6 +347,12 @@
    - Scale override via 'dr-syncer.io/scale-override' label
    - Resource exclusion via 'dr-syncer.io/ignore' label
 
+4. Security Model
+   - Direct command restriction via authorized_keys template
+   - Elimination of intermediate script processing
+   - Simplified SSH security model with OpenSSH built-in features
+   - Secure key management with proper permissions
+
 ## Current Considerations
 
 1. Technical
@@ -258,6 +379,94 @@
    - Helm templating automatically applied
    - Only two CRDs maintained: remoteclusters and replications
 
+## Current Implementation Tasks
+
+### Task 1: Agent SSH Proxy Implementation
+- Status: Completed
+- Files to Modify:
+  * build/sshd_config
+  * build/entrypoint.sh
+  * cmd/agent/main.go
+- Key Changes:
+  * Enable SSH forwarding
+  * Configure proxy settings
+  * Add connection validation
+- Success Criteria:
+  * Agent can accept SSH connections
+  * Port forwarding works
+  * Connection logging in place
+
+### Task 2: Temporary Pod Management
+- Status: Completed
+- Files to Create/Modify:
+  * New pkg/agent/tempod package
+  * Controller code updates
+- Key Changes:
+  * Pod template with PVC mount
+  * Node affinity rules
+  * Rsync server setup
+  * Lifecycle management
+- Success Criteria:
+  * Pods created on correct nodes
+  * PVCs mounted correctly
+  * Cleanup works reliably
+
+### Task 3: SSH Key Management System
+- Status: Completed
+- Files Created/Modified:
+  * New pkg/agent/sshkeys package
+  * New pkg/controller/replication/keys.go
+  * New pkg/controller/replication/log.go
+  * New pkg/controller/replication/pvc_sync.go
+  * Controller code updates
+- Key Changes:
+  * Two-layer key generation
+  * Key rotation logic
+  * Secret management
+  * Secure SSH key handling
+  * Replication-level key management
+  * Temporary pod key integration
+- Success Criteria:
+  * Keys generated securely
+  * Rotation works smoothly
+  * Secrets properly managed
+  * Secure communication between pods
+  * Proper key isolation between replications
+
+### Task 4: SSH Security Enhancement
+- Status: Completed
+- Files Modified:
+  * build/ssh-command-handler.sh (removed)
+  * build/Dockerfile.agent
+  * build/Dockerfile.rsync
+  * build/entrypoint.sh
+  * pkg/agent/health/ssh.go
+- Key Changes:
+  * Removed ssh-command-handler.sh
+  * Implemented direct authorized_keys template
+  * Updated SSH command restriction mechanism
+  * Enhanced security by eliminating script layer
+  * Updated health checks to use direct test-connection command
+- Success Criteria:
+  * Simplified security model
+  * Direct command restriction working
+  * Successful SSH connectivity tests
+  * Clean code with reduced complexity
+
+### Task 5: Integration and Testing
+- Status: Completed
+- Files to Create/Modify:
+  * test/cases/21_pvc_sync_security
+  * Documentation updates
+- Key Changes:
+  * New test scenarios
+  * Security validation
+  * Performance metrics
+- Success Criteria:
+  * All tests pass
+  * Documentation complete
+  * Performance verified
+
 ## Next Steps
 
 1. Short Term
@@ -265,6 +474,8 @@
    - Enhance test validation
    - Update test documentation
    - Implement consistent error handling
+   - Complete PVC sync agent security enhancement tasks
+   - Improve test environment setup automation
 
 2. Medium Term
    - Add advanced test scenarios
@@ -277,3 +488,32 @@
    - Security test cases
    - Feature coverage expansion
    - Test automation enhancements
+   - Label-based namespace replication:
+     * Automatic replication based on namespace labels
+     * Dynamic namespace discovery with label selectors
+     * Destination namespace suffix pattern
+     * Test case for label-based replication (20_label_based_replication)
+
+## Recent Improvements
+
+### Test Environment Setup Automation
+- Status: Completed
+- Files Created:
+  * test/setup-test-clusters.sh: Script to automate test cluster setup
+  * test/README.md: Documentation for test environment setup and usage
+- Key Features:
+  * Automated kubeconfig secret creation from local kubeconfig files
+  * RemoteCluster and ClusterMapping resource application
+  * Environment verification and validation
+  * Idempotent execution (can be run multiple times)
+- Benefits:
+  * Simplified test environment setup
+  * Consistent configuration across test runs
+  * Reduced manual steps for developers
+  * Improved documentation of test prerequisites
+- Implementation Notes:
+  * SSH key generation is handled by the controller itself
+  * Each RemoteCluster must have a unique SSH key secret name
+  * The controller creates and manages SSH key secrets for each RemoteCluster
+  * The controller pushes SSH keys to remote clusters
+  * The controller verifies SSH connectivity between clusters
