@@ -179,8 +179,9 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Format for maximum compatibility with the SSH command handler
 	// Note we're using double quotes for the ssh command to ensure proper interpretation
 	// We're also explicitly using --rsh instead of -e for better compatibility
-	// Output is sent to /dev/tty in the pod for visibility in logs
-	rsyncCmd := fmt.Sprintf("rsync %s --rsh=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d\" %s %s 2>&1 | tee /dev/stdout",
+	// Enhanced to use tee to log the process to the pod's console log for better monitoring
+	// Using a timestamp prefix for each line to track progress better
+	rsyncCmd := fmt.Sprintf("rsync %s --rsh=\"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d\" %s %s 2>&1 | while IFS= read -r line; do echo \"[$(date +%%Y-%%m-%%d_%%H:%%M:%%S)] $line\"; done | tee /tmp/rsync.log",
 		rsyncOptsStr, sshPort, sourceInfo, destInfo)
 
 	entry = log.WithFields(logrus.Fields{
@@ -189,7 +190,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		"source":    sourceInfo,
 		"dest":      destInfo,
 	})
-	entry.Debug(logging.LogTagDetail + " Executing rsync command")
+	entry.Info(logging.LogTagDetail + " Executing rsync command with detailed logging")
 
 	// Execute command in rsync pod
 	cmd := []string{"sh", "-c", rsyncCmd}
@@ -306,8 +307,8 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		}
 	}
 
-	// Verify the transfer by checking if files were actually transferred
-	verifyCmd := []string{"sh", "-c", "if [ $(ls -la /data/ | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
+	// Verify the transfer by checking if files were actually transferred and capture the console log
+	verifyCmd := []string{"sh", "-c", "echo 'RSYNC LOG:' && cat /tmp/rsync.log && echo '' && echo 'VERIFICATION:' && if [ $(ls -la /data/ | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
 
 	// Use the context with PVCSyncer for verification
 	pvcVerifyCtx := context.WithValue(ctx, "pvcsync", p)
@@ -316,8 +317,17 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		"namespace":  destDeployment.Namespace,
 		"pod_name":   destDeployment.PodName,
 	})
-	entry.Debug(logging.LogTagDetail + " Verifying rsync result with destination config")
+	entry.Info(logging.LogTagDetail + " Verifying rsync result and capturing logs with destination config")
 	verifyOut, _, err := rsyncpod.ExecuteCommandInPod(pvcVerifyCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, verifyCmd)
+	
+	// Log the rsync output for monitoring purposes
+	logLines := strings.Split(verifyOut, "\n")
+	for _, line := range logLines {
+		if strings.Contains(line, "bytes/sec") || strings.Contains(line, "speedup is") {
+			log.Info(logging.LogTagDetail + " RSYNC STATS: " + line)
+		}
+	}
+	
 	if err != nil || !strings.Contains(verifyOut, "SUCCESS") {
 		errorEntry := log.WithFields(logrus.Fields{
 			"error":         err,
