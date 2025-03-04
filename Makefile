@@ -91,6 +91,7 @@ deploy-local: check-docker create-namespace manifests install-crds ## Build, pus
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile \
 		-t $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DEPLOY_TIMESTAMP) \
 		-t $(DOCKER_LATEST_TAG) .
 	
@@ -251,6 +252,7 @@ docker-build: check-docker ## Build and push controller docker image with cachin
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile \
 		-t ${IMG} \
 		-t $(DOCKER_LATEST_TAG) .
 	
@@ -273,6 +275,7 @@ docker-build-nocache: check-docker ## Build docker image without cache
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile \
 		-t ${IMG} \
 		-t $(DOCKER_LATEST_TAG) .
 	
@@ -365,7 +368,7 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 HELM ?= $(LOCALBIN)/helm
 
 ## Tool Versions
-CONTROLLER_TOOLS_VERSION ?= v0.13.0
+CONTROLLER_TOOLS_VERSION ?= v0.14.0
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary
