@@ -133,7 +133,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		log.WithFields(logrus.Fields{
 			"error": err,
 		}).Error(logging.LogTagError + " Failed to deploy rsync pod in destination cluster")
-
+		
 		// Release the lock since we're failing
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -158,10 +158,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"pod_name": destRsyncPod.Name,
 			"error":    err,
 		}).Error(logging.LogTagError + " Failed to generate SSH keys")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -187,10 +187,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"pod_name": destRsyncPod.Name,
 			"error":    err,
 		}).Error(logging.LogTagError + " Failed to get public key")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -218,10 +218,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"source_pvc":       sourcePVCName,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to check if source PVC is mounted")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -242,7 +242,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		}).Info(logging.LogTagSkip + " Source PVC is not mounted, skipping rsync")
 		// Clean up resources before returning
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -271,10 +271,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"source_pvc":       sourcePVCName,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to find node where source PVC is mounted")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -287,7 +287,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		}
 		return fmt.Errorf("failed to find node where source PVC is mounted: %v", err)
 	}
-
+	
 	log.WithFields(logrus.Fields{
 		"source_node": sourceNode,
 	}).Info(logging.LogTagStep5Complete + " Found node where source PVC is mounted")
@@ -303,10 +303,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"node":  sourceNode,
 			"error": err,
 		}).Error(logging.LogTagError + " Failed to find DR-Syncer-Agent")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -340,10 +340,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"agent_pod":        agentPod.Name,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to find mount path for PVC")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -371,10 +371,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"agent_pod": agentPod.Name,
 			"error":     err,
 		}).Error(logging.LogTagError + " Failed to push public key to agent pod")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -394,7 +394,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"dest_pod": destRsyncPod.Name,
 		"node_ip":  nodeIP,
 	}).Info(logging.LogTagStep9 + " Testing SSH connectivity")
-
+	
 	// Test SSH connectivity to make sure we can reach the agent
 	err = p.TestSSHConnectivity(ctx, destRsyncPod, nodeIP, 2222)
 	if err != nil {
@@ -403,10 +403,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"node_ip":  nodeIP,
 			"error":    err,
 		}).Error(logging.LogTagError + " Failed to test SSH connectivity")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -420,7 +420,7 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		return fmt.Errorf("failed to test SSH connectivity: %v", err)
 	}
 	log.Info(logging.LogTagStep9Complete + " SSH connectivity test successful")
-
+	
 	// Step 10: Run rsync command using the node's external IP
 	log.WithFields(logrus.Fields{
 		"dest_pod":   destRsyncPod.Name,
@@ -435,10 +435,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"mount_path": mountPath,
 			"error":      err,
 		}).Error(logging.LogTagError + " Failed to perform rsync")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -465,10 +465,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"source_pvc":       sourcePVCName,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to update source PVC annotations")
-
+		
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
-
+		
 		// Release the lock
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {

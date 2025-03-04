@@ -8,6 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// Export the logger instance for use across packages
 // Log tags for different log categories
 const (
 	LogTagDetail = "[DR-SYNC-DETAIL]" // Detailed operational logs (debug level)
