@@ -51,6 +51,53 @@ Deploy the controller:
 make deploy
 ```
 
+### Release Process
+
+The project uses GitHub Actions for CI/CD and follows semantic versioning for releases.
+
+#### Creating a Release
+
+To create a new release:
+
+1. Ensure all changes are committed and pushed to the main branch:
+   ```bash
+   git checkout main
+   git pull
+   ```
+
+2. Create an annotated tag following semantic versioning:
+   ```bash
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   ```
+
+3. Push the tag to GitHub:
+   ```bash
+   git push origin v1.0.0
+   ```
+
+#### CI/CD Pipeline
+
+When a tag is pushed, the GitHub Actions pipeline automatically:
+
+1. Builds all Docker images (controller, agent, rsync) with the version tag
+2. Pushes images to DockerHub with both version tag and 'latest' tag
+3. Packages the Helm chart with the release version
+4. Updates the Helm repository with the new chart
+5. Creates a GitHub Release with generated release notes
+
+#### Versioning Guidelines
+
+DR-Syncer follows [Semantic Versioning](https://semver.org/):
+
+- **Major version** (`X` in vX.Y.Z): Incompatible API changes or major functionality changes
+- **Minor version** (`Y` in vX.Y.Z): New features that are backward-compatible
+- **Patch version** (`Z` in vX.Y.Z): Bug fixes and minor improvements that are backward-compatible
+
+For pre-release versions, use formats like:
+- `v1.0.0-alpha.1`
+- `v1.0.0-beta.2`
+- `v1.0.0-rc.1`
+
 ## Troubleshooting
 
 ### Common Issues

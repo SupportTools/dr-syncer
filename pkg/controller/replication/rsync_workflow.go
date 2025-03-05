@@ -565,6 +565,8 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 	return rsyncDeployment, nil
 }
 
+// The custom context key types are defined in pvc_sync.go
+
 // generateSSHKeys generates SSH keys in the rsync pod
 func (p *PVCSyncer) generateSSHKeys(ctx context.Context, rsyncDeployment *rsyncpod.RsyncDeployment) error {
 	log.WithFields(logrus.Fields{
@@ -573,7 +575,7 @@ func (p *PVCSyncer) generateSSHKeys(ctx context.Context, rsyncDeployment *rsyncp
 	}).Info(logging.LogTagDetail + " Generating SSH keys in rsync pod")
 
 	// Put the PVCSyncer in the context for SSH key generation
-	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	syncerCtx := context.WithValue(ctx, syncerKey, p)
 
 	// Generate SSH keys - use the context with PVCSyncer
 	log.WithFields(logrus.Fields{
@@ -607,7 +609,7 @@ func (p *PVCSyncer) getPublicKey(ctx context.Context, rsyncDeployment *rsyncpod.
 	}).Info(logging.LogTagDetail + " Getting public key from rsync pod")
 
 	// Put the PVCSyncer in the context for getting public key
-	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	syncerCtx := context.WithValue(ctx, syncerKey, p)
 
 	// Get public key - use the context with PVCSyncer
 	log.WithFields(logrus.Fields{
@@ -647,7 +649,7 @@ func (p *PVCSyncer) cleanupResources(ctx context.Context, rsyncDeployment *rsync
 	}).Info(logging.LogTagDetail + " Cleaning up resources")
 
 	// Put the PVCSyncer in the context for cleanup
-	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	syncerCtx := context.WithValue(ctx, syncerKey, p)
 
 	// Delete the rsync deployment with context containing PVCSyncer
 	log.WithFields(logrus.Fields{

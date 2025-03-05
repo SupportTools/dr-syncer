@@ -153,7 +153,7 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 // generateSyncID generates a unique sync ID
 func generateSyncID() string {
 	timestamp := metav1.Now().Format("20060102-150405")
-	return fmt.Sprintf("%s", timestamp)
+	return timestamp
 }
 
 // GetRuntimeObject returns the wrapped runtime object

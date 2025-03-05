@@ -6,8 +6,7 @@ import (
 	"time"
 
 	"github.com/supporttools/dr-syncer/pkg/agent/ssh"
-	"github.com/supporttools/dr-syncer/pkg/agent/sshkeys"
-	"github.com/supporttools/dr-syncer/pkg/agent/tempod"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -19,11 +18,10 @@ const (
 
 // Daemon represents the agent daemon
 type Daemon struct {
-	sshServer   *ssh.Server
-	tempManager *tempod.Manager
-	keySystem   *sshkeys.KeySystem
-	config      *rest.Config
-	namespace   string
+	sshServer *ssh.Server
+	client    kubernetes.Interface
+	config    *rest.Config
+	namespace string
 }
 
 // NewDaemon creates a new daemon instance
@@ -38,147 +36,42 @@ func (d *Daemon) SetNamespace(namespace string) {
 	d.namespace = namespace
 }
 
-// InitTempManager initializes the temporary pod manager
-func (d *Daemon) InitTempManager(config *rest.Config) error {
-	// Create temp pod manager
-	manager, err := tempod.NewManager(config)
-	if err != nil {
-		return fmt.Errorf("failed to create temp pod manager: %v", err)
-	}
-
-	d.tempManager = manager
-	d.config = config
-
-	return nil
-}
-
 // InitKeySystem initializes the SSH key management system
 func (d *Daemon) InitKeySystem(ctx context.Context, client kubernetes.Interface) error {
 	if d.namespace == "" {
 		return fmt.Errorf("namespace not set")
 	}
 
-	// Create key system
-	d.keySystem = sshkeys.NewKeySystem(client, d.namespace)
+	d.client = client
 
-	// Initialize keys
-	if err := d.keySystem.InitializeKeys(ctx); err != nil {
-		return fmt.Errorf("failed to initialize keys: %v", err)
+	// Check if keys already exist
+	secretName := "pvc-syncer-agent-keys"
+	_, err := client.CoreV1().Secrets(d.namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err == nil {
+		fmt.Printf("SSH key secret %s already exists in namespace %s\n", secretName, d.namespace)
+	} else {
+		// Keys don't exist, generate them
+		fmt.Printf("SSH key secret %s does not exist in namespace %s, will be created by leader\n", secretName, d.namespace)
 	}
 
 	// Schedule key rotation
-	d.keySystem.ScheduleKeyRotation(ctx, sshkeys.DefaultKeyRotationInterval)
-
-	// Initialize secret watcher to dynamically load authorized keys from secret
-	if err := sshkeys.InitializeSecretWatcher(ctx, client, d.namespace); err != nil {
-		fmt.Printf("Warning: Failed to initialize secret watcher: %v\n", err)
-		// Don't fail if secret watcher initialization fails
-		// This allows backward compatibility with direct file updates
-	}
+	ssh.ScheduleKeyRotation(ctx, client, d.namespace, secretName, ssh.DefaultKeyRotationInterval)
 
 	return nil
 }
 
-// CreateTempPodWithKeys creates a temporary pod with SSH keys
-func (d *Daemon) CreateTempPodWithKeys(ctx context.Context, namespace, pvcName, nodeName string) (*tempod.TempPod, *sshkeys.KeyPair, error) {
-	if d.tempManager == nil {
-		return nil, nil, fmt.Errorf("temp pod manager not initialized")
-	}
-
-	if d.keySystem == nil {
-		return nil, nil, fmt.Errorf("key system not initialized")
-	}
-
-	// Create temp pod
-	pod, err := d.CreateTempPod(ctx, namespace, pvcName, nodeName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create temp pod: %v", err)
-	}
-
-	// Create keys for the pod
-	keyPair, err := d.keySystem.CreateTempPodKeys(ctx, pod.Name)
-	if err != nil {
-		// Attempt to clean up the pod
-		_ = pod.Cleanup(ctx, tempod.DefaultPodCleanupTimeout)
-		return nil, nil, fmt.Errorf("failed to create keys for pod: %v", err)
-	}
-
-	return pod, keyPair, nil
-}
-
-// CleanupTempPodWithKeys cleans up a temporary pod and its keys
-func (d *Daemon) CleanupTempPodWithKeys(ctx context.Context, pod *tempod.TempPod) error {
-	if d.tempManager == nil || d.keySystem == nil {
-		return fmt.Errorf("temp pod manager or key system not initialized")
-	}
-
-	// Clean up keys
-	if err := d.keySystem.CleanupTempPodKeys(ctx, pod.Name); err != nil {
-		return fmt.Errorf("failed to clean up keys: %v", err)
-	}
-
-	// Clean up pod
-	if err := pod.Cleanup(ctx, tempod.DefaultPodCleanupTimeout); err != nil {
-		return fmt.Errorf("failed to clean up pod: %v", err)
-	}
-
+// InitTempManager is kept for backwards compatibility but is now a no-op
+func (d *Daemon) InitTempManager(config *rest.Config) error {
+	// This is now a no-op as we don't use temporary pods anymore
+	// Store the config for later use
+	d.config = config
 	return nil
 }
 
-// CreateTempPod creates a temporary pod for PVC access
-func (d *Daemon) CreateTempPod(ctx context.Context, namespace, pvcName, nodeName string) (*tempod.TempPod, error) {
-	if d.tempManager == nil {
-		return nil, fmt.Errorf("temp pod manager not initialized")
-	}
-
-	// Ensure rsync ConfigMap exists
-	if err := tempod.EnsureRsyncConfigMap(ctx, d.tempManager.Client, namespace); err != nil {
-		return nil, fmt.Errorf("failed to ensure rsync ConfigMap: %v", err)
-	}
-
-	// Create temp pod
-	pod, err := d.tempManager.CreateTempPod(ctx, tempod.TempPodOptions{
-		Namespace: namespace,
-		PVCName:   pvcName,
-		NodeName:  nodeName,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp pod: %v", err)
-	}
-
-	// Wait for pod to be ready
-	if err := pod.WaitForPodReady(ctx, tempod.DefaultPodReadyTimeout); err != nil {
-		// Attempt to clean up the pod
-		_ = pod.Cleanup(ctx, tempod.DefaultPodCleanupTimeout)
-		return nil, fmt.Errorf("failed to wait for pod to be ready: %v", err)
-	}
-
-	return pod, nil
-}
-
-// CreateTempPodForPVC creates a temporary pod for a PVC, automatically finding the node
-func (d *Daemon) CreateTempPodForPVC(ctx context.Context, namespace, pvcName string) (*tempod.TempPod, error) {
-	if d.tempManager == nil {
-		return nil, fmt.Errorf("temp pod manager not initialized")
-	}
-
-	// Find node where PVC is mounted
-	nodeName, err := tempod.FindPVCNode(ctx, d.tempManager.Client, namespace, pvcName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find node for PVC: %v", err)
-	}
-
-	// Create temp pod on the node
-	return d.CreateTempPod(ctx, namespace, pvcName, nodeName)
-}
-
-// CleanupTempPods cleans up all temporary pods
+// CleanupTempPods is kept for backwards compatibility but is now a no-op
 func (d *Daemon) CleanupTempPods(ctx context.Context) error {
-	if d.tempManager == nil {
-		return nil
-	}
-
-	return d.tempManager.CleanupAll(ctx, tempod.DefaultPodCleanupTimeout)
+	// This is now a no-op as we don't use temporary pods anymore
+	return nil
 }
 
 // Start starts the daemon
@@ -213,7 +106,7 @@ func (d *Daemon) GetProxyInfo() map[string]interface{} {
 	}
 }
 
-// GetKeySystem returns the key system
-func (d *Daemon) GetKeySystem() *sshkeys.KeySystem {
-	return d.keySystem
+// GetClient returns the kubernetes client
+func (d *Daemon) GetClient() kubernetes.Interface {
+	return d.client
 }

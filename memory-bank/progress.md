@@ -116,18 +116,19 @@
 - [x] Task 3: SSH Key Management System
   * Status: Completed
   * Files Created/Modified:
-    - New pkg/agent/sshkeys package
+    - New pkg/agent/ssh/keygen.go (refactored from previous sshkeys package)
     - New pkg/controller/replication/keys.go
     - New pkg/controller/replication/log.go
     - New pkg/controller/replication/pvc_sync.go
     - Controller code updates
   * Key Changes:
-    - Two-layer key generation
+    - Single-layer key generation
     - Key rotation logic
     - Secret management
     - Secure SSH key handling
     - Replication-level key management
-    - Temporary pod key integration
+    - Simplified key management structure
+    - Direct rsync pod key generation
   * Success Criteria:
     - Keys generated securely
     - Rotation works smoothly

@@ -10,6 +10,8 @@ import (
 	"github.com/supporttools/dr-syncer/pkg/logging"
 )
 
+// The custom context key types are defined in pvc_sync.go
+
 // TestSSHConnectivity tests SSH connectivity to the agent pod
 func (p *PVCSyncer) TestSSHConnectivity(ctx context.Context, rsyncPod *rsyncpod.RsyncDeployment, targetIP string, targetPort int) error {
 	log.WithFields(logrus.Fields{
@@ -19,7 +21,7 @@ func (p *PVCSyncer) TestSSHConnectivity(ctx context.Context, rsyncPod *rsyncpod.
 	}).Info(logging.LogTagDetail + " Testing SSH connectivity to agent")
 
 	// Context with PVCSyncer for pod exec
-	syncerCtx := context.WithValue(ctx, "pvcsync", p)
+	syncerCtx := context.WithValue(ctx, syncerKey, p)
 
 	// SSH test command
 	sshTestCmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -p %d root@%s echo SSH_CONNECTION_SUCCESSFUL", 

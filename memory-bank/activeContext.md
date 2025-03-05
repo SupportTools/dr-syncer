@@ -55,29 +55,24 @@
      * ✓ Complete with recent security improvements
 
 4. Improved Security Architecture:
-   - Bastion/Proxy Pattern:
-     * Agent pod acts as SSH proxy/bastion
+   - Direct Access Pattern:
+     * Agent pod acts as SSH bastion/proxy
      * No root filesystem access required
-     * SSH forwarding to temporary pods
-   - Temporary PVC Mount Pods:
-     * Created on-demand for specific PVCs
-     * Node affinity to run on same node as PVC
-     * Direct PVC mount with minimal permissions
-     * Runs rsync server for data access
+     * Direct access to mounted PVCs on the node
    - Data Flow:
      * DR replication pod → Agent SSH (port 2222)
-     * Agent → Temp Pod rsync (internal port)
+     * Agent → Direct mount path access
      * Direct node-to-node path with minimal network overhead
    - SSH Key Management:
-     * Two-layer authentication system
+     * Single-layer authentication system
      * DR→Agent: Cluster-level keys stored in secrets
-     * Agent→Temp: Operation-specific internal keys
      * Automated key generation and rotation
    - Security Improvements:
      * Direct command restriction via authorized_keys
      * Elimination of intermediate script processing
      * Reduced attack surface
      * Simplified security model
+     * Removed unused temporary pod mechanism
 
 2. Custom Resources
    - RemoteCluster CRD implemented and validated
@@ -414,7 +409,7 @@
 ### Task 3: SSH Key Management System
 - Status: Completed
 - Files Created/Modified:
-  * New pkg/agent/sshkeys package
+  * New pkg/agent/ssh/keygen.go (refactored from previous sshkeys package)
   * New pkg/controller/replication/keys.go
   * New pkg/controller/replication/log.go
   * New pkg/controller/replication/pvc_sync.go
@@ -426,6 +421,8 @@
   * Secure SSH key handling
   * Replication-level key management
   * Temporary pod key integration
+  * Simplified key management structure
+  * Direct rsync pod key generation
 - Success Criteria:
   * Keys generated securely
   * Rotation works smoothly

@@ -19,7 +19,7 @@ func (p *PVCSyncer) SyncReplication(ctx context.Context, sourceNS, destNS, pvcNa
 	}).Info("[DR-SYNC] Starting PVC replication process")
 
 	// Update context with PVCSyncer for executeCommandInPod to use
-	ctx = context.WithValue(ctx, "pvcsync", p)
+	ctx = context.WithValue(ctx, syncerKey, p)
 
 	// Step 1: Check if source PVC is currently mounted
 	log.Info("[DR-SYNC] Step 1: Checking if source PVC is mounted")

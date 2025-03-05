@@ -206,7 +206,7 @@ func executeCommandInPod(ctx context.Context, client kubernetes.Interface, names
 	var config *rest.Config
 
 	// First priority: explicit config in context
-	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
+	if configFromCtx := ctx.Value(k8sConfigKey); configFromCtx != nil {
 		config = configFromCtx.(*rest.Config)
 		log.WithFields(logrus.Fields{
 			"host": config.Host,
@@ -214,68 +214,74 @@ func executeCommandInPod(ctx context.Context, client kubernetes.Interface, names
 	}
 
 	// No explicit config provided - check for PVCSyncer in context
-	if config == nil && ctx.Value("pvcsync") != nil {
-		// Get config from PVCSyncer context
-		type ConfigProvider interface {
-			GetSourceConfig() *rest.Config
-			GetDestinationConfig() *rest.Config
-			GetSourceClient() kubernetes.Interface
-			GetDestinationClient() kubernetes.Interface
-		}
+	if config == nil {
+		syncerValue := ctx.Value(syncerKey)
+		if syncerValue != nil {
+			// Get config from PVCSyncer context
+			type ConfigProvider interface {
+				GetSourceConfig() *rest.Config
+				GetDestinationConfig() *rest.Config
+				GetSourceClient() kubernetes.Interface
+				GetDestinationClient() kubernetes.Interface
+			}
 
-		if provider, ok := ctx.Value("pvcsync").(ConfigProvider); ok {
-			// Compare the client with source/destination clients to determine which to use
-			srcClient := provider.GetSourceClient()
-			destClient := provider.GetDestinationClient()
+			if provider, ok := syncerValue.(ConfigProvider); ok {
+				// Compare the client with source/destination clients to determine which to use
+				srcClient := provider.GetSourceClient()
+				destClient := provider.GetDestinationClient()
 
-			// Compare client URLs to determine if we're using source or destination client
-			clientHost := client.CoreV1().RESTClient().Get().URL().Host
-			srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
-			destHost := destClient.CoreV1().RESTClient().Get().URL().Host
+				// Compare client URLs to determine if we're using source or destination client
+				clientHost := client.CoreV1().RESTClient().Get().URL().Host
+				srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
+				destHost := destClient.CoreV1().RESTClient().Get().URL().Host
 
-			if clientHost == srcHost {
-				config = provider.GetSourceConfig()
-				log.WithFields(logrus.Fields{
-					"host":        config.Host,
-					"client_host": clientHost,
-				}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
-			} else if clientHost == destHost {
-				config = provider.GetDestinationConfig()
-				log.WithFields(logrus.Fields{
-					"host":        config.Host,
-					"client_host": clientHost,
-				}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
-			} else {
-				// If no direct match, use simple namespace-based heuristic
-				usingNamespace := namespace
-				// Trim any pod-specific suffixes (for agent finding)
-				if strings.Contains(namespace, "/") {
-					parts := strings.Split(namespace, "/")
-					usingNamespace = parts[0]
-				}
-
-				// Check if this is a source namespace
-				syncer, ok := ctx.Value("pvcsync").(*PVCSyncer)
-				if ok && syncer.SourceNamespace != "" && strings.HasPrefix(usingNamespace, syncer.SourceNamespace) {
+				if clientHost == srcHost {
 					config = provider.GetSourceConfig()
 					log.WithFields(logrus.Fields{
-						"host":             config.Host,
-						"source_namespace": syncer.SourceNamespace,
-						"namespace":        namespace,
-					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (namespace match)")
-				} else if ok && syncer.DestinationNamespace != "" {
+						"host":        config.Host,
+						"client_host": clientHost,
+					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
+				} else if clientHost == destHost {
 					config = provider.GetDestinationConfig()
 					log.WithFields(logrus.Fields{
-						"host":           config.Host,
-						"dest_namespace": syncer.DestinationNamespace,
-						"namespace":      namespace,
-					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (fallback)")
+						"host":        config.Host,
+						"client_host": clientHost,
+					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
+				} else {
+					// If no direct match, use simple namespace-based heuristic
+					usingNamespace := namespace
+					// Trim any pod-specific suffixes (for agent finding)
+					if strings.Contains(namespace, "/") {
+						parts := strings.Split(namespace, "/")
+						usingNamespace = parts[0]
+					}
+
+					// Check if this is a source namespace
+					syncer, ok := syncerValue.(*PVCSyncer)
+					if ok {
+						// Compare using source or destination namespace based on prefix
+						if syncer.SourceNamespace != "" && strings.HasPrefix(usingNamespace, syncer.SourceNamespace) {
+							config = provider.GetSourceConfig()
+							log.WithFields(logrus.Fields{
+								"host":             config.Host,
+								"source_namespace": syncer.SourceNamespace,
+								"namespace":        namespace,
+							}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (namespace match)")
+						} else if syncer.DestinationNamespace != "" {
+							config = provider.GetDestinationConfig()
+							log.WithFields(logrus.Fields{
+								"host":           config.Host,
+								"dest_namespace": syncer.DestinationNamespace,
+								"namespace":      namespace,
+							}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (fallback)")
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// If no config is available, return an error
+	// If config is still nil after all checks, return an error
 	if config == nil {
 		clientHost := client.CoreV1().RESTClient().Get().URL().Host
 		log.WithFields(logrus.Fields{
@@ -334,8 +340,7 @@ func executeCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		"stderr_len": stderr.Len(),
 	}).Debug("[DR-SYNC-EXEC] Command execution completed")
 
-	// If there's content in stderr but no error was returned, log it as a warning
-	if stderr.Len() > 0 && err == nil {
+	if stderr.Len() > 0 {
 		log.WithFields(logrus.Fields{
 			"pod":       podName,
 			"namespace": namespace,
@@ -381,7 +386,7 @@ func (p *PVCSyncer) AddPublicKeyToSourceAgent(ctx context.Context, publicKey, tr
 	}
 
 	// Put the PVCSyncer in the context for ExecuteCommandInPod
-	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
+	pvcSyncCtx := context.WithValue(ctx, syncerKey, p)
 
 	// Execute the command in agent pod with context that includes PVCSyncer
 	log.WithFields(logrus.Fields{
@@ -417,44 +422,34 @@ func (p *PVCSyncer) CompleteNamespaceMappingPVCSync(ctx context.Context, repl *d
 		"sync_id":          syncID,
 	}).Info("[DR-SYNC] Updating namespace mapping status after PVC sync")
 
-	// Get the latest version of the namespace mapping
+	// Get the latest version to update - Kubernetes requires a Get before Update
 	var nm drv1alpha1.NamespaceMapping
-	err := p.DestinationClient.Get(ctx, client.ObjectKey{Name: mappingName}, &nm)
-	if err != nil {
-		log.WithFields(logrus.Fields{
-			"namespacemapping": mappingName,
-			"source_namespace": p.SourceNamespace,
-			"dest_namespace":   p.DestinationNamespace,
-			"error":            err,
-		}).Warning("[DR-SYNC] Failed to get namespace mapping for status update")
 
-		// Attempt to find the namespace mapping by listing all and matching source/dest namespaces
-		var nmList drv1alpha1.NamespaceMappingList
-		if err := p.DestinationClient.List(ctx, &nmList); err == nil {
-			for _, nm := range nmList.Items {
-				if nm.Spec.SourceNamespace == p.SourceNamespace &&
-					nm.Spec.DestinationNamespace == p.DestinationNamespace {
+	// The namespace mapping should be in a system namespace, which for our controller
+	// is typically the same namespace where the operator is running
+	operatorNamespace := "dr-syncer" // Using a default namespace for the operator
+
+	if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: operatorNamespace,
+		Name:      repl.Name,
+	}, &nm); err != nil {
+		// If we can't find by name in the operator namespace, try the destination namespace
+		// as a fallback since the resource might be deployed there instead
+		if p.DestinationNamespace != "" {
+			if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+				Namespace: p.DestinationNamespace,
+				Name:      repl.Name,
+			}, &nm); err != nil {
+				// If we still can't find it, try with no namespace as it might be a cluster-scoped resource
+				if err := p.DestinationClient.Get(ctx, client.ObjectKey{Namespace: "", Name: repl.Name}, &nm); err != nil {
+					// Finally, use the original object for the update as a last resort
 					log.WithFields(logrus.Fields{
-						"found_namespacemapping": nm.Name,
-						"source_namespace":       p.SourceNamespace,
-						"dest_namespace":         p.DestinationNamespace,
-					}).Info("[DR-SYNC] Found matching namespace mapping by source/dest namespaces")
-
-					// Retry with the found name
-					var foundNM drv1alpha1.NamespaceMapping
-					if err := p.DestinationClient.Get(ctx, client.ObjectKey{Name: nm.Name}, &foundNM); err == nil {
-						mappingName = nm.Name
-						nm = foundNM
-						err = nil
-						break
-					}
+						"namespacemapping": repl.Name,
+						"error":            err,
+					}).Warn("[DR-SYNC] Could not find namespace mapping for update, will use provided object")
+					nm = *repl
 				}
 			}
-		}
-
-		// If still not found, return the original error
-		if err != nil {
-			return fmt.Errorf("failed to get namespace mapping: %v", err)
 		}
 	}
 
@@ -472,8 +467,12 @@ func (p *PVCSyncer) CompleteNamespaceMappingPVCSync(ctx context.Context, repl *d
 	nm.Annotations["dr-syncer.io/last-pvc-sync-status"] = "Completed"
 
 	// Update the namespace mapping
-	err = p.DestinationClient.Update(ctx, &nm)
-	if err != nil {
+	if err := p.DestinationClient.Update(ctx, &nm); err != nil {
+		log.WithFields(logrus.Fields{
+			"namespacemapping": repl.Name,
+			"namespace":        nm.Namespace,
+			"error":            err,
+		}).Error("[DR-SYNC] Failed to update namespace mapping")
 		return fmt.Errorf("failed to update namespace mapping status: %v", err)
 	}
 
@@ -492,11 +491,35 @@ func (p *PVCSyncer) ScheduleNextPVCSync(ctx context.Context, repl *drv1alpha1.Na
 		"namespacemapping": repl.Name,
 	}).Info("[DR-SYNC] Scheduling next PVC sync")
 
-	// Get the latest version of the namespace mapping
+	// Get the latest version to update - Kubernetes requires a Get before Update
 	var nm drv1alpha1.NamespaceMapping
-	err := p.DestinationClient.Get(ctx, client.ObjectKey{Name: repl.Name}, &nm)
-	if err != nil {
-		return fmt.Errorf("failed to get namespace mapping: %v", err)
+
+	// The namespace mapping should be in a system namespace, which for our controller
+	// is typically the same namespace where the operator is running
+	operatorNamespace := "dr-syncer" // Using a default namespace for the operator
+
+	if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: operatorNamespace,
+		Name:      repl.Name,
+	}, &nm); err != nil {
+		// If we can't find by name in the operator namespace, try the destination namespace
+		// as a fallback since the resource might be deployed there instead
+		if p.DestinationNamespace != "" {
+			if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+				Namespace: p.DestinationNamespace,
+				Name:      repl.Name,
+			}, &nm); err != nil {
+				// If we still can't find it, try with no namespace as it might be a cluster-scoped resource
+				if err := p.DestinationClient.Get(ctx, client.ObjectKey{Namespace: "", Name: repl.Name}, &nm); err != nil {
+					// Finally, use the original object for the update as a last resort
+					log.WithFields(logrus.Fields{
+						"namespacemapping": repl.Name,
+						"error":            err,
+					}).Warn("[DR-SYNC] Could not find namespace mapping for update, will use provided object")
+					nm = *repl
+				}
+			}
+		}
 	}
 
 	// Calculate next sync time based on schedule
@@ -535,8 +558,12 @@ func (p *PVCSyncer) ScheduleNextPVCSync(ctx context.Context, repl *drv1alpha1.Na
 	nm.Annotations["dr-syncer.io/next-pvc-sync-time"] = nextSyncTime.Format(time.RFC3339)
 
 	// Update the namespace mapping
-	err = p.DestinationClient.Update(ctx, &nm)
-	if err != nil {
+	if err := p.DestinationClient.Update(ctx, &nm); err != nil {
+		log.WithFields(logrus.Fields{
+			"namespacemapping": repl.Name,
+			"namespace":        nm.Namespace,
+			"error":            err,
+		}).Error("[DR-SYNC] Failed to update namespace mapping")
 		return fmt.Errorf("failed to update namespace mapping with next sync time: %v", err)
 	}
 

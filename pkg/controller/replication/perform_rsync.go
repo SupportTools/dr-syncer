@@ -194,8 +194,12 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Execute command in rsync pod
 	cmd := []string{"sh", "-c", rsyncCmd}
 
+	// Define a custom type for context key to avoid string collisions
+	type syncerContextKey string
+	const syncerKey syncerContextKey = "pvcsync"
+	
 	// Put the PVCSyncer in the context for ExecuteCommandInPod
-	pvcSyncCtx := context.WithValue(rsyncCtx, "pvcsync", p)
+	pvcSyncCtx := context.WithValue(rsyncCtx, syncerKey, p)
 
 	// Execute with retry logic for transient failures
 	var stdout, stderr string
@@ -310,7 +314,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	verifyCmd := []string{"sh", "-c", "if [ $(ls -la /data/ | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
 
 	// Use the context with PVCSyncer for verification
-	pvcVerifyCtx := context.WithValue(ctx, "pvcsync", p)
+	pvcVerifyCtx := context.WithValue(ctx, syncerKey, p)
 	entry = log.WithFields(logrus.Fields{
 		"deployment": destDeployment.Name,
 		"namespace":  destDeployment.Namespace,

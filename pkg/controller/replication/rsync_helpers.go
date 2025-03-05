@@ -63,7 +63,7 @@ func (p *PVCSyncer) execCommandOnPod(ctx context.Context, namespace, podName str
 		return "", "", err
 	}
 
-	err = exec.Stream(remotecommand.StreamOptions{
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:  nil,
 		Stdout: &stdout,
 		Stderr: &stderr,

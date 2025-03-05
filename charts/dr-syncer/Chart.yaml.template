@@ -1,0 +1,17 @@
+apiVersion: v2
+name: dr-syncer
+description: A Kubernetes controller for managing disaster recovery synchronization between clusters
+type: application
+version: ${CHART_VERSION}
+appVersion: "${APP_VERSION}"
+dependencies: []
+annotations:
+  # Automatically load CRDs from crds/ directory
+  artifacthub.io/crds: "true"
+keywords:
+  - kubernetes
+  - disaster-recovery
+  - replication
+maintainers:
+  - name: Support Tools
+    url: https://github.com/supporttools

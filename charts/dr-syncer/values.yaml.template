@@ -1,0 +1,166 @@
+# Default values for dr-syncer.
+
+replicaCount: 1
+
+image:
+  repository: docker.io/supporttools/dr-syncer
+  pullPolicy: IfNotPresent
+  # tag will be overridden by deploy commands
+  tag: "${IMAGE_TAG}"
+
+# Agent configuration
+agent:
+  image:
+    repository: docker.io/supporttools/dr-syncer-agent
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "${IMAGE_TAG}"
+
+# Rsync pod configuration
+rsyncPod:
+  image:
+    repository: docker.io/supporttools/dr-syncer-rsync
+    pullPolicy: IfNotPresent
+    # tag will be overridden by deploy commands
+    tag: "${IMAGE_TAG}"
+
+# Rsync configuration
+rsync:
+  ssh:
+    port: 2222
+  concurrency: 3
+  retryConfig:
+    maxRetries: 5
+    initialDelay: "5s"
+    maxDelay: "5m"
+  # Health check configuration
+  healthCheck:
+    # Interval between health checks
+    interval: "5m"
+    # SSH connection timeout
+    sshTimeout: "10s"
+    # Number of retry attempts for failed health checks
+    retryAttempts: 3
+    # Interval between retry attempts
+    retryInterval: "30s"
+
+# PVC mount configuration
+pvcMount:
+  # Image to use for PVC mount pods
+  pauseImage: "k8s.gcr.io/pause:3.6"
+  # Resource requests and limits for mount pods
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "50m"
+      memory: "64Mi"
+  # Timeout for waiting for mount pods to be running
+  podRunningTimeout: "3m"
+
+# Image pull secrets
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: "dr-syncer"
+
+podAnnotations: {}
+
+podSecurityContext:
+  {}
+  # fsGroup: 2000
+
+securityContext:
+  {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Controller configuration
+controller:
+  # Log level (info, debug, warn, error) - Set to debug for troubleshooting
+  logLevel: "debug"
+  # Log verbosity level for client-go transport logging (0=disabled, 1+=enabled)
+  # Set to maximum verbosity (9) to show all HTTP request details for debugging cluster connectivity issues
+  logVerbosity: 9
+  # Metrics bind address
+  metricsAddr: ":8080"
+  # Health probe bind address
+  probeAddr: ":8081"
+  # Enable leader election
+  enableLeaderElection: true
+  # Leader election ID
+  leaderElectionID: "dr-syncer.io"
+  # Sync interval between operations
+  syncInterval: "5m"
+  # Period for full resync of resources
+  resyncPeriod: "1h"
+  # Ignore certificate verification for remote clusters
+  ignoreCert: true
+
+  # Watch configuration for continuous mode
+  watch:
+    # Buffer size for watch events
+    bufferSize: 1024
+    # Maximum number of concurrent reconciles
+    maxConcurrentReconciles: 5
+    # Default background sync interval for continuous mode
+    backgroundSyncInterval: "1h"
+
+  # Default replication mode configuration
+  replication:
+    # Default replication mode (Scheduled, Continuous, Manual)
+    defaultMode: "Scheduled"
+    # Default schedule for scheduled mode (cron format)
+    defaultSchedule: "*/5 * * * *"
+    # Default scale to zero behavior
+    defaultScaleToZero: true
+    # Default resource types to sync
+    defaultResourceTypes:
+      - configmaps
+      - secrets
+      - deployments
+      - services
+      - ingresses
+      - persistentvolumeclaims
+
+# CRDs configuration
+crds:
+  # Install CRDs
+  install: true
+  # Keep CRDs on chart uninstall
+  keepOnUninstall: true
+
+rbac:
+  # Create cluster-wide RBAC resources (ClusterRole & ClusterRoleBinding)
+  create: true
+
+namespaceRBAC:
+  # Create namespace-scoped RBAC resources (Role & RoleBinding)
+  create: true

@@ -74,7 +74,7 @@ func main() {
 	}
 
 	// Initialize leader election manager
-	leaderMgr, err := leader.NewManager(clientset, namespace, d.GetKeySystem())
+	leaderMgr, err := leader.NewManager(clientset, namespace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize leader election manager: %v\n", err)
 		os.Exit(1)

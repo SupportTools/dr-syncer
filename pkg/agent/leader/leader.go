@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/supporttools/dr-syncer/pkg/agent/sshkeys"
+	"github.com/supporttools/dr-syncer/pkg/agent/ssh"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
@@ -22,6 +22,8 @@ const (
 	DefaultRetryPeriod = 2 * time.Second
 	// DefaultKeySecretName is the name of the secret containing SSH keys
 	DefaultKeySecretName = "pvc-syncer-agent-keys"
+	// DefaultKeyBits is the default number of bits for the SSH key
+	DefaultKeyBits = 2048
 )
 
 // Manager handles leader election and key management
@@ -29,11 +31,10 @@ type Manager struct {
 	client    kubernetes.Interface
 	namespace string
 	podName   string
-	keySystem *sshkeys.KeySystem
 }
 
 // NewManager creates a new leader election manager
-func NewManager(client kubernetes.Interface, namespace string, keySystem *sshkeys.KeySystem) (*Manager, error) {
+func NewManager(client kubernetes.Interface, namespace string) (*Manager, error) {
 	podName := os.Getenv("HOSTNAME")
 	if podName == "" {
 		return nil, fmt.Errorf("HOSTNAME environment variable not set")
@@ -43,7 +44,6 @@ func NewManager(client kubernetes.Interface, namespace string, keySystem *sshkey
 		client:    client,
 		namespace: namespace,
 		podName:   podName,
-		keySystem: keySystem,
 	}, nil
 }
 
@@ -80,7 +80,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			OnStartedLeading: func(ctx context.Context) {
 				// This pod is the leader, generate SSH keys
 				fmt.Printf("Pod %s became leader, generating SSH keys\n", m.podName)
-				if err := m.generateSSHKeys(ctx); err != nil {
+				if err := m.generateSSHKeys(); err != nil {
 					fmt.Printf("Error generating SSH keys: %v\n", err)
 				}
 			},
@@ -100,24 +100,19 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 // generateSSHKeys generates SSH keys and stores them in a secret
-func (m *Manager) generateSSHKeys(ctx context.Context) error {
+func (m *Manager) generateSSHKeys() error {
 	// Generate a new key pair
-	keyPair, err := sshkeys.GenerateKeyPair(sshkeys.DefaultKeyBits)
+	privateKey, publicKey, fingerprint, err := ssh.GenerateKeyPair(DefaultKeyBits)
 	if err != nil {
 		return fmt.Errorf("failed to generate key pair: %v", err)
 	}
 
-	// Create a secret with the key pair
-	secret := map[string][]byte{
-		sshkeys.DefaultPrivateKeyName:     keyPair.PrivateKey,
-		sshkeys.DefaultPublicKeyName:      keyPair.PublicKey,
-		sshkeys.DefaultAuthorizedKeysName: keyPair.AuthorizedKeys,
-	}
-
 	// Create the secret
-	if err := m.keySystem.CreateKeySecret(ctx, DefaultKeySecretName, secret); err != nil {
+	if err := ssh.CreateKeySecret(m.client, m.namespace, DefaultKeySecretName, privateKey, publicKey); err != nil {
 		return fmt.Errorf("failed to create key secret: %v", err)
 	}
+
+	fmt.Printf("Successfully created SSH key with fingerprint %s\n", fingerprint)
 
 	fmt.Printf("Successfully created SSH key secret %s in namespace %s\n", DefaultKeySecretName, m.namespace)
 	return nil
