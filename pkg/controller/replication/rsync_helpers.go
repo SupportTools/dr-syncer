@@ -35,6 +35,14 @@ func contains(slice []string, s string) bool {
 
 // execCommandOnPod executes a command in a pod
 func (p *PVCSyncer) execCommandOnPod(ctx context.Context, namespace, podName string, command []string) (string, string, error) {
+	// Add debug logging to show which cluster we're executing commands on
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pod_name":  podName,
+		"command":   strings.Join(command, " "),
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Debug(logging.LogTagDetail + " Executing command on pod using source cluster")
+
 	req := p.SourceK8sClient.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -67,14 +75,52 @@ func (p *PVCSyncer) execCommandOnPod(ctx context.Context, namespace, podName str
 
 // FindPVCNode finds a node where the PVC is mounted
 func (p *PVCSyncer) FindPVCNode(ctx context.Context, c client.Client, namespace, pvcName string) (string, error) {
+	// Add extremely detailed debug logging to troubleshoot cluster connection issues
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name":  pvcName,
+		"source_cluster_url": p.SourceConfig.Host,
+		"destination_namespace": p.DestinationNamespace,
+		"destination_cluster_url": p.DestinationConfig.Host,
+		"client_type": fmt.Sprintf("%T", c),
+		"source_client_type": fmt.Sprintf("%T", p.SourceClient),
+		"direct_client_type": fmt.Sprintf("%T", p.SourceK8sClient),
+		"function": "FindPVCNode",
+	}).Info(logging.LogTagDetail + " CLUSTER CONFIGURATION DETAILS FOR PVC NODE LOOKUP - checking which cluster we're using")
+
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+		"function": "FindPVCNode",
+	}).Debug(logging.LogTagDetail + " Starting PVC node lookup")
+
 	// Get all nodes where the PVC is mounted
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+	}).Debug(logging.LogTagDetail + " Finding all nodes where PVC is mounted")
+	
 	nodes, err := p.FindPVCNodes(ctx, c, namespace, pvcName)
 	if err != nil {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name": pvcName,
+			"error": err,
+		}).Error(logging.LogTagError + " Failed to find PVC nodes")
 		return "", err
 	}
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+		"nodes_found": nodes,
+	}).Debug(logging.LogTagDetail + " Found nodes for PVC")
 
 	// If no nodes are found, return an error
 	if len(nodes) == 0 {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name": pvcName,
+		}).Error(logging.LogTagError + " No nodes found with PVC mounted")
 		log.WithFields(logrus.Fields{
 			"namespace": namespace,
 			"pvc_name":  pvcName,
@@ -82,7 +128,7 @@ func (p *PVCSyncer) FindPVCNode(ctx context.Context, c client.Client, namespace,
 		return "", fmt.Errorf("no nodes found with PVC %s/%s mounted", namespace, pvcName)
 	}
 
-	// Return the first node (or a randomly selected one if we wanted to implement that)
+	// Return the first node
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
@@ -94,6 +140,15 @@ func (p *PVCSyncer) FindPVCNode(ctx context.Context, c client.Client, namespace,
 
 // FindPVCNodes finds all nodes where a PVC is mounted
 func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace, pvcName string) ([]string, error) {
+	// Add debug logging to show cluster URL and function entry
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name":  pvcName,
+		"source_cluster_url": p.SourceConfig.Host,
+		"function": "FindPVCNodes",
+	}).Info(logging.LogTagDetail + " Starting PVC nodes lookup on source cluster")
+
+
 	var nodes []string
 
 	log.WithFields(logrus.Fields{
@@ -102,6 +157,14 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 	}).Info(logging.LogTagDetail + " Finding nodes where PVC is mounted")
 
 	// List pods in the namespace
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+		"client_type": fmt.Sprintf("%T", c),
+		"source_client_type": fmt.Sprintf("%T", p.SourceClient),
+		"using_controller_runtime_client": true,
+	}).Debug(logging.LogTagDetail + " Listing all pods in namespace")
+	
 	podList := &corev1.PodList{}
 	if err := c.List(ctx, podList, client.InNamespace(namespace)); err != nil {
 		log.WithFields(logrus.Fields{
@@ -110,15 +173,35 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 		}).Error(logging.LogTagError + " Failed to list pods")
 		return nil, fmt.Errorf("failed to list pods: %v", err)
 	}
+	
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pod_count": len(podList.Items),
+	}).Debug(logging.LogTagDetail + " Found pods in namespace")
 
 	// Find pods using this PVC and collect their nodes
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+		"pod_count": len(podList.Items),
+	}).Debug(logging.LogTagDetail + " Iterating over pods to check for PVC usage")
+	
 	for _, pod := range podList.Items {
+		log.WithFields(logrus.Fields{
+			"pod_name": pod.Name,
+			"pod_phase": string(pod.Status.Phase),
+		}).Debug(logging.LogTagDetail + " Checking pod for PVC usage")
+
 		// Skip pods that are not running
 		if pod.Status.Phase != corev1.PodRunning {
+			log.WithFields(logrus.Fields{
+				"pod_name": pod.Name,
+				"pod_phase": string(pod.Status.Phase),
+			}).Debug(logging.LogTagDetail + " Skipping pod as it is not running")
 			continue
 		}
 
-		// Check if this pod uses the PVC
+				// Check if this pod uses the PVC
 		for _, volume := range pod.Spec.Volumes {
 			if volume.PersistentVolumeClaim != nil && volume.PersistentVolumeClaim.ClaimName == pvcName {
 				log.WithFields(logrus.Fields{
@@ -130,6 +213,11 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 
 				// Add the node if not already in the list
 				if !contains(nodes, pod.Spec.NodeName) {
+					log.WithFields(logrus.Fields{
+						"namespace": namespace,
+						"pvc_name": pvcName,
+						"node_name": pod.Spec.NodeName,
+					}).Debug(logging.LogTagDetail + " Adding node to list")
 					nodes = append(nodes, pod.Spec.NodeName)
 				}
 			}
@@ -145,13 +233,47 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 
 		// Get the PVC to find its volume name
 		pvc := &corev1.PersistentVolumeClaim{}
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"client_type": fmt.Sprintf("%T", c),
+		}).Debug(logging.LogTagDetail + " Getting PVC details using controller-runtime client")
+		
 		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: pvcName}, pvc); err != nil {
 			log.WithFields(logrus.Fields{
 				"namespace": namespace,
 				"pvc_name":  pvcName,
 				"error":     err,
 			}).Error(logging.LogTagError + " Failed to get PVC")
-			return nil, fmt.Errorf("failed to get PVC: %v", err)
+			
+			// Try with direct API client as a fallback
+			log.WithFields(logrus.Fields{
+				"namespace": namespace,
+				"pvc_name":  pvcName,
+			}).Debug(logging.LogTagDetail + " Trying to get PVC with direct API client as fallback")
+			
+			var pvcErr error
+			pvc, pvcErr = p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
+			if pvcErr != nil {
+				log.WithFields(logrus.Fields{
+					"namespace": namespace,
+					"pvc_name":  pvcName,
+					"error":     pvcErr,
+				}).Error(logging.LogTagError + " Failed to get PVC with direct API client too")
+				return nil, fmt.Errorf("failed to get PVC with both clients: original: %v, direct: %v", err, pvcErr)
+			}
+			
+			log.WithFields(logrus.Fields{
+				"namespace": namespace,
+				"pvc_name":  pvcName,
+				"pv_name":   pvc.Spec.VolumeName,
+			}).Info(logging.LogTagDetail + " Successfully got PVC with direct API client")
+		} else {
+			log.WithFields(logrus.Fields{
+				"namespace": namespace,
+				"pvc_name":  pvcName,
+				"pv_name":   pvc.Spec.VolumeName,
+			}).Info(logging.LogTagDetail + " Got PVC with controller-runtime client")
 		}
 
 		// If no PV is bound yet, return an empty list
@@ -164,6 +286,13 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 		}
 
 		// Get volume attachments
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"pv_name":   pvc.Spec.VolumeName,
+			"source_cluster_url": p.SourceConfig.Host,
+		}).Debug(logging.LogTagDetail + " Listing volume attachments with direct client")
+		
 		volumeAttachments, err := p.SourceK8sClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
 		if err != nil {
 			log.WithFields(logrus.Fields{
@@ -173,26 +302,78 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 			}).Error(logging.LogTagError + " Failed to list volume attachments")
 			return nil, fmt.Errorf("failed to list volume attachments: %v", err)
 		}
+		
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"attachment_count": len(volumeAttachments.Items),
+		}).Debug(logging.LogTagDetail + " Found volume attachments")
 
+		// Print PVC details for debugging
+		log.WithFields(logrus.Fields{
+			"namespace":   namespace,
+			"pvc_name":    pvcName,
+			"pv_name":     pvc.Spec.VolumeName,
+			"pvc_phase":   string(pvc.Status.Phase),
+			"access_modes": fmt.Sprintf("%v", pvc.Spec.AccessModes),
+			"storage_class": pvc.Spec.StorageClassName,
+		}).Info(logging.LogTagDetail + " PVC details for node lookup")
+		
 		// Find volume attachments for this PVC's PV
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name": pvcName,
+			"pv_name": pvc.Spec.VolumeName,
+		}).Debug(logging.LogTagDetail + " Iterating over volume attachments to find matching PV")
+		matchFound := false
 		for _, va := range volumeAttachments.Items {
-			if va.Spec.Source.PersistentVolumeName != nil && *va.Spec.Source.PersistentVolumeName == pvc.Spec.VolumeName {
-				log.WithFields(logrus.Fields{
-					"namespace":     namespace,
-					"pvc_name":      pvcName,
-					"pv_name":       pvc.Spec.VolumeName,
-					"attachment":    va.Name,
-					"attached_node": va.Spec.NodeName,
-				}).Info(logging.LogTagDetail + " Found volume attachment for PVC")
+			// Print info about each volume attachment
+			pvName := "nil"
+			if va.Spec.Source.PersistentVolumeName != nil {
+				pvName = *va.Spec.Source.PersistentVolumeName
+				
+				// Check if this attachment matches our PV
+				if pvName == pvc.Spec.VolumeName {
+					matchFound = true
+					fmt.Printf("Found volume attachment: %s on node %s for PV %s\n", va.Name, va.Spec.NodeName, pvName)
+					log.WithFields(logrus.Fields{
+						"namespace":     namespace,
+						"pvc_name":      pvcName,
+						"pv_name":       pvc.Spec.VolumeName,
+						"attachment":    va.Name,
+						"attached_node": va.Spec.NodeName,
+					}).Info(logging.LogTagDetail + " Found volume attachment for PVC")
 
-				// Add the node if not already in the list
-				if !contains(nodes, va.Spec.NodeName) {
-					nodes = append(nodes, va.Spec.NodeName)
+					// Add the node if not already in the list
+					if !contains(nodes, va.Spec.NodeName) {
+						fmt.Printf("Adding node %s to list from volume attachment\n", va.Spec.NodeName)
+						nodes = append(nodes, va.Spec.NodeName)
+					}
 				}
 			}
+			
+			// Log about this attachment for debugging
+			log.WithFields(logrus.Fields{
+				"attachment_name": va.Name, 
+				"node_name": va.Spec.NodeName,
+				"pv_name": pvName,
+				"matches_our_pv": pvName == pvc.Spec.VolumeName,
+			}).Debug(logging.LogTagDetail + " Examining volume attachment")
+		}
+		
+		if !matchFound {
+			log.WithFields(logrus.Fields{
+				"namespace": namespace,
+				"pvc_name":  pvcName,
+				"pv_name":   pvc.Spec.VolumeName,
+				"attachment_count": len(volumeAttachments.Items),
+			}).Warn(logging.LogTagWarn + " No matching volume attachments found for this PV")
+			fmt.Printf("No volume attachments found for PV %s among %d attachments\n", 
+				pvc.Spec.VolumeName, len(volumeAttachments.Items))
 		}
 	}
 
+	fmt.Printf("Final list of nodes: %v\n", nodes)
 	return nodes, nil
 }
 
@@ -200,7 +381,8 @@ func (p *PVCSyncer) FindPVCNodes(ctx context.Context, c client.Client, namespace
 func (p *PVCSyncer) FindAgentPod(ctx context.Context, nodeName string) (*corev1.Pod, string, error) {
 	log.WithFields(logrus.Fields{
 		"node": nodeName,
-	}).Info(logging.LogTagDetail + " Finding DR-Syncer-Agent on node")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Finding DR-Syncer-Agent on node using source cluster")
 
 	// List pods with agent selector
 	podList, err := p.SourceK8sClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{
@@ -278,7 +460,8 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 		"pvc_name":   pvcName,
 		"agent_pod":  agentPod.Name,
 		"agent_node": agentPod.Spec.NodeName,
-	}).Info(logging.LogTagDetail + " Finding mount path for PVC")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Finding mount path for PVC using source cluster")
 
 	// Get the PVC to find its volume name
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -394,7 +577,8 @@ func (p *PVCSyncer) PushPublicKeyToAgent(ctx context.Context, agentPod *corev1.P
 		"agent_pod":     agentPod.Name,
 		"agent_ns":      agentPod.Namespace,
 		"tracking_info": trackingInfo,
-	}).Info(logging.LogTagDetail + " Pushing public key to agent pod")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Pushing public key to agent pod using source cluster")
 
 	// Format the authorized_keys entry with the tracking info as a comment
 	authKeyEntry := fmt.Sprintf("# %s\n%s\n", trackingInfo, publicKey)
@@ -429,7 +613,8 @@ func (p *PVCSyncer) UpdateSourcePVCAnnotations(ctx context.Context, namespace, p
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
-	}).Info("Updating source PVC annotations")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Updating source PVC annotations using source cluster")
 
 	// Get the PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -478,7 +663,8 @@ func (p *PVCSyncer) HasVolumeAttachments(ctx context.Context, namespace, pvcName
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
-	}).Info(logging.LogTagDetail + " Checking if PVC has volume attachments")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Checking if PVC has volume attachments using source cluster")
 
 	// Get the PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -501,13 +687,51 @@ func (p *PVCSyncer) HasVolumeAttachments(ctx context.Context, namespace, pvcName
 	}
 
 	// Check if there are any running pods using this PVC
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name": pvcName,
+		"client_type": fmt.Sprintf("%T", p.SourceClient),
+		"source_k8s_client_type": fmt.Sprintf("%T", p.SourceK8sClient),
+		"using_controller_runtime_client": true,
+	}).Debug(logging.LogTagDetail + " Client info for HasVolumeAttachments pod listing")
+	
+	// Try with controller-runtime client first
 	podList := &corev1.PodList{}
 	if err := p.SourceClient.List(ctx, podList, client.InNamespace(namespace)); err != nil {
 		log.WithFields(logrus.Fields{
 			"namespace": namespace,
 			"error":     err,
-		}).Error(logging.LogTagError + " Failed to list pods")
-		return false, fmt.Errorf("failed to list pods: %v", err)
+		}).Error(logging.LogTagError + " Failed to list pods with controller-runtime client")
+		
+		// IMPORTANT DEBUG: Try with direct client as fallback and be VERY explicit about which cluster
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"source_cluster_url": p.SourceConfig.Host,
+			"source_cluster_direct_url": p.SourceConfig.Host, // Extra logging to ensure cluster info is available
+			"destination_namespace": p.DestinationNamespace,
+		}).Info(logging.LogTagDetail + " ATTEMPTING TO LIST PODS ON SOURCE CLUSTER using direct API client due to controller-runtime client failure")
+		
+		var apiPodList *corev1.PodList
+		apiPodList, err = p.SourceK8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"namespace": namespace,
+				"error":     err,
+			}).Error(logging.LogTagError + " Failed to list pods with direct client too")
+			return false, fmt.Errorf("failed to list pods with both clients: %v", err)
+		}
+		
+		// Use the direct client results
+		podList = apiPodList
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pod_count": len(podList.Items),
+		}).Info(logging.LogTagDetail + " Successfully listed pods with direct client")
+	} else {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pod_count": len(podList.Items),
+		}).Debug(logging.LogTagDetail + " Successfully listed pods with controller-runtime client")
 	}
 
 	for _, pod := range podList.Items {
@@ -561,7 +785,8 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
-	}).Info(logging.LogTagDetail + " Attempting to acquire lock on PVC")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Attempting to acquire lock on PVC using source cluster")
 
 	// Get the source PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -668,7 +893,8 @@ func (p *PVCSyncer) ReleasePVCLock(ctx context.Context, namespace, pvcName strin
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
-	}).Info(logging.LogTagDetail + " Releasing lock on PVC")
+		"source_cluster_url": p.SourceConfig.Host,
+	}).Info(logging.LogTagDetail + " Releasing lock on PVC using source cluster")
 
 	// Get the source PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})

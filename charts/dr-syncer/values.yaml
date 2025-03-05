@@ -104,10 +104,11 @@ affinity: {}
 
 # Controller configuration
 controller:
-  # Log level (info, debug, warn, error)
-  logLevel: "info"
+  # Log level (info, debug, warn, error) - Set to debug for troubleshooting
+  logLevel: "debug"
   # Log verbosity level for client-go transport logging (0=disabled, 1+=enabled)
-  logVerbosity: 0
+  # Set to maximum verbosity (9) to show all HTTP request details for debugging cluster connectivity issues
+  logVerbosity: 9
   # Metrics bind address
   metricsAddr: ":8080"
   # Health probe bind address

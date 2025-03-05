@@ -15,11 +15,11 @@ import (
 
 // syncPersistentVolumeClaimsWithMounting synchronizes PVCs between namespaces
 // This uses the rsync deployment to handle direct mounting and data transfer
-func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *ResourceSyncer, sourceClient, targetClient kubernetes.Interface, 
+func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *ResourceSyncer, sourceClient, targetClient kubernetes.Interface,
 	srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig, config *drv1alpha1.ImmutableResourceConfig) error {
-	
+
 	log.Info(fmt.Sprintf("Syncing persistent volume claims from %s to %s", srcNamespace, dstNamespace))
-	
+
 	// Get PVCs from source namespace
 	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -196,14 +196,16 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 
 			// Find nodes where PVCs are mounted - this will now succeed because we've mounted them
 			log.Info(fmt.Sprintf("Finding node for source PVC %s/%s", srcNamespace, sourcePVC.Name))
-			sourceNode, err := pvcSyncer.FindPVCNode(ctx, syncer.ctrlClient, srcNamespace, sourcePVC.Name)
+			fmt.Println("## FindPVCNode - Source PVC")
+			sourceNode, err := pvcSyncer.FindPVCNode(ctx, pvcSyncer.SourceClient, srcNamespace, sourcePVC.Name)
 			if err != nil {
 				log.Errorf("Failed to find node for source PVC %s/%s: %v", srcNamespace, sourcePVC.Name, err)
 				continue
 			}
 
 			log.Info(fmt.Sprintf("Finding node for destination PVC %s/%s", dstNamespace, destPVC.Name))
-			destNode, err := pvcSyncer.FindPVCNode(ctx, syncer.ctrlClient, dstNamespace, destPVC.Name)
+			fmt.Println("## FindPVCNode - Destination PVC")
+			destNode, err := pvcSyncer.FindPVCNode(ctx, pvcSyncer.DestinationClient, dstNamespace, destPVC.Name)
 			if err != nil {
 				log.Errorf("Failed to find node for destination PVC %s/%s: %v", dstNamespace, destPVC.Name, err)
 				continue

@@ -1,4 +1,5 @@
 # Debug mode setting (0 for minimal output, 1 for verbose)
+# Default to verbose debug mode for troubleshooting
 DEBUG ?= 0
 
 # Docker settings
@@ -143,7 +144,7 @@ deploy-local: check-docker create-namespace manifests install-crds ## Build, pus
 		--set gitCommit=$(GIT_COMMIT) \
 		--set buildDate=$(BUILD_DATE) \
 		--wait \
-		$(if $(filter 1,$(DEBUG)),--debug)
+		--debug
 	
 	@echo "✓ Deployment complete"
 	@echo "  Image: $(DOCKER_REGISTRY)/$(DOCKER_REPO):$(DEPLOY_TIMESTAMP)"
@@ -309,14 +310,14 @@ deploy: ## Deploy controller to the K8s cluster with Helm
 	KUBECONFIG=$(KUBECONFIG) helm upgrade --install dr-syncer charts/dr-syncer \
 		--namespace dr-syncer \
 		--create-namespace \
-		$(if $(filter 1,$(DEBUG)),--debug)
+		--debug
 
 .PHONY: undeploy
 undeploy: ## Undeploy controller from the K8s cluster with Helm
 	@echo "Undeploying from Kubernetes..."
 	KUBECONFIG=$(KUBECONFIG) helm uninstall $(HELM_RELEASE_NAME) \
 		--namespace $(HELM_NAMESPACE) \
-		$(if $(filter 1,$(DEBUG)),--debug)
+		--debug
 	@echo "✓ Undeployment complete"
 
 ##@ Generate
