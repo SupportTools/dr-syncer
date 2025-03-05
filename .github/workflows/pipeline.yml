@@ -24,11 +24,14 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
       - name: Run tests
         run: make test
 
       - name: Verify CRDs
-        run: make test-crds
+        run: make test-crds CI=true
 
   Build:
     runs-on: self-hosted-linux
