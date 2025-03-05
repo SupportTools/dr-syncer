@@ -16,7 +16,7 @@ import (
 // log is defined in logger.go
 
 // statusMutex guards access to ClusterMapping status updates
-var statusMutex sync.Mutex 
+var statusMutex sync.Mutex
 
 // updateStatusWithRetry updates ClusterMapping status with retry logic for conflicts
 func (r *ClusterMappingReconciler) updateStatusWithRetry(ctx context.Context, namespacedName types.NamespacedName, updateFn func(*drsyncerio.ClusterMapping) error) error {
@@ -63,7 +63,7 @@ func (r *ClusterMappingReconciler) setFailedStatusWithRetry(ctx context.Context,
 
 	// Calculate backoff duration based on consecutive failures with jitter
 	backoff := util.CalculateBackoff(clusterMapping.Status.ConsecutiveFailures)
-	log.Info(fmt.Sprintf("Setting backoff for %s: %v (after %d consecutive failures)", 
+	log.Info(fmt.Sprintf("Setting backoff for %s: %v (after %d consecutive failures)",
 		namespacedName, backoff, clusterMapping.Status.ConsecutiveFailures))
 
 	return ctrl.Result{RequeueAfter: backoff}, nil

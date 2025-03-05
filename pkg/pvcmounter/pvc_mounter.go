@@ -299,9 +299,9 @@ func (m *PVCMounter) findPVCNode(ctx context.Context, pvc *corev1.PersistentVolu
 	}
 
 	// Check if the PV has a node affinity
-	if pv.Spec.NodeAffinity != nil && 
-	   pv.Spec.NodeAffinity.Required != nil && 
-	   len(pv.Spec.NodeAffinity.Required.NodeSelectorTerms) > 0 {
+	if pv.Spec.NodeAffinity != nil &&
+		pv.Spec.NodeAffinity.Required != nil &&
+		len(pv.Spec.NodeAffinity.Required.NodeSelectorTerms) > 0 {
 		// Extract node name from node affinity if possible
 		for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
 			for _, expr := range term.MatchExpressions {
@@ -393,7 +393,7 @@ func (m *PVCMounter) waitForPodRunning(ctx context.Context, namespace, podName s
 					if len(pod.Status.Conditions) > 0 {
 						for _, cond := range pod.Status.Conditions {
 							if cond.Status == corev1.ConditionFalse {
-								log.Infof("Pod %s condition: %s = %s, reason: %s, message: %s", 
+								log.Infof("Pod %s condition: %s = %s, reason: %s, message: %s",
 									podName, cond.Type, cond.Status, cond.Reason, cond.Message)
 							}
 						}

@@ -79,44 +79,6 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		entry.Debug(logging.LogTagDetail + " Failed to get NamespaceMapping for bandwidth limit, continuing without limit")
 	}
 
-	// // Test SSH connectivity first with retry logic
-	// log.Info(logging.LogTagDetail + " Running pre-rsync SSH connectivity check")
-
-	// // Get SSH port from RemoteCluster CRD, using same logic as the rsync command
-	// sshPort := int32(2222) // Default port
-	// remoteClustersList := &drv1alpha1.RemoteClusterList{}
-	// if err := p.SourceClient.List(ctx, remoteClustersList); err == nil && len(remoteClustersList.Items) > 0 {
-	//	remoteCluster := remoteClustersList.Items[0]
-	//	if remoteCluster.Spec.PVCSync != nil && 
-	//	   remoteCluster.Spec.PVCSync.SSH != nil && 
-	//	   remoteCluster.Spec.PVCSync.SSH.Port > 0 {
-	//		sshPort = remoteCluster.Spec.PVCSync.SSH.Port
-	//	}
-	// }
-	
-	// err := withRetry(ctx, 3, 5*time.Second, func() error {
-	// 	if err := p.TestSSHConnectivity(ctx, destDeployment, nodeIP, int(sshPort)); err != nil {
-	// 		log.WithFields(logrus.Fields{
-	// 			"error": err,
-	// 		}).Warn(logging.LogTagWarn + " SSH connectivity check failed, will retry")
-	// 		return &RetryableError{Err: fmt.Errorf("SSH connectivity test failed: %v", err)}
-	// 	}
-	// 	return nil
-	// })
-
-	// if err != nil {
-	// 	log.WithFields(logrus.Fields{
-	// 		"error": err,
-	// 	}).Error(logging.LogTagError + " Pre-rsync SSH connectivity check failed after retries")
-
-	// 	// Update status to failed
-	// 	p.FailedSyncStatus(ctx, p.SourceNamespace, destDeployment.PVCName, err)
-
-	// 	return fmt.Errorf("SSH connectivity test failed: %v", err)
-	// }
-
-	// log.Info(logging.LogTagDetail + " Pre-rsync SSH connectivity check passed")
-
 	// Update status to show we're starting the actual sync
 	status := SyncStatus{
 		Phase:            "Syncing",
@@ -141,7 +103,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Try to get the SSH port from the RemoteCluster CRD
 	// First, get the RemoteCluster name from the source cluster
 	var remoteClusterName string
-	
+
 	// Look up the RemoteCluster CRD using the source namespace
 	// This assumes the NamespaceMapping has a reference to the RemoteCluster
 	// or we can derive it from the source/destination namespace pair
@@ -151,21 +113,21 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		log.WithFields(logrus.Fields{
 			"count": len(remoteClustersList.Items),
 		}).Debug(logging.LogTagDetail + " Found RemoteClusters")
-		
+
 		// If we found any RemoteClusters, use the first one's SSH port
 		// In a production environment, we would need more logic to find the correct one
 		if len(remoteClustersList.Items) > 0 {
 			remoteCluster := remoteClustersList.Items[0]
 			remoteClusterName = remoteCluster.Name
-			
+
 			// Check if PVCSync SSH config is available and has a port
-			if remoteCluster.Spec.PVCSync != nil && 
-			   remoteCluster.Spec.PVCSync.SSH != nil && 
-			   remoteCluster.Spec.PVCSync.SSH.Port > 0 {
+			if remoteCluster.Spec.PVCSync != nil &&
+				remoteCluster.Spec.PVCSync.SSH != nil &&
+				remoteCluster.Spec.PVCSync.SSH.Port > 0 {
 				sshPort = remoteCluster.Spec.PVCSync.SSH.Port
 				log.WithFields(logrus.Fields{
 					"remote_cluster": remoteClusterName,
-					"ssh_port": sshPort,
+					"ssh_port":       sshPort,
 				}).Debug(logging.LogTagDetail + " Using SSH port from RemoteCluster CRD")
 			}
 		}
@@ -194,12 +156,8 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Execute command in rsync pod
 	cmd := []string{"sh", "-c", rsyncCmd}
 
-	// Define a custom type for context key to avoid string collisions
-	type syncerContextKey string
-	const syncerKey syncerContextKey = "pvcsync"
-	
-	// Put the PVCSyncer in the context for ExecuteCommandInPod
-	pvcSyncCtx := context.WithValue(rsyncCtx, syncerKey, p)
+	// Put the PVCSyncer in the context for ExecuteCommandInPod using our exported context key
+	pvcSyncCtx := context.WithValue(rsyncCtx, SyncerKey, p)
 
 	// Execute with retry logic for transient failures
 	var stdout, stderr string
@@ -207,13 +165,13 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		var execErr error
 		entry := log.WithFields(logrus.Fields{
 			"deployment":       destDeployment.Name,
-			"namespace":        destDeployment.Namespace, 
+			"namespace":        destDeployment.Namespace,
 			"pod_name":         destDeployment.PodName,
 			"dest_client_host": p.DestinationConfig.Host,
 		})
 		entry.Debug(logging.LogTagDetail + " Executing rsync command with destination config")
 
-		stdout, stderr, execErr = rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd)
+		stdout, stderr, execErr = rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
 
 		if execErr != nil {
 			// Check if the error is retryable
@@ -314,14 +272,14 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	verifyCmd := []string{"sh", "-c", "if [ $(ls -la /data/ | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
 
 	// Use the context with PVCSyncer for verification
-	pvcVerifyCtx := context.WithValue(ctx, syncerKey, p)
+	pvcVerifyCtx := context.WithValue(ctx, SyncerKey, p)
 	entry = log.WithFields(logrus.Fields{
 		"deployment": destDeployment.Name,
 		"namespace":  destDeployment.Namespace,
 		"pod_name":   destDeployment.PodName,
 	})
 	entry.Debug(logging.LogTagDetail + " Verifying rsync result with destination config")
-	verifyOut, _, err := rsyncpod.ExecuteCommandInPod(pvcVerifyCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, verifyCmd)
+	verifyOut, _, err := rsyncpod.ExecuteCommandInPod(pvcVerifyCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, verifyCmd, p.DestinationConfig)
 	if err != nil || !strings.Contains(verifyOut, "SUCCESS") {
 		errorEntry := log.WithFields(logrus.Fields{
 			"error":         err,
@@ -344,49 +302,3 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	return nil
 }
-
-// // TestSSHConnectivity tests SSH connectivity from the rsync pod to the agent pod
-// func (p *PVCSyncer) TestSSHConnectivity(ctx context.Context, rsyncDeployment *rsyncpod.RsyncDeployment, agentIP string, port int) error {
-// 	log.WithFields(logrus.Fields{
-// 		"deployment": rsyncDeployment.Name,
-// 		"pod_name":   rsyncDeployment.PodName,
-// 		"agent_ip":   agentIP,
-// 		"port":       port,
-// 	}).Info(logging.LogTagDetail + " Testing SSH connectivity")
-
-// 	// Construct SSH command using the allowed 'test-connection' command
-// 	sshCommand := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d root@%s test-connection", port, agentIP)
-
-// 	log.WithFields(logrus.Fields{
-// 		"ssh_command": sshCommand,
-// 	}).Info(logging.LogTagDetail + " Executing SSH command")
-
-// 	cmd := []string{"sh", "-c", sshCommand}
-
-// 	// Put the PVCSyncer in the context for ExecuteCommandInPod
-// 	pvcSyncCtx := context.WithValue(ctx, "pvcsync", p)
-
-// 	// Log that we're using destination config
-// 	log.WithFields(logrus.Fields{
-// 		"deployment": rsyncDeployment.Name,
-// 		"namespace": rsyncDeployment.Namespace,
-// 		"pod_name": rsyncDeployment.PodName,
-// 		"dest_client_host": p.DestinationConfig.Host,
-// 	}).Info(logging.LogTagDetail + " Executing SSH command with destination config")
-
-// 	// Execute command in pod to generate SSH keys
-// 	stdout, stderr, err := rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, rsyncDeployment.Namespace, rsyncDeployment.PodName, cmd)
-// 	if err != nil {
-// 		log.WithFields(logrus.Fields{
-// 			"stderr": stderr,
-// 			"error":  err,
-// 		}).Error(logging.LogTagError + " Failed to execute SSH command")
-// 		return fmt.Errorf("SSH connectivity test failed: %v", err)
-// 	}
-
-// 	log.WithFields(logrus.Fields{
-// 		"stdout": stdout,
-// 	}).Info(logging.LogTagDetail + " SSH connectivity test successful")
-
-// 	return nil
-// }

@@ -166,12 +166,12 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, mapping *drv1al
 	if sourceCluster == "" {
 		sourceCluster = "source"
 	}
-	
+
 	destCluster := mapping.Spec.DestinationCluster
 	if destCluster == "" {
 		destCluster = "destination"
 	}
-	
+
 	log.Info(fmt.Sprintf("scheduled reconciliation complete for mapping '%s' (cluster %s to cluster %s), next sync in %s",
 		mapping.Name, sourceCluster, destCluster, requeueAfter))
 
@@ -268,19 +268,19 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, mapping *drv1a
 					return err
 				}
 
-	// Extract cluster names with fallbacks for empty values
-	sourceCluster := mapping.Spec.SourceCluster
-	if sourceCluster == "" {
-		sourceCluster = "source"
-	}
-	
-	destCluster := mapping.Spec.DestinationCluster
-	if destCluster == "" {
-		destCluster = "destination"
-	}
-	
-	log.Info(fmt.Sprintf("watch event sync complete in %s for mapping '%s' (cluster %s to cluster %s)",
-		syncDuration, mapping.Name, sourceCluster, destCluster))
+				// Extract cluster names with fallbacks for empty values
+				sourceCluster := mapping.Spec.SourceCluster
+				if sourceCluster == "" {
+					sourceCluster = "source"
+				}
+
+				destCluster := mapping.Spec.DestinationCluster
+				if destCluster == "" {
+					destCluster = "destination"
+				}
+
+				log.Info(fmt.Sprintf("watch event sync complete in %s for mapping '%s' (cluster %s to cluster %s)",
+					syncDuration, mapping.Name, sourceCluster, destCluster))
 				return nil
 			})
 		if err != nil {
@@ -311,12 +311,12 @@ func (r *ModeReconciler) ReconcileContinuous(ctx context.Context, mapping *drv1a
 	if sourceCluster == "" {
 		sourceCluster = "source"
 	}
-	
+
 	destCluster := mapping.Spec.DestinationCluster
 	if destCluster == "" {
 		destCluster = "destination"
 	}
-	
+
 	log.Info(fmt.Sprintf("continuous reconciliation complete for mapping '%s' (cluster %s to cluster %s)",
 		mapping.Name, sourceCluster, destCluster))
 
@@ -469,12 +469,12 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 	if sourceCluster == "" {
 		sourceCluster = "source"
 	}
-	
+
 	destCluster := mapping.Spec.DestinationCluster
 	if destCluster == "" {
 		destCluster = "destination"
 	}
-	
+
 	log.Info(fmt.Sprintf("manual reconciliation complete in %s for mapping '%s' (cluster %s to cluster %s)",
 		syncDuration, mapping.Name, sourceCluster, destCluster))
 
@@ -599,12 +599,12 @@ func (r *ModeReconciler) syncResources(ctx context.Context, mapping *drv1alpha1.
 	if sourceCluster == "" {
 		sourceCluster = "source"
 	}
-	
+
 	destCluster := mapping.Spec.DestinationCluster
 	if destCluster == "" {
 		destCluster = "destination"
 	}
-	
+
 	log.Info(fmt.Sprintf("resource sync complete in %s, synced %d deployments from mapping '%s' (cluster %s to cluster %s)",
 		time.Since(startTime), len(result), mapping.Name, sourceCluster, destCluster))
 

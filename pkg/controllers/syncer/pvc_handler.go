@@ -13,6 +13,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Use the exported PVCClusterKey from replication package
+var (
+	// Explicitly import and use the PVCClusterKey from the replication package
+	pvcClusterKey = controller.PVCClusterKey
+)
+
 // syncPersistentVolumeClaimsWithMounting synchronizes PVCs between namespaces
 // This uses the rsync deployment to handle direct mounting and data transfer
 func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *ResourceSyncer, sourceClient, targetClient kubernetes.Interface,
@@ -197,7 +203,10 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 			// Find nodes where PVCs are mounted - this will now succeed because we've mounted them
 			log.Info(fmt.Sprintf("Finding node for source PVC %s/%s", srcNamespace, sourcePVC.Name))
 			fmt.Println("## FindPVCNode - Source PVC")
-			sourceNode, err := pvcSyncer.FindPVCNode(ctx, pvcSyncer.SourceClient, srcNamespace, sourcePVC.Name)
+
+			// Create a modified context with the correct configuration for source cluster
+			srcCtx := context.WithValue(ctx, pvcClusterKey, "source")
+			sourceNode, err := pvcSyncer.FindPVCNode(srcCtx, pvcSyncer.SourceClient, srcNamespace, sourcePVC.Name)
 			if err != nil {
 				log.Errorf("Failed to find node for source PVC %s/%s: %v", srcNamespace, sourcePVC.Name, err)
 				continue
@@ -205,10 +214,16 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 
 			log.Info(fmt.Sprintf("Finding node for destination PVC %s/%s", dstNamespace, destPVC.Name))
 			fmt.Println("## FindPVCNode - Destination PVC")
-			destNode, err := pvcSyncer.FindPVCNode(ctx, pvcSyncer.DestinationClient, dstNamespace, destPVC.Name)
+
+			// Create a modified context with the correct configuration for destination cluster
+			destCtx := context.WithValue(ctx, pvcClusterKey, "destination")
+			destNode, err := pvcSyncer.FindPVCNode(destCtx, pvcSyncer.DestinationClient, dstNamespace, destPVC.Name)
 			if err != nil {
-				log.Errorf("Failed to find node for destination PVC %s/%s: %v", dstNamespace, destPVC.Name, err)
-				continue
+				// For destination PVC, not finding a node is expected and shouldn't be treated as an error
+				// The rsync deployment will handle mounting the PVC
+				log.Info(fmt.Sprintf("No existing node found for destination PVC %s/%s - will be mounted by rsync deployment",
+					dstNamespace, destPVC.Name))
+				destNode = "" // Empty string indicates no node preference
 			}
 
 			// Set source and destination namespaces in the PVC syncer

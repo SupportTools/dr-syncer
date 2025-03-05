@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/supporttools/dr-syncer/pkg/controller/replication"
 	"github.com/supporttools/dr-syncer/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
-	"k8s.io/apimachinery/pkg/util/rand"
-	corev1 "k8s.io/api/core/v1"
 )
 
 var log = logrus.WithField("component", "command-executor")
@@ -47,10 +48,10 @@ func (o *OutputCapture) Write(p []byte) (n int, err error) {
 	if err != nil {
 		return n, err
 	}
-	
+
 	// Then log to the logger with a prefix
 	output := string(p)
-	
+
 	// Use different log levels for stdout vs stderr
 	fields := logrus.Fields{
 		"pod":       o.podName,
@@ -59,13 +60,13 @@ func (o *OutputCapture) Write(p []byte) (n int, err error) {
 		"output":    output,
 		"type":      o.kind,
 	}
-	
+
 	if o.kind == "stdout" {
 		log.WithFields(fields).Info(fmt.Sprintf("[REMOTE-EXEC-OUT] %s", strings.TrimSpace(output)))
 	} else {
 		log.WithFields(fields).Warn(fmt.Sprintf("[REMOTE-EXEC-ERR] %s", strings.TrimSpace(output)))
 	}
-	
+
 	return n, nil
 }
 
@@ -116,13 +117,13 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 	commandStr := strings.Join(opts.Command, " ")
 	commandId := fmt.Sprintf("cmd-%s", rand.String(6))
 	startTime := time.Now()
-	
+
 	log.WithFields(logrus.Fields{
-		"pod":         opts.PodName,
-		"namespace":   opts.Namespace,
-		"command":     commandStr,
-		"command_id":  commandId, 
-		"timestamp":   startTime.Format(time.RFC3339),
+		"pod":        opts.PodName,
+		"namespace":  opts.Namespace,
+		"command":    commandStr,
+		"command_id": commandId,
+		"timestamp":  startTime.Format(time.RFC3339),
 	}).Info(logging.LogTagInfo + " Executing command in pod")
 
 	// Configure retry parameters
@@ -130,31 +131,31 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 	if opts.MaxRetries > 0 {
 		maxRetries = opts.MaxRetries
 	}
-	
+
 	retryBackoff := 10 * time.Second
 	if opts.RetryBackoff > 0 {
 		retryBackoff = opts.RetryBackoff
 	}
-	
+
 	// Execute with retry logic
 	var stdout, stderr string
 	var execErr error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		stdout, stderr, execErr = e.executeCommandOnce(ctx, opts.Namespace, opts.PodName, opts.Command, commandId)
-		
+
 		if execErr == nil {
 			// Command succeeded
 			break
 		}
-		
+
 		// Check if error is retryable
 		_, isRetryable := execErr.(*RetryableError)
 		if !isRetryable {
 			// Non-retryable error
 			break
 		}
-		
+
 		if attempt < maxRetries-1 {
 			// Log retry attempt
 			log.WithFields(logrus.Fields{
@@ -163,7 +164,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 				"error":       execErr,
 				"command_id":  commandId,
 			}).Info(logging.LogTagWarn + " Operation failed, retrying...")
-			
+
 			// Wait before retrying with exponential backoff
 			select {
 			case <-ctx.Done():
@@ -173,7 +174,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 			}
 		}
 	}
-	
+
 	// Prepare result
 	executionTime := time.Since(startTime)
 	result := &ExecuteResult{
@@ -184,7 +185,7 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 		Succeeded:     execErr == nil,
 		ExecutionTime: executionTime,
 	}
-	
+
 	// Generate execution summary
 	summary := fmt.Sprintf("Command execution summary (ID: %s):\n"+
 		"Pod: %s/%s\n"+
@@ -193,19 +194,19 @@ func (e *Executor) ExecuteCommand(ctx context.Context, opts ExecuteCommandOption
 		"Stdout Size: %d bytes\n"+
 		"Stderr Size: %d bytes\n"+
 		"Execution Time: %s",
-		commandId, opts.Namespace, opts.PodName, commandStr, 
+		commandId, opts.Namespace, opts.PodName, commandStr,
 		execErr != nil, len(stdout), len(stderr),
 		executionTime)
-	
+
 	log.Info(logging.LogTagInfo + " " + summary)
-	
+
 	return result, execErr
 }
 
 // executeCommandOnce executes a command once without retries
 func (e *Executor) executeCommandOnce(ctx context.Context, namespace, podName string, command []string, commandId string) (string, string, error) {
 	commandStr := strings.Join(command, " ")
-	
+
 	// Set up the ExecOptions for the command
 	execOpts := &corev1.PodExecOptions{
 		Command: command,
@@ -267,7 +268,7 @@ func (e *Executor) executeCommandOnce(ctx context.Context, namespace, podName st
 		"command_id": commandId,
 		"timestamp":  time.Now().Format(time.RFC3339),
 	}).Info(logging.LogTagInfo + " Starting command execution...")
-	
+
 	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -276,12 +277,12 @@ func (e *Executor) executeCommandOnce(ctx context.Context, namespace, podName st
 	// Check for errors
 	if err != nil {
 		// Determine if the error is retryable
-		if strings.Contains(err.Error(), "connection refused") || 
-		   strings.Contains(err.Error(), "connection reset") || 
-		   strings.Contains(err.Error(), "broken pipe") {
+		if strings.Contains(err.Error(), "connection refused") ||
+			strings.Contains(err.Error(), "connection reset") ||
+			strings.Contains(err.Error(), "broken pipe") {
 			return stdoutBuffer.String(), stderrBuffer.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
 		}
-		
+
 		log.WithFields(logrus.Fields{
 			"error":      err,
 			"stderr":     stderrBuffer.String(),
@@ -319,17 +320,17 @@ func (e *Executor) executeCommandOnce(ctx context.Context, namespace, podName st
 // getConfigFromContext extracts the REST config from the context
 func (e *Executor) getConfigFromContext(ctx context.Context, commandId string) *rest.Config {
 	// First priority: explicit config in context
-	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
+	if configFromCtx := ctx.Value(replication.K8sConfigKey); configFromCtx != nil {
 		config := configFromCtx.(*rest.Config)
 		log.WithFields(logrus.Fields{
 			"host":       config.Host,
 			"command_id": commandId,
 		}).Info(logging.LogTagInfo + " Using explicit config from context")
 		return config
-	} 
-	
+	}
+
 	// No explicit config provided - check for PVCSyncer in context
-	if ctx.Value("pvcsync") != nil {
+	if ctx.Value(replication.SyncerKey) != nil {
 		// Get config from PVCSyncer context
 		type ConfigProvider interface {
 			GetSourceConfig() *rest.Config
@@ -337,17 +338,17 @@ func (e *Executor) getConfigFromContext(ctx context.Context, commandId string) *
 			GetSourceClient() kubernetes.Interface
 			GetDestinationClient() kubernetes.Interface
 		}
-		
-		if provider, ok := ctx.Value("pvcsync").(ConfigProvider); ok {
+
+		if provider, ok := ctx.Value(replication.SyncerKey).(ConfigProvider); ok {
 			// Compare the client with source/destination clients to determine which to use
 			srcClient := provider.GetSourceClient()
 			destClient := provider.GetDestinationClient()
-			
+
 			// Compare client URLs to determine if we're using source or destination client
 			clientHost := e.client.CoreV1().RESTClient().Get().URL().Host
 			srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
 			destHost := destClient.CoreV1().RESTClient().Get().URL().Host
-			
+
 			if clientHost == srcHost {
 				config := provider.GetSourceConfig()
 				log.WithFields(logrus.Fields{
@@ -390,7 +391,7 @@ func (e *Executor) getConfigFromContext(ctx context.Context, commandId string) *
 			}
 		}
 	}
-	
+
 	// No config found
 	return nil
 }
@@ -405,10 +406,10 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		MaxRetries:   3,
 		RetryBackoff: 10 * time.Second,
 	})
-	
+
 	if result != nil {
 		return result.Stdout, result.Stderr, err
 	}
-	
+
 	return "", "", err
 }

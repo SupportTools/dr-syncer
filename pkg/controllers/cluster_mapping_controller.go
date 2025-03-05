@@ -29,7 +29,7 @@ type ClusterMappingReconciler struct {
 	Scheme *runtime.Scheme
 
 	// Concurrency control
-	workerPool    *util.WorkerPool
+	workerPool     *util.WorkerPool
 	clusterMutexes *sync.Map // map[string]*sync.Mutex for cluster-level locking
 }
 
@@ -59,21 +59,21 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Errorf("Failed to get ClusterMapping: %v", err)
 		return ctrl.Result{}, err
 	}
-	
+
 	// Check if we should apply backoff
 	if clusterMapping.Status.ConsecutiveFailures > 0 && clusterMapping.Status.LastAttemptTime != nil {
 		// Calculate backoff using Kubernetes-style exponential backoff
 		backoff := util.CalculateBackoff(clusterMapping.Status.ConsecutiveFailures)
 		elapsed := time.Since(clusterMapping.Status.LastAttemptTime.Time)
-		
+
 		if elapsed < backoff {
 			// Too soon to retry, requeue after remaining backoff
-			log.Info(fmt.Sprintf("Applying backoff for %s/%s: %v remaining (failure count: %d)", 
+			log.Info(fmt.Sprintf("Applying backoff for %s/%s: %v remaining (failure count: %d)",
 				req.Namespace, req.Name, backoff-elapsed, clusterMapping.Status.ConsecutiveFailures))
 			return ctrl.Result{RequeueAfter: backoff - elapsed}, nil
 		}
 	}
-	
+
 	// Check if the ClusterMapping is paused
 	if clusterMapping.Spec.Paused != nil && *clusterMapping.Spec.Paused {
 		log.Info(fmt.Sprintf("skipping reconciliation for paused ClusterMapping %s/%s", clusterMapping.Namespace, clusterMapping.Name))
@@ -101,7 +101,7 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Errorf("Failed to initialize ClusterMapping status: %v", err)
 			return ctrl.Result{}, err
 		}
-		
+
 		// Requeue to continue processing with the updated status
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -118,7 +118,7 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.handleFailedPhase(ctx, clusterMapping)
 	default:
 		log.Info(fmt.Sprintf("Unknown phase %s, setting to Pending", clusterMapping.Status.Phase))
-		
+
 		// Update status with retry
 		namespacedName := types.NamespacedName{
 			Name:      clusterMapping.Name,
@@ -135,7 +135,7 @@ func (r *ClusterMappingReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			log.Errorf("Failed to update ClusterMapping status: %v", err)
 			return ctrl.Result{}, err
 		}
-		
+
 		return ctrl.Result{Requeue: true}, nil
 	}
 }
@@ -612,16 +612,16 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 
 	// Create tasks for concurrent execution
 	var tasks []func()
-	
+
 	// Create a task for each target → source pod combination
 	for _, targetPod := range targetPods {
 		targetNode := targetPod.Spec.NodeName
 		tpod := targetPod // Capture for closure
-		
+
 		for _, sourcePod := range sourcePods {
 			sourceNode := sourcePod.Spec.NodeName
 			sourcePodIP := sourcePod.Status.PodIP
-			
+
 			// Create a task for this target+source combination
 			tasks = append(tasks, func() {
 				// Create connection detail
@@ -630,10 +630,10 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 					TargetNode: targetNode,
 					Connected:  false,
 				}
-				
+
 				// Test SSH connection
 				connected, errMsg, err := r.testSSHConnection(verifyCtx, targetClient, tpod, sourcePodIP)
-				
+
 				if err != nil {
 					log.Errorf("Failed to test SSH connection from %s to %s: %v",
 						tpod.Name, sourcePod.Name, err)
@@ -642,13 +642,13 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 					connectionDetail.Error = fmt.Sprintf("Connection failed: %s", errMsg)
 				} else {
 					connectionDetail.Connected = true
-					
+
 					// Safely record this target pod has a successful connection
 					mu.Lock()
 					connectedTargets[tpod.Name] = true
 					mu.Unlock()
 				}
-				
+
 				// Add connection detail to results
 				mu.Lock()
 				connectionDetails = append(connectionDetails, connectionDetail)
@@ -656,7 +656,7 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 			})
 		}
 	}
-	
+
 	// Execute all tasks concurrently with the worker pool
 	if r.workerPool != nil {
 		// Use the worker pool if initialized
@@ -667,11 +667,11 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 			task()
 		}
 	}
-	
+
 	// Update the connection status with collected results
 	connectionStatus.ConnectionDetails = connectionDetails
 	connectionStatus.ConnectedAgents = int32(len(connectedTargets))
-	
+
 	return connectionStatus, nil
 }
 
@@ -789,10 +789,10 @@ func (r *ClusterMappingReconciler) execCommandInPod(ctx context.Context, client 
 func (r *ClusterMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Initialize worker pool with configurable concurrency (default 10 workers)
 	r.workerPool = util.NewWorkerPool(10)
-	
+
 	// Initialize cluster mutexes map for per-cluster locking
 	r.clusterMutexes = &sync.Map{}
-	
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&drsyncerio.ClusterMapping{}).
 		Complete(r)

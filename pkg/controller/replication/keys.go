@@ -151,9 +151,9 @@ func EnsureTempPodKeys(ctx context.Context, c client.Client, repl *drv1alpha1.Na
 			Name:      repl.Spec.TempPodKeySecretRef.Name,
 			Namespace: repl.Spec.TempPodKeySecretRef.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":       "dr-syncer",
-				"app.kubernetes.io/part-of":    "dr-syncer",
-				"app.kubernetes.io/managed-by": "dr-syncer-controller",
+				"app.kubernetes.io/name":        "dr-syncer",
+				"app.kubernetes.io/part-of":     "dr-syncer",
+				"app.kubernetes.io/managed-by":  "dr-syncer-controller",
 				"dr-syncer.io/namespacemapping": repl.Name,
 			},
 			Annotations: map[string]string{

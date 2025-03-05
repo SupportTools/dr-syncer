@@ -16,23 +16,23 @@ const (
 	LogTagError  = "[DR-SYNC-ERROR]"  // Error messages (error level)
 	LogTagOutput = "[DR-SYNC-OUTPUT]" // Command output logs (debug level)
 	LogTagInfo   = "[DR-SYNC-INFO]"   // Important operation logs (info level)
-	
+
 	// Step tags for workflow steps
-	LogTagStep0     = "[DR-SYNC-STEP-0]"     // Acquiring lock
-	LogTagStep1     = "[DR-SYNC-STEP-1]"     // Deploying rsync pod
-	LogTagStep2     = "[DR-SYNC-STEP-2]"     // Generating SSH keys
-	LogTagStep3     = "[DR-SYNC-STEP-3]"     // Getting public key
-	LogTagStep4     = "[DR-SYNC-STEP-4]"     // Checking PVC mount
-	LogTagStep5     = "[DR-SYNC-STEP-5]"     // Finding node where PVC is mounted
-	LogTagStep6     = "[DR-SYNC-STEP-6]"     // Finding agent on node
-	LogTagStep7     = "[DR-SYNC-STEP-7]"     // Finding mount path
-	LogTagStep8     = "[DR-SYNC-STEP-8]"     // Pushing public key
-	LogTagStep9     = "[DR-SYNC-STEP-9]"     // Testing SSH connectivity
-	LogTagStep10    = "[DR-SYNC-STEP-10]"    // Running rsync
-	LogTagStep11    = "[DR-SYNC-STEP-11]"    // Updating annotations
-	LogTagStep12    = "[DR-SYNC-STEP-12]"    // Cleaning up resources
-	LogTagStep13    = "[DR-SYNC-STEP-13]"    // Releasing lock
-	
+	LogTagStep0  = "[DR-SYNC-STEP-0]"  // Acquiring lock
+	LogTagStep1  = "[DR-SYNC-STEP-1]"  // Deploying rsync pod
+	LogTagStep2  = "[DR-SYNC-STEP-2]"  // Generating SSH keys
+	LogTagStep3  = "[DR-SYNC-STEP-3]"  // Getting public key
+	LogTagStep4  = "[DR-SYNC-STEP-4]"  // Checking PVC mount
+	LogTagStep5  = "[DR-SYNC-STEP-5]"  // Finding node where PVC is mounted
+	LogTagStep6  = "[DR-SYNC-STEP-6]"  // Finding agent on node
+	LogTagStep7  = "[DR-SYNC-STEP-7]"  // Finding mount path
+	LogTagStep8  = "[DR-SYNC-STEP-8]"  // Pushing public key
+	LogTagStep9  = "[DR-SYNC-STEP-9]"  // Testing SSH connectivity
+	LogTagStep10 = "[DR-SYNC-STEP-10]" // Running rsync
+	LogTagStep11 = "[DR-SYNC-STEP-11]" // Updating annotations
+	LogTagStep12 = "[DR-SYNC-STEP-12]" // Cleaning up resources
+	LogTagStep13 = "[DR-SYNC-STEP-13]" // Releasing lock
+
 	// Step completion tags
 	LogTagStep0Complete  = "[DR-SYNC-STEP-0-COMPLETE]"  // Lock acquired
 	LogTagStep1Complete  = "[DR-SYNC-STEP-1-COMPLETE]"  // Pod deployed
@@ -48,7 +48,7 @@ const (
 	LogTagStep11Complete = "[DR-SYNC-STEP-11-COMPLETE]" // Annotations updated
 	LogTagStep12Complete = "[DR-SYNC-STEP-12-COMPLETE]" // Resources cleaned up
 	LogTagStep13Complete = "[DR-SYNC-STEP-13-COMPLETE]" // Lock released
-	
+
 	// Skip and complete tags
 	LogTagSkip     = "[DR-SYNC-SKIP]"     // Skipping step
 	LogTagComplete = "[DR-SYNC-COMPLETE]" // Workflow completed

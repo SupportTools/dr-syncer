@@ -55,7 +55,7 @@ func (k *KeyManager) EnsureKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	// Use a default secret name if keySecretRef is not specified
 	secretName := "pvc-syncer-agent-keys"
 	secretNamespace := "dr-syncer"
-	
+
 	// If keySecretRef is specified, use those values
 	if rc.Spec.PVCSync.SSH.KeySecretRef != nil {
 		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
@@ -230,7 +230,7 @@ func (k *KeyManager) DeleteKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 	// Use a default secret name if keySecretRef is not specified
 	secretName := "pvc-syncer-agent-keys"
 	secretNamespace := "dr-syncer"
-	
+
 	// If keySecretRef is specified, use those values
 	if rc.Spec.PVCSync.SSH.KeySecretRef != nil {
 		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
@@ -244,13 +244,13 @@ func (k *KeyManager) DeleteKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 			Namespace: secretNamespace,
 		},
 	}
-	
+
 	mainErr := k.client.Delete(ctx, mainSecret)
 	if mainErr != nil && client.IgnoreNotFound(mainErr) != nil {
 		log.Errorf("Failed to delete main SSH key secret %s/%s: %v", secretNamespace, secretName, mainErr)
 		return fmt.Errorf("failed to delete main SSH key secret: %v", mainErr)
 	}
-	
+
 	// Also delete the controller cluster public key secret
 	controllerSecretName := "dr-syncer-sshkey-" + rc.Name
 	controllerSecret := &corev1.Secret{
@@ -259,13 +259,13 @@ func (k *KeyManager) DeleteKeys(ctx context.Context, rc *drv1alpha1.RemoteCluste
 			Namespace: "dr-syncer",
 		},
 	}
-	
+
 	controllerErr := k.client.Delete(ctx, controllerSecret)
 	if controllerErr != nil && client.IgnoreNotFound(controllerErr) != nil {
 		log.Errorf("Failed to delete controller SSH key secret %s/%s: %v", "dr-syncer", controllerSecretName, controllerErr)
 		// Don't return an error if we can't delete the controller key secret, as it might not exist
 	}
-	
+
 	return nil
 }
 
@@ -375,7 +375,7 @@ func (k *KeyManager) EnsureKeysInControllerCluster(ctx context.Context, rc *drv1
 		log.Warnf("EnsureKeysInControllerCluster: No public key found in secret %s/%s for remote cluster %s",
 			secretNamespace, secretName, rc.Name)
 	}
-	
+
 	if authorizedKey, ok := secret.Data[authorizedKeys]; ok {
 		log.Infof("EnsureKeysInControllerCluster: Found %s key in secret", authorizedKeys)
 		publicKeyData[authorizedKeys] = authorizedKey
@@ -405,14 +405,14 @@ func (k *KeyManager) EnsureKeysInControllerCluster(ctx context.Context, rc *drv1
 		// Update the existing secret with only public keys
 		controllerSecret.Data = publicKeyData
 		controllerSecret.Labels = secret.Labels
-		
+
 		updateErr := k.client.Update(ctx, controllerSecret)
 		if updateErr != nil {
 			log.Errorf("EnsureKeysInControllerCluster: Failed to update secret %s/%s in controller cluster: %v",
 				secretNamespace, secretName, updateErr)
 			return fmt.Errorf("failed to update secret in controller cluster: %v", updateErr)
 		}
-		
+
 		log.Infof("EnsureKeysInControllerCluster: Successfully updated secret %s/%s in controller cluster",
 			secretNamespace, secretName)
 		return nil
@@ -452,7 +452,7 @@ func (k *KeyManager) EnsureKeysInControllerCluster(ctx context.Context, rc *drv1
 			secretNamespace, secretName, createErr)
 		return fmt.Errorf("failed to create secret in controller cluster: %v", createErr)
 	}
-	
+
 	log.Infof("EnsureKeysInControllerCluster: Successfully created secret %s/%s in controller cluster",
 		secretNamespace, secretName)
 	return nil

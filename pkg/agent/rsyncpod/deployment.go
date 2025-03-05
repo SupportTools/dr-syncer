@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/supporttools/dr-syncer/pkg/contextkeys"
 	"github.com/supporttools/dr-syncer/pkg/logging"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,7 +30,7 @@ type PodType string
 const (
 	// SourcePodType is used for pods that serve as the source for rsync
 	SourcePodType PodType = "source"
-	
+
 	// DestinationPodType is used for pods that serve as the destination for rsync
 	DestinationPodType PodType = "destination"
 )
@@ -38,22 +39,22 @@ const (
 type RsyncPodOptions struct {
 	// Namespace is the namespace to create the pod in
 	Namespace string
-	
+
 	// PVCName is the name of the PVC to mount
 	PVCName string
-	
+
 	// NodeName is the node to schedule the pod on (optional)
 	NodeName string
-	
+
 	// Type is the type of rsync pod (source or destination)
 	Type PodType
-	
+
 	// SyncID is a unique identifier for this sync operation
 	SyncID string
-	
+
 	// ReplicationName is the name of the replication resource
 	ReplicationName string
-	
+
 	// DestinationInfo is additional information about the destination
 	DestinationInfo string
 }
@@ -70,7 +71,7 @@ func NewManager(config *rest.Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes client: %v", err)
 	}
-	
+
 	return &Manager{
 		client: client,
 	}, nil
@@ -92,7 +93,7 @@ type RsyncDeployment struct {
 
 	// PVCName is the name of the PVC being synced
 	PVCName string
-	
+
 	// SyncID is a unique identifier for this sync operation
 	SyncID string
 }
@@ -101,13 +102,13 @@ type RsyncDeployment struct {
 func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOptions) (*RsyncDeployment, error) {
 	// Sanitize PVC name for use in deployment name
 	safePVCName := sanitizeNameForLabel(opts.PVCName)
-	
+
 	// Generate a unique hash for this sync operation
 	syncHash := rand.String(8)
-	
+
 	// Generate a deployment name
 	deploymentName := fmt.Sprintf("dr-syncer-%s-%s", safePVCName, syncHash)
-	
+
 	log.WithFields(logrus.Fields{
 		"namespace":        opts.Namespace,
 		"pvc_name":         opts.PVCName,
@@ -137,9 +138,9 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app.kubernetes.io/name":    "dr-syncer-rsync",
+					"app.kubernetes.io/name":     "dr-syncer-rsync",
 					"app.kubernetes.io/instance": opts.SyncID,
-					"dr-syncer.io/pvc-name":     safePVCName,
+					"dr-syncer.io/pvc-name":      safePVCName,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -187,12 +188,12 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 			},
 		},
 	}
-	
+
 	// Set node selector if node name is provided
 	if opts.NodeName != "" {
 		deployment.Spec.Template.Spec.NodeName = opts.NodeName
 	}
-	
+
 	// Check if a deployment with this name already exists and delete it if found
 	existingDeployment, err := m.client.AppsV1().Deployments(opts.Namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err == nil {
@@ -201,18 +202,18 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 			"deployment": existingDeployment.Name,
 			"namespace":  existingDeployment.Namespace,
 		}).Info(logging.LogTagDetail + " Found existing deployment, deleting it")
-		
+
 		deletePolicy := metav1.DeletePropagationForeground
 		deleteOptions := metav1.DeleteOptions{
 			PropagationPolicy: &deletePolicy,
 		}
-		
+
 		if err := m.client.AppsV1().Deployments(opts.Namespace).Delete(ctx, deploymentName, deleteOptions); err != nil {
 			if !errors.IsNotFound(err) {
 				return nil, fmt.Errorf("failed to delete existing deployment: %v", err)
 			}
 		}
-		
+
 		// Wait for deletion to complete
 		if err := waitForDeploymentDeletion(ctx, m.client, opts.Namespace, deploymentName); err != nil {
 			return nil, fmt.Errorf("timeout waiting for deployment deletion: %v", err)
@@ -221,18 +222,18 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 		// Some error other than "not found"
 		return nil, fmt.Errorf("failed to check for existing deployment: %v", err)
 	}
-	
+
 	// Create the deployment
 	createdDeployment, err := m.client.AppsV1().Deployments(opts.Namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rsync deployment: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": createdDeployment.Name,
 		"namespace":  createdDeployment.Namespace,
 	}).Info(logging.LogTagDetail + " Successfully created rsync deployment")
-	
+
 	// Create the RsyncDeployment object
 	rsyncDeployment := &RsyncDeployment{
 		Name:      createdDeployment.Name,
@@ -241,7 +242,7 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 		PVCName:   opts.PVCName,
 		SyncID:    opts.SyncID,
 	}
-	
+
 	return rsyncDeployment, nil
 }
 
@@ -252,11 +253,11 @@ func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Dura
 		"namespace":  d.Namespace,
 		"timeout":    timeout,
 	}).Info(logging.LogTagDetail + " Waiting for rsync deployment to be ready")
-	
+
 	// Create a context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	
+
 	// Poll until a pod is ready or timeout
 	var podName string
 	err := wait.PollUntilContextCancel(timeoutCtx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
@@ -274,10 +275,10 @@ func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Dura
 		// Check if deployment is available
 		if deployment.Status.AvailableReplicas == 0 {
 			log.WithFields(logrus.Fields{
-				"deployment":        d.Name,
-				"namespace":         d.Namespace,
+				"deployment":         d.Name,
+				"namespace":          d.Namespace,
 				"available_replicas": deployment.Status.AvailableReplicas,
-				"ready_replicas":    deployment.Status.ReadyReplicas,
+				"ready_replicas":     deployment.Status.ReadyReplicas,
 			}).Debug(logging.LogTagDetail + " Deployment not yet ready")
 			return false, nil
 		}
@@ -287,7 +288,7 @@ func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Dura
 		pods, err := d.client.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: labelSelector,
 		})
-		
+
 		if err != nil {
 			log.WithFields(logrus.Fields{
 				"deployment": d.Name,
@@ -296,7 +297,7 @@ func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Dura
 			}).Warn("[DR-SYNC-DETAIL] Failed to list pods for deployment")
 			return false, nil
 		}
-		
+
 		// Find a running pod
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
@@ -309,27 +310,27 @@ func (d *RsyncDeployment) WaitForPodReady(ctx context.Context, timeout time.Dura
 				return true, nil
 			}
 		}
-		
+
 		log.WithFields(logrus.Fields{
 			"deployment": d.Name,
 			"namespace":  d.Namespace,
 		}).Info("[DR-SYNC-DETAIL] Deployment is available but no running pods found yet")
 		return false, nil
 	})
-	
+
 	if err != nil {
 		return fmt.Errorf("timeout waiting for rsync deployment %s/%s to be ready: %v", d.Namespace, d.Name, err)
 	}
-	
+
 	// Store the pod name
 	d.PodName = podName
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": d.Name,
 		"namespace":  d.Namespace,
 		"pod":        d.PodName,
 	}).Info("[DR-SYNC-DETAIL] Rsync deployment is ready with running pod")
-	
+
 	return nil
 }
 
@@ -345,25 +346,25 @@ func (e *RetryableError) Error() string {
 // withRetry executes a function with retries
 func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, operation func() error) error {
 	var err error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		err = operation()
 		if err == nil {
 			return nil
 		}
-		
+
 		// Check if error is retryable
 		if _, ok := err.(*RetryableError); !ok {
 			return err // Non-retryable error, return immediately
 		}
-		
+
 		// Log retry attempt
 		log.WithFields(logrus.Fields{
-			"attempt": attempt + 1,
+			"attempt":     attempt + 1,
 			"max_retries": maxRetries,
-			"error": err,
+			"error":       err,
 		}).Info("[DR-SYNC-RETRY] Operation failed, retrying...")
-		
+
 		// Wait before retrying with exponential backoff
 		select {
 		case <-ctx.Done():
@@ -372,7 +373,7 @@ func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, opera
 			// Continue to next attempt
 		}
 	}
-	
+
 	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)
 }
 
@@ -383,9 +384,9 @@ type OutputCapture struct {
 	// The kind of output (stdout/stderr)
 	kind string
 	// Command info for logging
-	podName string
+	podName   string
 	namespace string
-	command string
+	command   string
 }
 
 func (o *OutputCapture) Write(p []byte) (n int, err error) {
@@ -394,10 +395,10 @@ func (o *OutputCapture) Write(p []byte) (n int, err error) {
 	if err != nil {
 		return n, err
 	}
-	
+
 	// Then log to the logger with a prefix
 	output := string(p)
-	
+
 	// Use different log levels for stdout vs stderr
 	fields := logrus.Fields{
 		"pod":       o.podName,
@@ -406,32 +407,32 @@ func (o *OutputCapture) Write(p []byte) (n int, err error) {
 		"output":    output,
 		"type":      o.kind,
 	}
-	
+
 	if o.kind == "stdout" {
 		log.WithFields(fields).Info(fmt.Sprintf("[REMOTE-EXEC-OUT] %s", strings.TrimSpace(output)))
 	} else {
 		log.WithFields(fields).Warn(fmt.Sprintf("[REMOTE-EXEC-ERR] %s", strings.TrimSpace(output)))
 	}
-	
+
 	return n, nil
 }
 
 // ExecuteCommandInPod executes a command in a pod using the Kubernetes API
 // This is exported so it can be used by other packages
-func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string) (string, string, error) {
+func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, command []string, explicitConfig ...*rest.Config) (string, string, error) {
 	if client == nil {
 		return "", "", fmt.Errorf("kubernetes client is nil")
 	}
 
 	commandStr := strings.Join(command, " ")
 	commandId := fmt.Sprintf("cmd-%s", rand.String(6))
-	
+
 	log.WithFields(logrus.Fields{
-		"pod":         podName,
-		"namespace":   namespace,
-		"command":     commandStr,
-		"command_id":  commandId, 
-		"timestamp":   time.Now().Format(time.RFC3339),
+		"pod":        podName,
+		"namespace":  namespace,
+		"command":    commandStr,
+		"command_id": commandId,
+		"timestamp":  time.Now().Format(time.RFC3339),
 	}).Info("[DR-SYNC-EXEC] Executing command in pod")
 
 	// Set up the ExecOptions for the command
@@ -453,78 +454,157 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 
 	// We need to get the REST config
 	var config *rest.Config
-	
+
+	// Debug log all context values being checked
+	log.WithFields(logrus.Fields{
+		"command_id": commandId,
+		"pod":        podName,
+		"namespace":  namespace,
+	}).Info("[DR-SYNC-DEBUG] Checking context for config keys")
+
+	//Dump all context values
+	config, ok := ctx.Value(contextkeys.ConfigKey).(*rest.Config)
+	if !ok {
+		log.Warn("[DR-SYNC-DEBUG] Kubernetes REST config not found in context")
+	} else {
+		log.Debug("[DR-SYNC-DEBUG] Successfully retrieved Kubernetes REST config from context")
+	}
+
 	// First priority: explicit config in context
-	if configFromCtx := ctx.Value("k8s-config"); configFromCtx != nil {
+	if configFromCtx := ctx.Value(contextkeys.K8sConfigKey); configFromCtx != nil {
 		config = configFromCtx.(*rest.Config)
 		log.WithFields(logrus.Fields{
 			"host":       config.Host,
 			"command_id": commandId,
-		}).Info("[DR-SYNC-INFO] Using explicit config from context")
-	} 
-	
-	// No explicit config provided - check for PVCSyncer in context
-	if config == nil && ctx.Value("pvcsync") != nil {
-		// Get config from PVCSyncer context
-		type ConfigProvider interface {
-			GetSourceConfig() *rest.Config
-			GetDestinationConfig() *rest.Config
-			GetSourceClient() kubernetes.Interface
-			GetDestinationClient() kubernetes.Interface
+			"key_type":   fmt.Sprintf("%T", contextkeys.K8sConfigKey),
+			"key_value":  string(contextkeys.K8sConfigKey),
+		}).Info("[DR-SYNC-INFO] Using explicit config from context with contextkeys.K8sConfigKey")
+	}
+
+	// Also try with the internal package keys as fallback
+	if config == nil {
+		for _, key := range []interface{}{
+			"k8s-config",             // string literal
+			contextkeys.K8sConfigKey, // shared key
+		} {
+			if configFromCtx := ctx.Value(key); configFromCtx != nil {
+				config = configFromCtx.(*rest.Config)
+				log.WithFields(logrus.Fields{
+					"host":       config.Host,
+					"command_id": commandId,
+					"key_type":   fmt.Sprintf("%T", key),
+					"key_used":   fmt.Sprintf("%v", key),
+				}).Info("[DR-SYNC-INFO] Found config with alternate key type")
+				break
+			}
 		}
-		
-		if provider, ok := ctx.Value("pvcsync").(ConfigProvider); ok {
-			// Compare the client with source/destination clients to determine which to use
-			srcClient := provider.GetSourceClient()
-			destClient := provider.GetDestinationClient()
-			
-			// Compare client URLs to determine if we're using source or destination client
-			clientHost := client.CoreV1().RESTClient().Get().URL().Host
-			srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
-			destHost := destClient.CoreV1().RESTClient().Get().URL().Host
-			
-			if clientHost == srcHost {
-				config = provider.GetSourceConfig()
+	}
+
+	// No explicit config provided - check for PVCSyncer in context
+	if config == nil {
+		// Try all possible syncer keys
+		var syncerValue interface{}
+		var keyUsed string
+		var keyType string
+
+	// Try with different key types
+	possibleKeys := []interface{}{
+		contextkeys.SyncerKey,           // shared key (type contextkeys.ContextKey)
+		contextkeys.SyncerKey.String(),  // as string
+		"pvcsync",                       // string literal
+	}
+
+		for _, key := range possibleKeys {
+			if value := ctx.Value(key); value != nil {
+				syncerValue = value
+				keyUsed = fmt.Sprintf("%v", key)
+				keyType = fmt.Sprintf("%T", key)
 				log.WithFields(logrus.Fields{
-					"host":       config.Host,
-					"client_host": clientHost,
+					"key_type":   keyType,
+					"key_used":   keyUsed,
+					"value_type": fmt.Sprintf("%T", value),
 					"command_id": commandId,
-				}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
-			} else if clientHost == destHost {
-				config = provider.GetDestinationConfig()
-				log.WithFields(logrus.Fields{
-					"host":       config.Host,
-					"client_host": clientHost,
-					"command_id": commandId,
-				}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
-			} else {
-				// If no direct match, use simple heuristic - dest for rsync operations
-				if provider.GetDestinationConfig() != nil {
-					config = provider.GetDestinationConfig()
-					log.WithFields(logrus.Fields{
-						"host":       config.Host,
-						"client_host": clientHost,
-						"src_host":   srcHost,
-						"dest_host":  destHost,
-						"command_id": commandId,
-					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (no direct match)")
-				} else if provider.GetSourceConfig() != nil {
+				}).Info("[DR-SYNC-DEBUG] Found PVCSyncer in context with key")
+				break
+			}
+		}
+
+		if syncerValue == nil {
+			log.WithFields(logrus.Fields{
+				"command_id": commandId,
+				"keys_tried": fmt.Sprintf("%v", possibleKeys),
+			}).Warn("[DR-SYNC-DEBUG] No PVCSyncer found in context with any key")
+		} else {
+			// Get config from PVCSyncer context
+			type ConfigProvider interface {
+				GetSourceConfig() *rest.Config
+				GetDestinationConfig() *rest.Config
+				GetSourceClient() kubernetes.Interface
+				GetDestinationClient() kubernetes.Interface
+			}
+
+			if provider, ok := syncerValue.(ConfigProvider); ok {
+				// Compare the client with source/destination clients to determine which to use
+				srcClient := provider.GetSourceClient()
+				destClient := provider.GetDestinationClient()
+
+				// Compare client URLs to determine if we're using source or destination client
+				clientHost := client.CoreV1().RESTClient().Get().URL().Host
+				srcHost := srcClient.CoreV1().RESTClient().Get().URL().Host
+				destHost := destClient.CoreV1().RESTClient().Get().URL().Host
+
+				if clientHost == srcHost {
 					config = provider.GetSourceConfig()
 					log.WithFields(logrus.Fields{
-						"host":       config.Host,
+						"host":        config.Host,
 						"client_host": clientHost,
-						"src_host":   srcHost,
-						"dest_host":  destHost,
-						"command_id": commandId,
-					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (no direct match)")
+						"command_id":  commandId,
+					}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (matched client)")
+				} else if clientHost == destHost {
+					config = provider.GetDestinationConfig()
+					log.WithFields(logrus.Fields{
+						"host":        config.Host,
+						"client_host": clientHost,
+						"command_id":  commandId,
+					}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (matched client)")
+				} else {
+					// If no direct match, use simple heuristic - dest for rsync operations
+					if provider.GetDestinationConfig() != nil {
+						config = provider.GetDestinationConfig()
+						log.WithFields(logrus.Fields{
+							"host":        config.Host,
+							"client_host": clientHost,
+							"src_host":    srcHost,
+							"dest_host":   destHost,
+							"command_id":  commandId,
+						}).Info("[DR-SYNC-INFO] Using destination config from PVCSyncer (no direct match)")
+					} else if provider.GetSourceConfig() != nil {
+						config = provider.GetSourceConfig()
+						log.WithFields(logrus.Fields{
+							"host":        config.Host,
+							"client_host": clientHost,
+							"src_host":    srcHost,
+							"dest_host":   destHost,
+							"command_id":  commandId,
+						}).Info("[DR-SYNC-INFO] Using source config from PVCSyncer (no direct match)")
+					}
 				}
 			}
 		}
 	}
-	
+
+	// Check if explicit config was provided
+	if len(explicitConfig) > 0 && explicitConfig[0] != nil {
+		config = explicitConfig[0]
+		log.WithFields(logrus.Fields{
+			"host":       config.Host,
+			"command_id": commandId,
+		}).Info("[DR-SYNC-INFO] Using explicit config parameter")
+	}
+
 	// If no config is available, return an error
 	if config == nil {
-		return "", "", fmt.Errorf("no REST config found in context for client %s", client.CoreV1().RESTClient().Get().URL().Host)
+		return "", "", fmt.Errorf("no REST config found in context or provided explicitly for client %s", client.CoreV1().RESTClient().Get().URL().Host)
 	}
 
 	// Log the URL
@@ -565,7 +645,7 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		"command_id": commandId,
 		"timestamp":  time.Now().Format(time.RFC3339),
 	}).Info("[DR-SYNC-EXEC] Starting command execution...")
-	
+
 	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -579,21 +659,21 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		"Stdout Size: %d bytes\n"+
 		"Stderr Size: %d bytes\n"+
 		"Execution Time: %s",
-		commandId, namespace, podName, commandStr, 
+		commandId, namespace, podName, commandStr,
 		err != nil, stdoutBuffer.Len(), stderrBuffer.Len(),
 		time.Now().Format(time.RFC3339))
-	
+
 	log.Info("[DR-SYNC-EXEC-SUMMARY] " + summary)
 
 	// Check for errors
 	if err != nil {
 		// Determine if the error is retryable
-		if strings.Contains(err.Error(), "connection refused") || 
-		   strings.Contains(err.Error(), "connection reset") || 
-		   strings.Contains(err.Error(), "broken pipe") {
+		if strings.Contains(err.Error(), "connection refused") ||
+			strings.Contains(err.Error(), "connection reset") ||
+			strings.Contains(err.Error(), "broken pipe") {
 			return stdoutBuffer.String(), stderrBuffer.String(), &RetryableError{Err: fmt.Errorf("transient error: %v", err)}
 		}
-		
+
 		log.WithFields(logrus.Fields{
 			"error":      err,
 			"stderr":     stderrBuffer.String(),
@@ -629,25 +709,25 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 }
 
 // GenerateSSHKeys generates SSH keys in the deployment's pod
-func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context) error {
+func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context, explicitConfig ...*rest.Config) error {
 	if d.PodName == "" {
 		return fmt.Errorf("no pod found for deployment, ensure WaitForPodReady was called")
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": d.Name,
 		"namespace":  d.Namespace,
 		"pod":        d.PodName,
 	}).Info("[DR-SYNC-DETAIL] Generating SSH keys in rsync pod")
-	
+
 	cmd := []string{
 		"sh",
 		"-c",
 		"mkdir -p /root/.ssh && ssh-keygen -t rsa -N '' -f /root/.ssh/id_rsa",
 	}
-	
+
 	// Execute command in pod to generate SSH keys
-	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
+	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd, explicitConfig...)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"pod":    d.PodName,
@@ -656,34 +736,34 @@ func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context) error {
 		}).Error("[DR-SYNC-ERROR] Failed to generate SSH keys")
 		return fmt.Errorf("failed to generate SSH keys: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"pod":    d.PodName,
 		"stdout": stdout,
 	}).Debug("[DR-SYNC-DETAIL] Successfully generated SSH keys")
-	
+
 	return nil
 }
 
 // GetPublicKey gets the public key from the deployment's pod
-func (d *RsyncDeployment) GetPublicKey(ctx context.Context) (string, error) {
+func (d *RsyncDeployment) GetPublicKey(ctx context.Context, explicitConfig ...*rest.Config) (string, error) {
 	if d.PodName == "" {
 		return "", fmt.Errorf("no pod found for deployment, ensure WaitForPodReady was called")
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": d.Name,
 		"namespace":  d.Namespace,
 		"pod":        d.PodName,
 	}).Info("[DR-SYNC-DETAIL] Getting public key from rsync pod")
-	
+
 	cmd := []string{
 		"cat",
 		"/root/.ssh/id_rsa.pub",
 	}
-	
+
 	// Execute command in pod to get public key
-	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd)
+	stdout, stderr, err := ExecuteCommandInPod(ctx, d.client, d.Namespace, d.PodName, cmd, explicitConfig...)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"pod":    d.PodName,
@@ -692,11 +772,11 @@ func (d *RsyncDeployment) GetPublicKey(ctx context.Context) (string, error) {
 		}).Error("[DR-SYNC-ERROR] Failed to get public key")
 		return "", fmt.Errorf("failed to get public key: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"pod": d.PodName,
 	}).Debug("[DR-SYNC-DETAIL] Successfully got public key")
-	
+
 	return stdout, nil
 }
 
@@ -712,7 +792,7 @@ func (d *RsyncDeployment) Cleanup(ctx context.Context) error {
 	deleteOptions := metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	}
-	
+
 	err := d.client.AppsV1().Deployments(d.Namespace).Delete(ctx, d.Name, deleteOptions)
 	if err != nil {
 		if !errors.IsNotFound(err) {
@@ -730,7 +810,7 @@ func (d *RsyncDeployment) Cleanup(ctx context.Context) error {
 		}).Info("[DR-SYNC-DETAIL] Deployment not found, already deleted")
 		return nil
 	}
-	
+
 	// Wait for deletion to complete
 	if err := waitForDeploymentDeletion(ctx, d.client, d.Namespace, d.Name); err != nil {
 		log.WithFields(logrus.Fields{
@@ -740,12 +820,12 @@ func (d *RsyncDeployment) Cleanup(ctx context.Context) error {
 		}).Warn("[DR-SYNC-DETAIL] Timeout waiting for deployment deletion, continuing anyway")
 		// We'll continue anyway since we've initiated deletion
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": d.Name,
 		"namespace":  d.Namespace,
 	}).Info("[DR-SYNC-DETAIL] Successfully deleted rsync deployment")
-	
+
 	return nil
 }
 
@@ -753,22 +833,22 @@ func (d *RsyncDeployment) Cleanup(ctx context.Context) error {
 func (m *Manager) CleanupExistingDeployments(ctx context.Context, namespace, pvcName string) error {
 	safePVCName := sanitizeNameForLabel(pvcName)
 	labelSelector := fmt.Sprintf("app.kubernetes.io/name=dr-syncer-rsync,dr-syncer.io/pvc-name=%s", safePVCName)
-	
+
 	log.WithFields(logrus.Fields{
 		"namespace":      namespace,
 		"pvc_name":       pvcName,
 		"label_selector": labelSelector,
 	}).Info("[DR-SYNC-DETAIL] Cleaning up existing rsync deployments for PVC")
-	
+
 	// List deployments with matching labels
 	deployments, err := m.client.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to list existing deployments: %v", err)
 	}
-	
+
 	if len(deployments.Items) == 0 {
 		log.WithFields(logrus.Fields{
 			"namespace": namespace,
@@ -776,26 +856,26 @@ func (m *Manager) CleanupExistingDeployments(ctx context.Context, namespace, pvc
 		}).Info("[DR-SYNC-DETAIL] No existing deployments found for PVC")
 		return nil
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
 		"count":     len(deployments.Items),
 	}).Info("[DR-SYNC-DETAIL] Found existing deployments to clean up")
-	
+
 	// Set deletion options with foreground propagation
 	deletionPropagation := metav1.DeletePropagationForeground
 	deleteOptions := metav1.DeleteOptions{
 		PropagationPolicy: &deletionPropagation,
 	}
-	
+
 	// Delete each deployment
 	for _, deployment := range deployments.Items {
 		log.WithFields(logrus.Fields{
 			"deployment": deployment.Name,
 			"namespace":  deployment.Namespace,
 		}).Info("[DR-SYNC-DETAIL] Deleting existing deployment")
-		
+
 		if err := m.client.AppsV1().Deployments(namespace).Delete(ctx, deployment.Name, deleteOptions); err != nil {
 			if !errors.IsNotFound(err) {
 				log.WithFields(logrus.Fields{
@@ -806,7 +886,7 @@ func (m *Manager) CleanupExistingDeployments(ctx context.Context, namespace, pvc
 				// Continue with other deployments
 			}
 		}
-		
+
 		// Wait for deletion
 		if err := waitForDeploymentDeletion(ctx, m.client, namespace, deployment.Name); err != nil {
 			log.WithFields(logrus.Fields{
@@ -817,12 +897,12 @@ func (m *Manager) CleanupExistingDeployments(ctx context.Context, namespace, pvc
 			// Continue with other deployments
 		}
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
 	}).Info("[DR-SYNC-DETAIL] Finished cleaning up existing deployments for PVC")
-	
+
 	return nil
 }
 
@@ -831,12 +911,12 @@ func waitForDeploymentDeletion(ctx context.Context, client kubernetes.Interface,
 	// Create a timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": name,
 		"namespace":  namespace,
 	}).Debug("[DR-SYNC-DETAIL] Waiting for deployment deletion")
-	
+
 	// Poll until the deployment is gone
 	return wait.PollUntilContextCancel(timeoutCtx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
 		_, err := client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -875,11 +955,11 @@ func sanitizeNameForLabel(name string) string {
 			}
 		}
 	}
-	
+
 	// Trim to 63 characters max (Kubernetes label value limit)
 	if len(result) > 63 {
 		result = result[:63]
 	}
-	
+
 	return result
 }

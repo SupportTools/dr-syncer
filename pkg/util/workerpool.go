@@ -21,7 +21,7 @@ func NewWorkerPool(maxWorkers int) *WorkerPool {
 // Submit submits a task to the worker pool
 func (wp *WorkerPool) Submit(task func()) {
 	wp.semaphore <- struct{}{} // Acquire a slot
-	
+
 	go func() {
 		defer func() { <-wp.semaphore }() // Release the slot when done
 		task()
@@ -32,7 +32,7 @@ func (wp *WorkerPool) Submit(task func()) {
 func (wp *WorkerPool) SubmitAndWait(tasks []func()) {
 	var wg sync.WaitGroup
 	wg.Add(len(tasks))
-	
+
 	for _, task := range tasks {
 		taskFn := task // Capture the task function
 		wp.Submit(func() {
@@ -40,6 +40,6 @@ func (wp *WorkerPool) SubmitAndWait(tasks []func()) {
 			taskFn()
 		})
 	}
-	
+
 	wg.Wait()
 }

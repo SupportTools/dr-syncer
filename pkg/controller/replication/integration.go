@@ -16,22 +16,22 @@ import (
 type ReplicationManager struct {
 	// sourceClient is the client for the source cluster
 	sourceClient client.Client
-	
+
 	// destClient is the client for the destination cluster
 	destClient client.Client
-	
+
 	// sourceK8sClient is the Kubernetes client for the source cluster
 	sourceK8sClient kubernetes.Interface
-	
+
 	// destK8sClient is the Kubernetes client for the destination cluster
 	destK8sClient kubernetes.Interface
-	
+
 	// sourceConfig is the config for the source cluster
 	sourceConfig *rest.Config
-	
+
 	// destConfig is the config for the destination cluster
 	destConfig *rest.Config
-	
+
 	// replicationController is the new replication controller
 	replicationController *RsyncReplicationController
 }
@@ -39,20 +39,20 @@ type ReplicationManager struct {
 // NewReplicationManager creates a new replication manager
 func NewReplicationManager(sourceClient, destClient client.Client, sourceConfig, destConfig *rest.Config,
 	sourceK8sClient, destK8sClient kubernetes.Interface) (*ReplicationManager, error) {
-	
+
 	// Initialize the replication controller
 	controller, err := NewRsyncReplicationController(sourceClient, destClient, sourceConfig, destConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize replication controller: %v", err)
 	}
-	
+
 	return &ReplicationManager{
-		sourceClient:         sourceClient,
-		destClient:           destClient,
-		sourceK8sClient:      sourceK8sClient,
-		destK8sClient:        destK8sClient,
-		sourceConfig:         sourceConfig,
-		destConfig:           destConfig,
+		sourceClient:          sourceClient,
+		destClient:            destClient,
+		sourceK8sClient:       sourceK8sClient,
+		destK8sClient:         destK8sClient,
+		sourceConfig:          sourceConfig,
+		destConfig:            destConfig,
 		replicationController: controller,
 	}, nil
 }
@@ -65,16 +65,16 @@ func (m *ReplicationManager) ReplicatePVC(ctx context.Context, sourceNS, destNS,
 		"dest_namespace":   destNS,
 		"pvc_name":         pvcName,
 	})
-	
+
 	log.Info("Initiating PVC replication")
-	
+
 	// Use the new controller for replication
 	err := m.replicationController.ReplicatePVC(ctx, sourceNS, destNS, pvcName)
 	if err != nil {
 		log.WithField("error", err).Error("PVC replication failed")
 		return err
 	}
-	
+
 	log.Info("PVC replication completed successfully")
 	return nil
 }
@@ -87,16 +87,16 @@ func (m *ReplicationManager) PerformNamespaceMappingSync(ctx context.Context, ma
 		"source_namespace": mapping.Spec.SourceNamespace,
 		"dest_namespace":   mapping.Spec.DestinationNamespace,
 	})
-	
+
 	log.Info("Processing namespace mapping for PVC replication")
-	
+
 	// Use the new controller for namespace mapping processing
 	err := m.replicationController.ProcessNamespaceMapping(ctx, mapping)
 	if err != nil {
 		log.WithField("error", err).Error("Namespace mapping processing failed")
 		return err
 	}
-	
+
 	log.Info("Namespace mapping processing completed successfully")
 	return nil
 }
@@ -126,7 +126,7 @@ func (m *ReplicationManager) GetSourceConfig() *rest.Config {
 	return m.sourceConfig
 }
 
-// GetDestConfig returns the destination config 
+// GetDestConfig returns the destination config
 func (m *ReplicationManager) GetDestConfig() *rest.Config {
 	return m.destConfig
 }

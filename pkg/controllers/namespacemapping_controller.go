@@ -435,7 +435,7 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 		}
 
 		// Use the NamespaceMapping directly with the mode handler
-		
+
 		// Clean up synced resources in destination cluster
 		if err := r.modeHandler.CleanupResources(ctx, namespacemapping); err != nil {
 			log.Errorf("failed to cleanup resources: %v", err)

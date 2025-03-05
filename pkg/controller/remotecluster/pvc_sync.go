@@ -366,7 +366,7 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 	if rc.Spec.PVCSync.SSH.KeySecretRef != nil {
 		secretName = rc.Spec.PVCSync.SSH.KeySecretRef.Name
 	}
-	
+
 	// Use the dr-syncer namespace for the secret
 	secretNamespace := "dr-syncer"
 
@@ -388,9 +388,9 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 
 	// Use exponential backoff to wait for the secret to be available
 	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
-		log.Infof("Checking for SSH key secret %s/%s in REMOTE cluster %s (attempt)", 
+		log.Infof("Checking for SSH key secret %s/%s in REMOTE cluster %s (attempt)",
 			secretNamespace, secretName, rc.Name)
-		
+
 		// Try to get the secret from the remote cluster
 		secret := &corev1.Secret{}
 		err := p.remoteClient.Get(ctx, client.ObjectKey{
@@ -400,7 +400,7 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				log.Infof("SSH key secret %s/%s not found in REMOTE cluster %s yet, retrying...", 
+				log.Infof("SSH key secret %s/%s not found in REMOTE cluster %s yet, retrying...",
 					secretNamespace, secretName, rc.Name)
 				return false, nil // Not found, retry
 			}
@@ -413,7 +413,7 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 		for k := range secret.Data {
 			keys = append(keys, k)
 		}
-		log.Infof("Found SSH key secret %s/%s in REMOTE cluster %s with keys: %v", 
+		log.Infof("Found SSH key secret %s/%s in REMOTE cluster %s with keys: %v",
 			secretNamespace, secretName, rc.Name, keys)
 
 		// Check if the secret has the required keys
@@ -424,9 +424,9 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 		} else if _, ok := secret.Data["id_rsa"]; ok {
 			privateKeyFound = true
 		}
-		
+
 		if !privateKeyFound {
-			log.Infof("SSH key secret %s/%s in REMOTE cluster %s missing private key (checked for 'ssh-private-key' and 'id_rsa'), retrying...", 
+			log.Infof("SSH key secret %s/%s in REMOTE cluster %s missing private key (checked for 'ssh-private-key' and 'id_rsa'), retrying...",
 				secretNamespace, secretName, rc.Name)
 			return false, nil // Missing private key, retry
 		}
@@ -438,47 +438,47 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 		} else if _, ok := secret.Data["id_rsa.pub"]; ok {
 			publicKeyFound = true
 		}
-		
+
 		if !publicKeyFound {
-			log.Infof("SSH key secret %s/%s in REMOTE cluster %s missing public key (checked for 'ssh-public-key' and 'id_rsa.pub'), retrying...", 
+			log.Infof("SSH key secret %s/%s in REMOTE cluster %s missing public key (checked for 'ssh-public-key' and 'id_rsa.pub'), retrying...",
 				secretNamespace, secretName, rc.Name)
 			return false, nil // Missing public key, retry
 		}
 
-		log.Infof("SSH key secret %s/%s is fully available in REMOTE cluster %s", 
+		log.Infof("SSH key secret %s/%s is fully available in REMOTE cluster %s",
 			secretNamespace, secretName, rc.Name)
-		
+
 		// Now check for the controller cluster secret with the standardized naming convention
 		controllerSecretName := "dr-syncer-sshkey-" + rc.Name
 		controllerSecretNamespace := "dr-syncer"
-		
-		log.Infof("Checking for SSH key secret %s/%s in CONTROLLER cluster", 
+
+		log.Infof("Checking for SSH key secret %s/%s in CONTROLLER cluster",
 			controllerSecretNamespace, controllerSecretName)
-		
+
 		controllerSecret := &corev1.Secret{}
 		err = p.controllerClient.Get(ctx, client.ObjectKey{
 			Name:      controllerSecretName,
 			Namespace: controllerSecretNamespace,
 		}, controllerSecret)
-		
+
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				log.Infof("SSH key secret %s/%s not found in CONTROLLER cluster yet, retrying...", 
+				log.Infof("SSH key secret %s/%s not found in CONTROLLER cluster yet, retrying...",
 					controllerSecretNamespace, controllerSecretName)
 				return false, nil // Not found, retry
 			}
 			log.Errorf("Error getting SSH key secret from CONTROLLER cluster: %v", err)
 			return false, err // Other error, stop retrying
 		}
-		
+
 		// Log the keys found in the controller secret
 		controllerKeys := []string{}
 		for k := range controllerSecret.Data {
 			controllerKeys = append(controllerKeys, k)
 		}
-		log.Infof("Found SSH key secret %s/%s in CONTROLLER cluster with keys: %v", 
+		log.Infof("Found SSH key secret %s/%s in CONTROLLER cluster with keys: %v",
 			controllerSecretNamespace, controllerSecretName, controllerKeys)
-		
+
 		// Check if the controller secret has the required public key
 		controllerPublicKeyFound := false
 		if _, ok := controllerSecret.Data["ssh-public-key"]; ok {
@@ -486,13 +486,13 @@ func (p *PVCSyncManager) waitForKeySecret(ctx context.Context, rc *drv1alpha1.Re
 		} else if _, ok := controllerSecret.Data["id_rsa.pub"]; ok {
 			controllerPublicKeyFound = true
 		}
-		
+
 		if !controllerPublicKeyFound {
-			log.Infof("SSH key secret %s/%s in CONTROLLER cluster missing public key (checked for 'ssh-public-key' and 'id_rsa.pub'), retrying...", 
+			log.Infof("SSH key secret %s/%s in CONTROLLER cluster missing public key (checked for 'ssh-public-key' and 'id_rsa.pub'), retrying...",
 				controllerSecretNamespace, controllerSecretName)
 			return false, nil // Missing public key, retry
 		}
-		
+
 		log.Infof("SSH key secrets are fully available in both REMOTE and CONTROLLER clusters")
 		return true, nil // Both secrets are available with required keys
 	})

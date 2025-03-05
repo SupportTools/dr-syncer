@@ -3,7 +3,7 @@ package replication
 import (
 	"context"
 	"fmt"
-	
+
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
 
@@ -36,33 +36,33 @@ func (p *PVCSyncer) SyncPVCWithNamespaceMapping(ctx context.Context, mapping *dr
 	}
 
 	// Validate the PVC sync operation
-	if err := p.ValidatePVCSync(ctx, 
-		opts.SourcePVC.Name, opts.SourceNamespace, 
+	if err := p.ValidatePVCSync(ctx,
+		opts.SourcePVC.Name, opts.SourceNamespace,
 		opts.DestinationPVC.Name, opts.DestinationNamespace); err != nil {
 		return fmt.Errorf("validation failed: %v", err)
 	}
 
 	// Log sync progress
-	p.LogSyncProgress(ctx, 
-		opts.SourcePVC.Name, opts.SourceNamespace, 
-		opts.DestinationPVC.Name, opts.DestinationNamespace, 
+	p.LogSyncProgress(ctx,
+		opts.SourcePVC.Name, opts.SourceNamespace,
+		opts.DestinationPVC.Name, opts.DestinationNamespace,
 		"Started", "PVC sync started")
 
 	// Perform the rsync workflow
-	err = p.RsyncWorkflow(ctx, 
-		opts.SourceNamespace, opts.SourcePVC.Name, 
+	err = p.RsyncWorkflow(ctx,
+		opts.SourceNamespace, opts.SourcePVC.Name,
 		opts.DestinationNamespace, opts.DestinationPVC.Name)
 	if err != nil {
-		p.LogSyncProgress(ctx, 
-			opts.SourcePVC.Name, opts.SourceNamespace, 
-			opts.DestinationPVC.Name, opts.DestinationNamespace, 
+		p.LogSyncProgress(ctx,
+			opts.SourcePVC.Name, opts.SourceNamespace,
+			opts.DestinationPVC.Name, opts.DestinationNamespace,
 			"Failed", fmt.Sprintf("PVC sync failed: %v", err))
 		return fmt.Errorf("rsync workflow failed: %v", err)
 	}
 
 	// Update namespace mapping status
-	syncID := fmt.Sprintf("%s-%s-%s", 
-		opts.SourceNamespace, opts.SourcePVC.Name, 
+	syncID := fmt.Sprintf("%s-%s-%s",
+		opts.SourceNamespace, opts.SourcePVC.Name,
 		opts.DestinationNamespace)
 
 	if err := p.CompleteNamespaceMappingPVCSync(ctx, mapping, syncID); err != nil {
@@ -83,9 +83,9 @@ func (p *PVCSyncer) SyncPVCWithNamespaceMapping(ctx context.Context, mapping *dr
 	}
 
 	// Log sync progress
-	p.LogSyncProgress(ctx, 
-		opts.SourcePVC.Name, opts.SourceNamespace, 
-		opts.DestinationPVC.Name, opts.DestinationNamespace, 
+	p.LogSyncProgress(ctx,
+		opts.SourcePVC.Name, opts.SourceNamespace,
+		opts.DestinationPVC.Name, opts.DestinationNamespace,
 		"Completed", "PVC sync completed successfully")
 
 	log.WithFields(map[string]interface{}{

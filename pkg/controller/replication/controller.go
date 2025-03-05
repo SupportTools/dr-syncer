@@ -17,7 +17,7 @@ import (
 type RsyncReplicationController struct {
 	// PVCSyncer handles the PVC sync operations
 	syncer *PVCSyncer
-	
+
 	// RsyncController handles the rsync deployment and replication process
 	rsyncController *RsyncController
 }
@@ -29,10 +29,10 @@ func NewRsyncReplicationController(sourceClient, destClient client.Client, sourc
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize PVC syncer: %v", err)
 	}
-	
+
 	// Initialize the rsync controller
 	rsyncController := NewRsyncController(syncer)
-	
+
 	return &RsyncReplicationController{
 		syncer:          syncer,
 		rsyncController: rsyncController,
@@ -43,14 +43,14 @@ func NewRsyncReplicationController(sourceClient, destClient client.Client, sourc
 func (c *RsyncReplicationController) ReplicatePVC(ctx context.Context, sourceNS, destNS, pvcName string) error {
 	// Generate a unique sync ID for this replication
 	syncID := generateSyncID()
-	
+
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNS,
 		"dest_namespace":   destNS,
 		"pvc_name":         pvcName,
 		"sync_id":          syncID,
 	}).Info("[DR-SYNC] Starting PVC replication")
-	
+
 	// Call the rsync controller to handle the replication
 	err := c.rsyncController.SyncReplication(ctx, sourceNS, destNS, pvcName, syncID)
 	if err != nil {
@@ -59,14 +59,14 @@ func (c *RsyncReplicationController) ReplicatePVC(ctx context.Context, sourceNS,
 		}).Error("[DR-SYNC-ERROR] PVC replication failed")
 		return err
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNS,
 		"dest_namespace":   destNS,
 		"pvc_name":         pvcName,
 		"sync_id":          syncID,
 	}).Info("[DR-SYNC] PVC replication completed successfully")
-	
+
 	return nil
 }
 
@@ -77,14 +77,14 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 		"source_namespace": namespacemapping.Spec.SourceNamespace,
 		"dest_namespace":   namespacemapping.Spec.DestinationNamespace,
 	}).Info("[DR-SYNC] Processing namespace mapping")
-	
+
 	// Set the source and destination namespaces on the syncer
 	c.syncer.SourceNamespace = namespacemapping.Spec.SourceNamespace
 	c.syncer.DestinationNamespace = namespacemapping.Spec.DestinationNamespace
-	
+
 	// Set up empty label selector for PVCs - will match all PVCs in the namespace
 	pvcSelector := client.MatchingLabels{}
-	
+
 	// Check if we have PVC filtering configuration
 	if namespacemapping.Spec.PVCConfig != nil {
 		// For now, we're not implementing any filtering based on PVCConfig
@@ -93,7 +93,7 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 			"namespacemapping": namespacemapping.Name,
 		}).Info("[DR-SYNC] PVC configuration detected")
 	}
-	
+
 	// Get PVCs matching the selector
 	pvcNames, err := c.syncer.GetPVCsToSync(ctx, c.syncer.SourceNamespace, c.syncer.DestinationNamespace, pvcSelector)
 	if err != nil {
@@ -102,12 +102,12 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 		}).Error("[DR-SYNC-ERROR] Failed to get PVCs for namespace mapping")
 		return err
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"namespacemapping": namespacemapping.Name,
 		"pvc_count":        len(pvcNames),
 	}).Info("[DR-SYNC] Found PVCs for replication")
-	
+
 	// Process each PVC
 	for _, pvcName := range pvcNames {
 		err := c.ReplicatePVC(ctx, c.syncer.SourceNamespace, c.syncer.DestinationNamespace, pvcName)
@@ -120,7 +120,7 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 			continue
 		}
 	}
-	
+
 	// Update namespace mapping status
 	err = c.syncer.CompleteNamespaceMappingPVCSync(ctx, namespacemapping, generateSyncID())
 	if err != nil {
@@ -129,7 +129,7 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 		}).Error("[DR-SYNC-ERROR] Failed to update namespace mapping status")
 		return err
 	}
-	
+
 	// Schedule next sync if using scheduled mode
 	if namespacemapping.Spec.ReplicationMode == ScheduledMode {
 		err = c.syncer.ScheduleNextPVCSync(ctx, namespacemapping)
@@ -140,13 +140,13 @@ func (c *RsyncReplicationController) ProcessNamespaceMapping(ctx context.Context
 			return err
 		}
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"namespacemapping": namespacemapping.Name,
 		"source_namespace": namespacemapping.Spec.SourceNamespace,
 		"dest_namespace":   namespacemapping.Spec.DestinationNamespace,
 	}).Info("[DR-SYNC] Namespace mapping processing completed")
-	
+
 	return nil
 }
 

@@ -66,7 +66,7 @@ func (r *RsyncController) SyncReplication(ctx context.Context, sourceNS, destNS,
 	log.WithFields(logrus.Fields{
 		"node_count": len(nodes),
 	}).Info("[DR-SYNC] Step 3: Selecting a node from available options")
-	
+
 	if len(nodes) == 0 {
 		log.Error("[DR-SYNC-ERROR] No nodes found with mounted PVC")
 		return fmt.Errorf("no nodes found with mounted PVC")
@@ -207,19 +207,19 @@ func (r *RsyncController) SyncReplication(ctx context.Context, sourceNS, destNS,
 // findPVCNodes finds all nodes where a PVC is mounted
 func (r *RsyncController) findPVCNodes(ctx context.Context, namespace, pvcName string) ([]string, error) {
 	var nodes []string
-	
+
 	// Get the PVC
 	pvc, err := r.syncer.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get PVC: %v", err)
 	}
-	
+
 	// Get volume attachments for this PVC
 	volumeAttachments, err := r.syncer.SourceK8sClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volume attachments: %v", err)
 	}
-	
+
 	// Find nodes where this PVC's PV is attached
 	for _, va := range volumeAttachments.Items {
 		if va.Spec.Source.PersistentVolumeName != nil && *va.Spec.Source.PersistentVolumeName == pvc.Spec.VolumeName {
@@ -230,14 +230,14 @@ func (r *RsyncController) findPVCNodes(ctx context.Context, namespace, pvcName s
 			}).Info("[DR-SYNC-DETAIL] Found node with attached PV")
 		}
 	}
-	
+
 	// If no volume attachments, look for pods using this PVC
 	if len(nodes) == 0 {
 		podList, err := r.syncer.SourceK8sClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list pods: %v", err)
 		}
-		
+
 		for _, pod := range podList.Items {
 			for _, volume := range pod.Spec.Volumes {
 				if volume.PersistentVolumeClaim != nil && volume.PersistentVolumeClaim.ClaimName == pvcName {
@@ -252,7 +252,7 @@ func (r *RsyncController) findPVCNodes(ctx context.Context, namespace, pvcName s
 			}
 		}
 	}
-	
+
 	// Deduplicate nodes (in case multiple pods or attachments on the same node)
 	uniqueNodes := make(map[string]bool)
 	var result []string
@@ -262,12 +262,12 @@ func (r *RsyncController) findPVCNodes(ctx context.Context, namespace, pvcName s
 			result = append(result, node)
 		}
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"nodes_found": len(result),
 		"nodes":       result,
 	}).Info("[DR-SYNC-DETAIL] Found nodes with PVC mounted")
-	
+
 	return result, nil
 }
 
@@ -276,7 +276,7 @@ func (r *RsyncController) selectRandomNode(nodes []string) string {
 	if len(nodes) == 1 {
 		return nodes[0]
 	}
-	
+
 	rand.Seed(time.Now().UnixNano())
 	randomIndex := rand.Intn(len(nodes))
 	return nodes[randomIndex]
@@ -286,13 +286,13 @@ func (r *RsyncController) selectRandomNode(nodes []string) string {
 func (r *RsyncController) deployRsyncDeployment(ctx context.Context, namespace, pvcName, syncID string) (*appsv1.Deployment, error) {
 	// Generate a deployment name
 	deploymentName := fmt.Sprintf("dr-syncer-rsync-%s-%s", pvcName, syncID)
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": deploymentName,
 		"namespace":  namespace,
 		"pvc_name":   pvcName,
 	}).Info("[DR-SYNC-DETAIL] Creating rsync deployment")
-	
+
 	// Define the deployment
 	replicas := int32(1)
 	deployment := &appsv1.Deployment{
@@ -310,9 +310,9 @@ func (r *RsyncController) deployRsyncDeployment(ctx context.Context, namespace, 
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app.kubernetes.io/name":    "dr-syncer-rsync",
-					"dr-syncer.io/sync-id":      syncID,
-					"dr-syncer.io/pvc-name":     pvcName,
+					"app.kubernetes.io/name": "dr-syncer-rsync",
+					"dr-syncer.io/sync-id":   syncID,
+					"dr-syncer.io/pvc-name":  pvcName,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
@@ -356,7 +356,7 @@ func (r *RsyncController) deployRsyncDeployment(ctx context.Context, namespace, 
 			},
 		},
 	}
-	
+
 	// Check if a deployment with this name already exists and delete it
 	existingDeployment, err := r.syncer.DestinationK8sClient.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
 	if err == nil {
@@ -365,18 +365,18 @@ func (r *RsyncController) deployRsyncDeployment(ctx context.Context, namespace, 
 			"deployment": existingDeployment.Name,
 			"namespace":  existingDeployment.Namespace,
 		}).Info("[DR-SYNC-DETAIL] Found existing deployment, deleting it")
-		
+
 		deletePolicy := metav1.DeletePropagationForeground
 		deleteOptions := metav1.DeleteOptions{
 			PropagationPolicy: &deletePolicy,
 		}
-		
+
 		if err := r.syncer.DestinationK8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploymentName, deleteOptions); err != nil {
 			if !errors.IsNotFound(err) {
 				return nil, fmt.Errorf("failed to delete existing deployment: %v", err)
 			}
 		}
-		
+
 		// Wait for deletion to complete
 		if err := r.waitForDeploymentDeletion(ctx, namespace, deploymentName); err != nil {
 			return nil, fmt.Errorf("timeout waiting for deployment deletion: %v", err)
@@ -385,18 +385,18 @@ func (r *RsyncController) deployRsyncDeployment(ctx context.Context, namespace, 
 		// Some error other than "not found"
 		return nil, fmt.Errorf("failed to check for existing deployment: %v", err)
 	}
-	
+
 	// Create the deployment
 	createdDeployment, err := r.syncer.DestinationK8sClient.AppsV1().Deployments(namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rsync deployment: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": createdDeployment.Name,
 		"namespace":  createdDeployment.Namespace,
 	}).Info("[DR-SYNC-DETAIL] Successfully created rsync deployment")
-	
+
 	return createdDeployment, nil
 }
 
@@ -407,13 +407,13 @@ func (r *RsyncController) waitForRsyncPodReady(ctx context.Context, deployment *
 		"namespace":  deployment.Namespace,
 		"timeout":    timeout,
 	}).Info("[DR-SYNC-DETAIL] Waiting for rsync pod to be ready")
-	
+
 	// Create a context with timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	
+
 	var podName string
-	
+
 	// Poll until the pod is ready or timeout
 	err := wait.PollUntilContextCancel(timeoutCtx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		// Get the latest deployment status
@@ -426,20 +426,20 @@ func (r *RsyncController) waitForRsyncPodReady(ctx context.Context, deployment *
 			}).Warn("[DR-SYNC-DETAIL] Failed to get deployment while waiting")
 			return false, nil
 		}
-		
+
 		// Check if deployment is available
 		if dep.Status.AvailableReplicas == 0 {
 			log.WithFields(logrus.Fields{
-				"deployment":          deployment.Name,
-				"namespace":           deployment.Namespace,
-				"available_replicas":  dep.Status.AvailableReplicas,
-				"updated_replicas":    dep.Status.UpdatedReplicas,
-				"ready_replicas":      dep.Status.ReadyReplicas,
-				"desired_replicas":    dep.Status.Replicas,
+				"deployment":         deployment.Name,
+				"namespace":          deployment.Namespace,
+				"available_replicas": dep.Status.AvailableReplicas,
+				"updated_replicas":   dep.Status.UpdatedReplicas,
+				"ready_replicas":     dep.Status.ReadyReplicas,
+				"desired_replicas":   dep.Status.Replicas,
 			}).Debug("[DR-SYNC-DETAIL] Deployment not ready yet")
 			return false, nil
 		}
-		
+
 		// Get pods managed by this deployment
 		selector := metav1.FormatLabelSelector(dep.Spec.Selector)
 		pods, err := r.syncer.DestinationK8sClient.CoreV1().Pods(deployment.Namespace).List(ctx, metav1.ListOptions{
@@ -453,7 +453,7 @@ func (r *RsyncController) waitForRsyncPodReady(ctx context.Context, deployment *
 			}).Warn("[DR-SYNC-DETAIL] Failed to list pods for deployment")
 			return false, nil
 		}
-		
+
 		// Find a running pod
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
@@ -466,18 +466,18 @@ func (r *RsyncController) waitForRsyncPodReady(ctx context.Context, deployment *
 				return true, nil
 			}
 		}
-		
+
 		return false, nil
 	})
-	
+
 	if err != nil {
 		return "", fmt.Errorf("failed to wait for pod to be ready: %v", err)
 	}
-	
+
 	if podName == "" {
 		return "", fmt.Errorf("no running pod found for deployment %s/%s", deployment.Namespace, deployment.Name)
 	}
-	
+
 	return podName, nil
 }
 
@@ -487,13 +487,13 @@ func (r *RsyncController) generateSSHKeysInPod(ctx context.Context, namespace, p
 		"pod":       podName,
 		"namespace": namespace,
 	}).Info("[DR-SYNC-DETAIL] Generating SSH keys in rsync pod")
-	
+
 	cmd := []string{
 		"sh",
 		"-c",
 		"mkdir -p /root/.ssh && ssh-keygen -t rsa -N '' -f /root/.ssh/id_rsa",
 	}
-	
+
 	stdout, stderr, err := executeCommandInPod(ctx, r.syncer.DestinationK8sClient, namespace, podName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -502,11 +502,11 @@ func (r *RsyncController) generateSSHKeysInPod(ctx context.Context, namespace, p
 		}).Error("[DR-SYNC-ERROR] Failed to generate SSH keys")
 		return fmt.Errorf("failed to generate SSH keys: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"stdout": stdout,
 	}).Debug("[DR-SYNC-DETAIL] Successfully generated SSH keys")
-	
+
 	return nil
 }
 
@@ -516,12 +516,12 @@ func (r *RsyncController) getPublicKeyFromPod(ctx context.Context, namespace, po
 		"pod":       podName,
 		"namespace": namespace,
 	}).Info("[DR-SYNC-DETAIL] Getting public key from rsync pod")
-	
+
 	cmd := []string{
 		"cat",
 		"/root/.ssh/id_rsa.pub",
 	}
-	
+
 	stdout, stderr, err := executeCommandInPod(ctx, r.syncer.DestinationK8sClient, namespace, podName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -530,16 +530,16 @@ func (r *RsyncController) getPublicKeyFromPod(ctx context.Context, namespace, po
 		}).Error("[DR-SYNC-ERROR] Failed to get public key")
 		return "", fmt.Errorf("failed to get public key: %v", err)
 	}
-	
+
 	publicKey := strings.TrimSpace(stdout)
 	if publicKey == "" {
 		return "", fmt.Errorf("empty public key returned")
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"public_key_length": len(publicKey),
 	}).Debug("[DR-SYNC-DETAIL] Successfully retrieved public key")
-	
+
 	return publicKey, nil
 }
 
@@ -551,12 +551,12 @@ func (r *RsyncController) testSSHConnectivity(ctx context.Context, namespace, po
 		"agent_ip":  agentIP,
 		"port":      port,
 	}).Info("[DR-SYNC-DETAIL] Testing SSH connectivity")
-	
+
 	// Construct SSH command
 	sshCommand := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d root@%s 'echo SSH connectivity test'", port, agentIP)
-	
+
 	cmd := []string{"sh", "-c", sshCommand}
-	
+
 	stdout, stderr, err := executeCommandInPod(ctx, r.syncer.DestinationK8sClient, namespace, podName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -565,11 +565,11 @@ func (r *RsyncController) testSSHConnectivity(ctx context.Context, namespace, po
 		}).Error("[DR-SYNC-ERROR] SSH connectivity test failed")
 		return fmt.Errorf("SSH connectivity test failed: %v", err)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"stdout": stdout,
 	}).Info("[DR-SYNC-DETAIL] SSH connectivity test successful")
-	
+
 	return nil
 }
 
@@ -581,7 +581,7 @@ func (r *RsyncController) performRsync(ctx context.Context, namespace, podName, 
 		"agent_ip":   agentIP,
 		"mount_path": mountPath,
 	}).Info("[DR-SYNC-DETAIL] Running rsync command")
-	
+
 	// Default rsync options
 	rsyncOptions := []string{
 		"--archive",
@@ -589,20 +589,20 @@ func (r *RsyncController) performRsync(ctx context.Context, namespace, podName, 
 		"--delete",
 		"--human-readable",
 	}
-	
+
 	// Combine rsync options
 	rsyncOptsStr := strings.Join(rsyncOptions, " ")
-	
+
 	// Build the rsync command with tee to log the output
 	rsyncCmd := fmt.Sprintf("rsync %s -e 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p 2222' root@%s:%s/ /data/ | tee /var/log/rsync.log",
 		rsyncOptsStr, agentIP, mountPath)
-	
+
 	log.WithFields(logrus.Fields{
 		"rsync_cmd": rsyncCmd,
 	}).Info("[DR-SYNC-DETAIL] Executing rsync command")
-	
+
 	cmd := []string{"sh", "-c", rsyncCmd}
-	
+
 	stdout, stderr, err := executeCommandInPod(ctx, r.syncer.DestinationK8sClient, namespace, podName, cmd)
 	if err != nil {
 		log.WithFields(logrus.Fields{
@@ -611,7 +611,7 @@ func (r *RsyncController) performRsync(ctx context.Context, namespace, podName, 
 		}).Error("[DR-SYNC-ERROR] Rsync command failed")
 		return fmt.Errorf("rsync command failed: %v", err)
 	}
-	
+
 	// Check if rsync was successful
 	if strings.Contains(stderr, "rsync error") {
 		log.WithFields(logrus.Fields{
@@ -619,20 +619,20 @@ func (r *RsyncController) performRsync(ctx context.Context, namespace, podName, 
 		}).Error("[DR-SYNC-ERROR] Rsync error detected in output")
 		return fmt.Errorf("rsync error: %s", stderr)
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"pod":        podName,
 		"namespace":  namespace,
 		"agent_ip":   agentIP,
 		"mount_path": mountPath,
 	}).Info("[DR-SYNC-DETAIL] Rsync command executed successfully")
-	
+
 	// Output first 100 characters of stdout to help with debugging
 	if len(stdout) > 100 {
 		log.WithFields(logrus.Fields{
 			"stdout_preview": stdout[:100] + "...",
 		}).Info("[DR-SYNC-DETAIL] Rsync output preview")
-		
+
 		// Log the full output with multiple log entries for better visibility in logs
 		lines := strings.Split(stdout, "\n")
 		for i, line := range lines {
@@ -648,7 +648,7 @@ func (r *RsyncController) performRsync(ctx context.Context, namespace, podName, 
 			"stdout": stdout,
 		}).Info("[DR-SYNC-DETAIL] Rsync output")
 	}
-	
+
 	return nil
 }
 
@@ -658,13 +658,13 @@ func (r *RsyncController) cleanupRsyncDeployment(ctx context.Context, deployment
 		"deployment": deployment.Name,
 		"namespace":  deployment.Namespace,
 	}).Info("[DR-SYNC-DETAIL] Cleaning up rsync deployment")
-	
+
 	// Set foreground deletion to ensure pods are deleted first
 	deletePolicy := metav1.DeletePropagationForeground
 	deleteOptions := metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	}
-	
+
 	err := r.syncer.DestinationK8sClient.AppsV1().Deployments(deployment.Namespace).Delete(ctx, deployment.Name, deleteOptions)
 	if err != nil {
 		if !errors.IsNotFound(err) {
@@ -677,7 +677,7 @@ func (r *RsyncController) cleanupRsyncDeployment(ctx context.Context, deployment
 		}).Info("[DR-SYNC-DETAIL] Deployment not found, already deleted")
 		return nil
 	}
-	
+
 	// Wait for the deployment to be deleted
 	err = r.waitForDeploymentDeletion(ctx, deployment.Namespace, deployment.Name)
 	if err != nil {
@@ -688,12 +688,12 @@ func (r *RsyncController) cleanupRsyncDeployment(ctx context.Context, deployment
 		}).Warn("[DR-SYNC-DETAIL] Timed out waiting for deployment deletion, continuing anyway")
 		// We'll continue anyway since we've initiated deletion
 	}
-	
+
 	log.WithFields(logrus.Fields{
 		"deployment": deployment.Name,
 		"namespace":  deployment.Namespace,
 	}).Info("[DR-SYNC-DETAIL] Successfully deleted rsync deployment")
-	
+
 	return nil
 }
 
@@ -703,11 +703,11 @@ func (r *RsyncController) waitForDeploymentDeletion(ctx context.Context, namespa
 		"deployment": name,
 		"namespace":  namespace,
 	}).Info("[DR-SYNC-DETAIL] Waiting for deployment deletion")
-	
+
 	// Create a timeout context
 	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	
+
 	// Poll until the deployment is gone or timeout
 	return wait.PollUntilContextCancel(timeoutCtx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		_, err := r.syncer.DestinationK8sClient.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
