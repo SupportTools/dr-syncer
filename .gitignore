@@ -27,3 +27,18 @@ go.work.sum
 bin/
 notes
 kubeconfig/
+log
+
+# Docusaurus
+docs/node_modules
+docs/.docusaurus
+docs/build
+docs/.env.local
+docs/.env.development.local
+docs/.env.test.local
+docs/.env.production.local
+docs/npm-debug.log*
+docs/yarn-debug.log*
+docs/yarn-error.log*
+
+docs/
