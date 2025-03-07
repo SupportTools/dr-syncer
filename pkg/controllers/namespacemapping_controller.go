@@ -11,12 +11,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // NamespaceMappingReconciler reconciles a NamespaceMapping object
@@ -398,8 +404,164 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 // SetupWithManager sets up the controller with the Manager
 func (r *NamespaceMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&drv1alpha1.NamespaceMapping{}).
+		// Watch NamespaceMapping but only trigger reconciliation for spec changes, not status changes
+		For(&drv1alpha1.NamespaceMapping{}, builder.WithPredicates(
+			predicate.Or(
+				// Reconcile on Create events
+				predicate.GenerationChangedPredicate{},
+				// Also reconcile on delete events
+				predicate.Funcs{
+					CreateFunc: func(e event.CreateEvent) bool {
+						return true
+					},
+					DeleteFunc: func(e event.DeleteEvent) bool {
+						return !e.DeleteStateUnknown
+					},
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						// Only reconcile if the resource generation changed,
+						// which indicates spec changes (not just status)
+						oldGeneration := e.ObjectOld.GetGeneration()
+						newGeneration := e.ObjectNew.GetGeneration()
+						
+						// We also want to trigger reconciliation if the sync-now annotation is added
+						// or if other custom annotations that should trigger sync are added
+						oldObj, ok1 := e.ObjectOld.(*drv1alpha1.NamespaceMapping)
+						newObj, ok2 := e.ObjectNew.(*drv1alpha1.NamespaceMapping)
+						if ok1 && ok2 {
+							// Check for "sync-now" annotation
+							_, oldHasSyncNow := oldObj.Annotations["dr-syncer.io/sync-now"]
+							_, newHasSyncNow := newObj.Annotations["dr-syncer.io/sync-now"]
+							if !oldHasSyncNow && newHasSyncNow {
+								return true
+							}
+						}
+						
+						return oldGeneration != newGeneration
+					},
+					GenericFunc: func(e event.GenericEvent) bool {
+						return false
+					},
+				},
+			),
+		)).
+		// Watch for changes to ClusterMapping resources referenced by NamespaceMapping
+		Watches(
+			&drv1alpha1.ClusterMapping{},
+			&clusterMappingToNamespaceMappingMapper{Client: r.Client},
+		).
+		// Watch for changes to RemoteCluster resources that could affect NamespaceMapping
+		Watches(
+			&drv1alpha1.RemoteCluster{},
+			&remoteClusterToNamespaceMappingMapper{Client: r.Client},
+		).
 		Complete(r)
+}
+
+// clusterMappingToNamespaceMappingMapper maps from a ClusterMapping to the NamespaceMapping resources that reference it
+type clusterMappingToNamespaceMappingMapper struct {
+	client.Client
+}
+
+// Map returns a list of NamespaceMapping objects that reference the given ClusterMapping
+func (m *clusterMappingToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Request {
+	var requests []ctrl.Request
+	clusterMapping, ok := obj.(*drv1alpha1.ClusterMapping)
+	if !ok {
+		return nil
+	}
+
+	// List all NamespaceMapping resources
+	var namespaceMappings drv1alpha1.NamespaceMappingList
+	err := m.List(context.Background(), &namespaceMappings)
+	if err != nil {
+		log.Errorf("Failed to list NamespaceMappings: %v", err)
+		return nil
+	}
+
+	// Find all NamespaceMappings that reference this ClusterMapping
+	for _, nm := range namespaceMappings.Items {
+		if nm.Spec.ClusterMappingRef != nil {
+			refNamespace := nm.Spec.ClusterMappingRef.Namespace
+			if refNamespace == "" {
+				refNamespace = nm.Namespace
+			}
+			
+			if nm.Spec.ClusterMappingRef.Name == clusterMapping.Name && refNamespace == clusterMapping.Namespace {
+				requests = append(requests, ctrl.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      nm.Name,
+						Namespace: nm.Namespace,
+					},
+				})
+			}
+		}
+	}
+
+	return requests
+}
+
+// remoteClusterToNamespaceMappingMapper maps from a RemoteCluster to the NamespaceMapping resources that reference it
+type remoteClusterToNamespaceMappingMapper struct {
+	client.Client
+}
+
+// Map returns a list of NamespaceMapping objects that reference the given RemoteCluster
+func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Request {
+	var requests []ctrl.Request
+	remoteCluster, ok := obj.(*drv1alpha1.RemoteCluster)
+	if !ok {
+		return nil
+	}
+
+	// List all NamespaceMapping resources
+	var namespaceMappings drv1alpha1.NamespaceMappingList
+	err := m.List(context.Background(), &namespaceMappings)
+	if err != nil {
+		log.Errorf("Failed to list NamespaceMappings: %v", err)
+		return nil
+	}
+
+	// Find all NamespaceMappings that directly reference this RemoteCluster
+	for _, nm := range namespaceMappings.Items {
+		if (nm.Spec.SourceCluster == remoteCluster.Name && nm.Namespace == remoteCluster.Namespace) ||
+			(nm.Spec.DestinationCluster == remoteCluster.Name && nm.Namespace == remoteCluster.Namespace) {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      nm.Name,
+					Namespace: nm.Namespace,
+				},
+			})
+			continue
+		}
+
+		// Check if this NamespaceMapping references a ClusterMapping that uses this RemoteCluster
+		if nm.Spec.ClusterMappingRef != nil {
+			var clusterMapping drv1alpha1.ClusterMapping
+			clusterMappingNamespace := nm.Spec.ClusterMappingRef.Namespace
+			if clusterMappingNamespace == "" {
+				clusterMappingNamespace = nm.Namespace
+			}
+			
+			err := m.Get(context.Background(), client.ObjectKey{
+				Name:      nm.Spec.ClusterMappingRef.Name,
+				Namespace: clusterMappingNamespace,
+			}, &clusterMapping)
+			
+			if err == nil {
+				if (clusterMapping.Spec.SourceCluster == remoteCluster.Name && clusterMapping.Namespace == remoteCluster.Namespace) ||
+					(clusterMapping.Spec.TargetCluster == remoteCluster.Name && clusterMapping.Namespace == remoteCluster.Namespace) {
+					requests = append(requests, ctrl.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      nm.Name,
+							Namespace: nm.Namespace,
+						},
+					})
+				}
+			}
+		}
+	}
+
+	return requests
 }
 
 // Helper functions for string slice operations

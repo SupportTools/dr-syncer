@@ -15,7 +15,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	drsyncerio "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/util"
@@ -794,8 +799,123 @@ func (r *ClusterMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.clusterMutexes = &sync.Map{}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&drsyncerio.ClusterMapping{}).
+		// Watch ClusterMapping but only trigger reconciliation for spec changes, not status changes
+		For(&drsyncerio.ClusterMapping{}, builder.WithPredicates(
+			predicate.Or(
+				// Reconcile on Create events
+				predicate.GenerationChangedPredicate{},
+				// Also reconcile on delete events
+				predicate.Funcs{
+					CreateFunc: func(e event.CreateEvent) bool {
+						return true
+					},
+					DeleteFunc: func(e event.DeleteEvent) bool {
+						return !e.DeleteStateUnknown
+					},
+					UpdateFunc: func(e event.UpdateEvent) bool {
+						// Only reconcile if the resource generation changed,
+						// which indicates spec changes (not just status)
+						oldGeneration := e.ObjectOld.GetGeneration()
+						newGeneration := e.ObjectNew.GetGeneration()
+						return oldGeneration != newGeneration
+					},
+					GenericFunc: func(e event.GenericEvent) bool {
+						return false
+					},
+				},
+			),
+		)).
+		// Watch for changes to RemoteCluster resources referenced by ClusterMapping
+		Watches(
+			&drsyncerio.RemoteCluster{},
+			&remoteClusterToClusterMappingMapper{Client: r.Client},
+		).
+		// Watch for changes to SSH key Secrets referenced by ClusterMapping
+		Watches(
+			&corev1.Secret{},
+			&sshKeySecretToClusterMappingMapper{Client: r.Client},
+		).
 		Complete(r)
+}
+
+// remoteClusterToClusterMappingMapper maps from a RemoteCluster to the ClusterMapping resources that reference it
+type remoteClusterToClusterMappingMapper struct {
+	client.Client
+}
+
+// Map returns a list of ClusterMapping objects that reference the given RemoteCluster
+func (m *remoteClusterToClusterMappingMapper) Map(obj client.Object) []ctrl.Request {
+	var requests []ctrl.Request
+	remoteCluster, ok := obj.(*drsyncerio.RemoteCluster)
+	if !ok {
+		return nil
+	}
+
+	// List all ClusterMapping resources
+	var clusterMappings drsyncerio.ClusterMappingList
+	err := m.List(context.Background(), &clusterMappings)
+	if err != nil {
+		log.Errorf("Failed to list ClusterMappings: %v", err)
+		return nil
+	}
+
+	// Find all ClusterMappings that reference this RemoteCluster
+	for _, cm := range clusterMappings.Items {
+		if (cm.Spec.SourceCluster == remoteCluster.Name && cm.Namespace == remoteCluster.Namespace) ||
+			(cm.Spec.TargetCluster == remoteCluster.Name && cm.Namespace == remoteCluster.Namespace) {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      cm.Name,
+					Namespace: cm.Namespace,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// sshKeySecretToClusterMappingMapper maps from a Secret to the ClusterMapping resources that reference it
+type sshKeySecretToClusterMappingMapper struct {
+	client.Client
+}
+
+// Map returns a list of ClusterMapping objects that reference the given Secret
+func (m *sshKeySecretToClusterMappingMapper) Map(obj client.Object) []ctrl.Request {
+	var requests []ctrl.Request
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	// List all ClusterMapping resources
+	var clusterMappings drsyncerio.ClusterMappingList
+	err := m.List(context.Background(), &clusterMappings)
+	if err != nil {
+		log.Errorf("Failed to list ClusterMappings: %v", err)
+		return nil
+	}
+
+	// Find all ClusterMappings that reference this secret
+	for _, cm := range clusterMappings.Items {
+		if cm.Spec.SSHKeySecretRef != nil {
+			secretNamespace := cm.Spec.SSHKeySecretRef.Namespace
+			if secretNamespace == "" {
+				secretNamespace = cm.Namespace
+			}
+			
+			if cm.Spec.SSHKeySecretRef.Name == secret.Name && secretNamespace == secret.Namespace {
+				requests = append(requests, ctrl.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      cm.Name,
+						Namespace: cm.Namespace,
+					},
+				})
+			}
+		}
+	}
+
+	return requests
 }
 
 // getClusterMutex gets or creates a mutex for a specific cluster
