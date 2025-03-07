@@ -1,0 +1,81 @@
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: test-remote-nyc3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "23"
+    dr-syncer.io/test-name: "change-detection-test"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-nyc3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - configmaps
+    - deployments
+  pvcSync:
+    enabled: true
+    concurrency: 3
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: test-remote-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "23"
+    dr-syncer.io/test-name: "change-detection-test"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-sfo3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - configmaps
+    - deployments
+  pvcSync:
+    enabled: true
+    concurrency: 3
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: test-nyc3-to-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "23"
+    dr-syncer.io/test-name: "change-detection-test"
+    dr-syncer.io/test: "true"
+spec:
+  sourceCluster: test-remote-nyc3
+  targetCluster: test-remote-sfo3
+  verifyConnectivity: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: change-detection-test
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "23"
+    dr-syncer.io/test-name: "change-detection-test"
+    dr-syncer.io/test: "true"
+spec:
+  # Use continuous mode to test the watch mechanism
+  replicationMode: Continuous
+  # Reference the ClusterMapping
+  clusterMappingRef:
+    name: test-nyc3-to-sfo3
+    namespace: dr-syncer
+  sourceNamespace: dr-sync-test-case23
+  destinationNamespace: dr-sync-test-case23
+  # Resource types to sync
+  resourceTypes:
+    - ConfigMaps
+    - Deployments
+  # Scale deployments to zero in DR
+  scaleToZero: true

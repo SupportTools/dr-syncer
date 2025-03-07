@@ -117,6 +117,7 @@ run_all_tests() {
         "15_pvc-combined-features"
         "16_replication_modes"
         "21_clustermapping"
+        "23_change_detection"
     )
     
     # Run each test case
