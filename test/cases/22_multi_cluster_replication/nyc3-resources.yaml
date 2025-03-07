@@ -1,0 +1,121 @@
+# Resources for nyc3 cluster (namespaces: test-case-22-a, test-case-22-d)
+# Namespace test-case-22-a
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-case-22-a
+  labels:
+    source-cluster: nyc3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-nyc3-a
+  namespace: test-case-22-a
+data:
+  source: "nyc3-a"
+  description: "ConfigMap from nyc3 cluster in namespace a"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-nyc3-a
+  namespace: test-case-22-a
+type: Opaque
+stringData:
+  source: "nyc3-a"
+  key: "test-secret-value-a"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-nyc3-a
+  namespace: test-case-22-a
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-nyc3-a
+  template:
+    metadata:
+      labels:
+        app: app-nyc3-a
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-nyc3-a
+  namespace: test-case-22-a
+spec:
+  selector:
+    app: app-nyc3-a
+  ports:
+  - port: 80
+    targetPort: 80
+
+# Namespace test-case-22-d
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-case-22-d
+  labels:
+    source-cluster: nyc3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-nyc3-d
+  namespace: test-case-22-d
+data:
+  source: "nyc3-d"
+  description: "ConfigMap from nyc3 cluster in namespace d"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-nyc3-d
+  namespace: test-case-22-d
+type: Opaque
+stringData:
+  source: "nyc3-d"
+  key: "test-secret-value-d"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-nyc3-d
+  namespace: test-case-22-d
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-nyc3-d
+  template:
+    metadata:
+      labels:
+        app: app-nyc3-d
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-nyc3-d
+  namespace: test-case-22-d
+spec:
+  selector:
+    app: app-nyc3-d
+  ports:
+  - port: 80
+    targetPort: 80

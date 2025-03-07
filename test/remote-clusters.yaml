@@ -95,3 +95,79 @@ spec:
   targetCluster: dr-syncer-sfo3
   verifyConnectivity: true
   connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: dr-syncer-tor1
+  namespace: dr-syncer
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-tor1-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - configmaps
+    - secrets
+    - deployments
+    - services
+    - ingresses
+  pvcSync:
+    enabled: true
+    image:
+      repository: docker.io/supporttools/dr-syncer-agent
+      tag: latest
+      pullPolicy: Always
+    ssh:
+      port: 2222
+    concurrency: 3
+    deployment:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+      priorityClassName: "system-node-critical"
+      privileged: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: sfo3-to-tor1
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr-syncer-sfo3
+  targetCluster: dr-syncer-tor1
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: tor1-to-nyc3
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr-syncer-tor1
+  targetCluster: dr-syncer-nyc3
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: sfo3-to-nyc3
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr-syncer-sfo3
+  targetCluster: dr-syncer-nyc3
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60

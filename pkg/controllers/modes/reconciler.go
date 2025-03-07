@@ -33,26 +33,40 @@ var log = logging.SetupLogging()
 // ModeReconciler handles reconciliation for different replication modes
 type ModeReconciler struct {
 	client.Client
-	sourceClient dynamic.Interface
-	destClient   dynamic.Interface
-	k8sSource    kubernetes.Interface
-	k8sDest      kubernetes.Interface
-	sourceConfig *rest.Config
-	destConfig   *rest.Config
-	watchManager *watch.WatchManager
+	sourceClient      dynamic.Interface
+	destClient        dynamic.Interface
+	k8sSource         kubernetes.Interface
+	k8sDest           kubernetes.Interface
+	sourceConfig      *rest.Config
+	destConfig        *rest.Config
+	watchManager      *watch.WatchManager
+	sourceClusterName string
+	destClusterName   string
 }
 
 // NewModeReconciler creates a new ModeReconciler
-func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interface, k8sSource, k8sDest kubernetes.Interface, sourceConfig, destConfig *rest.Config) *ModeReconciler {
+func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interface, k8sSource, k8sDest kubernetes.Interface, 
+	sourceConfig, destConfig *rest.Config, sourceClusterName, destClusterName string) *ModeReconciler {
+	
+	// Use defaults if no cluster names provided
+	if sourceClusterName == "" {
+		sourceClusterName = "source"
+	}
+	if destClusterName == "" {
+		destClusterName = "destination"
+	}
+	
 	return &ModeReconciler{
-		Client:       c,
-		sourceClient: sourceClient,
-		destClient:   destClient,
-		k8sSource:    k8sSource,
-		k8sDest:      k8sDest,
-		sourceConfig: sourceConfig,
-		destConfig:   destConfig,
-		watchManager: watch.NewWatchManager(sourceClient, destClient),
+		Client:            c,
+		sourceClient:      sourceClient,
+		destClient:        destClient,
+		k8sSource:         k8sSource,
+		k8sDest:           k8sDest,
+		sourceConfig:      sourceConfig,
+		destConfig:        destConfig,
+		watchManager:      watch.NewWatchManager(sourceClient, destClient),
+		sourceClusterName: sourceClusterName,
+		destClusterName:   destClusterName,
 	}
 }
 
@@ -340,11 +354,16 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 		return ctrl.Result{}, nil
 	}
 
-	// Check for sync-now annotation
+	// Check for sync-now or trigger-sync annotation
 	syncNow := false
 	if mapping.ObjectMeta.Annotations != nil {
 		if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/sync-now"]; ok {
 			syncNow = true
+		} else if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/trigger-sync"]; ok {
+			// Support both annotation formats for backward compatibility
+			syncNow = true
+			log.Info(fmt.Sprintf("using deprecated dr-syncer.io/trigger-sync annotation for mapping '%s', please use dr-syncer.io/sync-now instead", 
+				mapping.Name))
 		}
 	}
 

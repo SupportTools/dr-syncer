@@ -13,6 +13,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/utils/pointer"
 )
 
 var log = logrus.WithField("component", "rsyncpod")
@@ -169,6 +171,33 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 								{
 									Name:      "data",
 									MountPath: "/data",
+								},
+							},
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("2"),
+									corev1.ResourceMemory: resource.MustParse("2Gi"),
+								},
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("500m"),
+									corev1.ResourceMemory: resource.MustParse("512Mi"),
+								},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: pointer.Bool(false),
+								Capabilities: &corev1.Capabilities{
+									Add: []corev1.Capability{"SYS_RESOURCE"},
+								},
+								RunAsUser: pointer.Int64(0), // Run as root to preserve file ownership
+							},
+							Env: []corev1.EnvVar{
+								{
+									Name:  "RSYNC_MAX_THREADS",
+									Value: "8",
+								},
+								{
+									Name:  "RSYNC_IO_PRIORITY",
+									Value: "4", // Higher I/O priority (0-7, 0 is highest)
 								},
 							},
 						},

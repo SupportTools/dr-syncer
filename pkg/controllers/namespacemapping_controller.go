@@ -6,6 +6,7 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/contextkeys"
 	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,8 +22,8 @@ import (
 // NamespaceMappingReconciler reconciles a NamespaceMapping object
 type NamespaceMappingReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	modeHandler *modes.ModeReconciler
+	Scheme *runtime.Scheme
+	// No longer storing modeHandler as a field since we'll create a new one for each reconciliation
 }
 
 //+kubebuilder:rbac:groups=dr-syncer.io,resources=namespacemappings,verbs=get;list;watch;create;update;patch;delete
@@ -42,6 +43,170 @@ const (
 	// NamespaceMappingFinalizerName is the name of the finalizer added to NamespaceMapping resources
 	NamespaceMappingFinalizerName = "dr-syncer.io/cleanup-namespacemapping"
 )
+
+// setupClusterClients sets up the clients for a single cluster
+func (r *NamespaceMappingReconciler) setupClusterClients(
+	ctx context.Context,
+	namespace string,
+	clusterName string,
+	clientType string) (*rest.Config, *kubernetes.Clientset, dynamic.Interface, error) {
+
+	// Fetch the RemoteCluster instance
+	var remoteCluster drv1alpha1.RemoteCluster
+	if err := r.Get(ctx, client.ObjectKey{
+		Name:      clusterName,
+		Namespace: namespace,
+	}, &remoteCluster); err != nil {
+		log.Errorf("unable to fetch %s RemoteCluster %s: %v", clientType, clusterName, err)
+		return nil, nil, nil, err
+	}
+
+	// Get the kubeconfig secret
+	var kubeconfigSecret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: remoteCluster.Spec.KubeconfigSecretRef.Namespace,
+		Name:      remoteCluster.Spec.KubeconfigSecretRef.Name,
+	}, &kubeconfigSecret); err != nil {
+		log.Errorf("unable to fetch %s kubeconfig secret: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+
+	// Get the kubeconfig data
+	kubeconfigKey := remoteCluster.Spec.KubeconfigSecretRef.Key
+	if kubeconfigKey == "" {
+		kubeconfigKey = "kubeconfig"
+	}
+
+	kubeconfigData, ok := kubeconfigSecret.Data[kubeconfigKey]
+	if !ok {
+		err := fmt.Errorf("kubeconfig key %s not found in %s secret", kubeconfigKey, clientType)
+		log.Errorf("invalid %s kubeconfig secret: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+
+	// Create cluster clients
+	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
+	if err != nil {
+		log.Errorf("unable to create %s REST config from kubeconfig: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+	// Always disable request/response body logging
+	config.WrapTransport = nil
+
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Errorf("unable to create %s Kubernetes client: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		log.Errorf("unable to create %s dynamic client: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+
+	// Verify cluster connectivity
+	if _, err := client.Discovery().ServerVersion(); err != nil {
+		log.Errorf("failed to connect to %s cluster: %v", clientType, err)
+		return nil, nil, nil, err
+	}
+
+	log.Info(fmt.Sprintf("successfully connected to %s cluster", clientType), "cluster", clusterName)
+
+	return config, client, dynamicClient, nil
+}
+
+// setupModeHandlerForNamespaceMapping creates a new ModeReconciler with fresh clients
+// for the specific NamespaceMapping and its ClusterMapping
+func (r *NamespaceMappingReconciler) setupModeHandlerForNamespaceMapping(
+	ctx context.Context,
+	namespacemapping *drv1alpha1.NamespaceMapping) (*modes.ModeReconciler, error) {
+
+	log.Info("initializing cluster connections for namespacemapping",
+		"name", namespacemapping.Name,
+		"namespace", namespacemapping.Namespace)
+
+	var sourceCluster, destCluster string
+
+	// Get source and destination clusters from ClusterMapping or direct specification
+	if namespacemapping.Spec.ClusterMappingRef != nil {
+		// Fetch the ClusterMapping instance
+		var clusterMapping drv1alpha1.ClusterMapping
+		clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
+		if clusterMappingNamespace == "" {
+			clusterMappingNamespace = namespacemapping.Namespace
+		}
+
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      namespacemapping.Spec.ClusterMappingRef.Name,
+			Namespace: clusterMappingNamespace,
+		}, &clusterMapping); err != nil {
+			log.Errorf("unable to fetch ClusterMapping: %v", err)
+			return nil, err
+		}
+
+		// Use source and target clusters from ClusterMapping
+		sourceCluster = clusterMapping.Spec.SourceCluster
+		destCluster = clusterMapping.Spec.TargetCluster
+
+		// Store the cluster names in the namespacemapping for logging purposes
+		// This doesn't change the original object, just our working copy
+		namespacemapping.Spec.SourceCluster = sourceCluster
+		namespacemapping.Spec.DestinationCluster = destCluster
+
+		log.Info("using clusters from ClusterMapping",
+			"mapping", clusterMapping.Name,
+			"sourceCluster", sourceCluster,
+			"destCluster", destCluster)
+	} else {
+		// Use directly specified source and destination clusters
+		if namespacemapping.Spec.SourceCluster == "" || namespacemapping.Spec.DestinationCluster == "" {
+			err := fmt.Errorf("either ClusterMappingRef or both SourceCluster and DestinationCluster must be specified")
+			log.Errorf("invalid NamespaceMapping configuration: %v", err)
+			return nil, err
+		}
+
+		sourceCluster = namespacemapping.Spec.SourceCluster
+		destCluster = namespacemapping.Spec.DestinationCluster
+
+		log.Info("using directly specified clusters",
+			"sourceCluster", sourceCluster,
+			"destCluster", destCluster)
+	}
+
+	// Add cluster names to the context
+	ctxWithClusters := context.WithValue(ctx, contextkeys.SourceClusterKey, sourceCluster)
+	ctxWithClusters = context.WithValue(ctxWithClusters, contextkeys.DestClusterKey, destCluster)
+
+	// Setup source cluster clients - pass source cluster in context
+	sourceCtx := context.WithValue(ctxWithClusters, contextkeys.ClusterTypeKey, "source")
+	sourceConfig, sourceClient, sourceDynamicClient, err := r.setupClusterClients(
+		sourceCtx, namespacemapping.Namespace, sourceCluster, "source")
+	if err != nil {
+		return nil, err
+	}
+
+	// Setup destination cluster clients - pass destination cluster in context
+	destCtx := context.WithValue(ctxWithClusters, contextkeys.ClusterTypeKey, "destination")
+	destConfig, destClient, destDynamicClient, err := r.setupClusterClients(
+		destCtx, namespacemapping.Namespace, destCluster, "destination")
+	if err != nil {
+		return nil, err
+	}
+
+	// Initialize mode handler with fresh clients and context with cluster names
+	return modes.NewModeReconciler(
+		r.Client,
+		sourceDynamicClient,
+		destDynamicClient,
+		sourceClient,
+		destClient,
+		sourceConfig,
+		destConfig,
+		sourceCluster,
+		destCluster,
+	), nil
+}
 
 // Reconcile handles the reconciliation loop for NamespaceMapping resources
 func (r *NamespaceMappingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -92,202 +257,25 @@ func (r *NamespaceMappingReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	log.Info("fetched namespacemapping")
 
-	// Initialize clients if not already done
-	if r.modeHandler == nil {
-		// Create REST config with verbosity settings
-		restConfig := ctrl.GetConfigOrDie()
-		// Always disable request/response body logging
-		restConfig.WrapTransport = nil
-		log.Info("initializing cluster connections")
-
-		var sourceCluster, destCluster string
-		var sourceConfig, destConfig *rest.Config
-		var sourceClient *kubernetes.Clientset
-		var destClient *kubernetes.Clientset
-		var sourceDynamicClient, destDynamicClient dynamic.Interface
-
-		// Check if ClusterMapping is specified
-		if namespacemapping.Spec.ClusterMappingRef != nil {
-			// Fetch the ClusterMapping instance
-			var clusterMapping drv1alpha1.ClusterMapping
-			clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
-			if clusterMappingNamespace == "" {
-				clusterMappingNamespace = namespacemapping.Namespace
-			}
-
-			if err := r.Get(ctx, client.ObjectKey{
-				Name:      namespacemapping.Spec.ClusterMappingRef.Name,
-				Namespace: clusterMappingNamespace,
-			}, &clusterMapping); err != nil {
-				log.Errorf("unable to fetch ClusterMapping: %v", err)
-				return ctrl.Result{}, err
-			}
-
-			// Use source and target clusters from ClusterMapping
-			sourceCluster = clusterMapping.Spec.SourceCluster
-			destCluster = clusterMapping.Spec.TargetCluster
-		} else {
-			// Use directly specified source and destination clusters
-			if namespacemapping.Spec.SourceCluster == "" || namespacemapping.Spec.DestinationCluster == "" {
-				err := fmt.Errorf("either ClusterMappingRef or both SourceCluster and DestinationCluster must be specified")
-				log.Errorf("invalid NamespaceMapping configuration: %v", err)
-				return ctrl.Result{}, err
-			}
-
-			sourceCluster = namespacemapping.Spec.SourceCluster
-			destCluster = namespacemapping.Spec.DestinationCluster
-		}
-
-		// Fetch the source Cluster instance
-		var sourceRemoteCluster drv1alpha1.RemoteCluster
-		if err := r.Get(ctx, client.ObjectKey{
-			Name:      sourceCluster,
-			Namespace: namespacemapping.ObjectMeta.Namespace,
-		}, &sourceRemoteCluster); err != nil {
-			log.Errorf("unable to fetch source RemoteCluster: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Get the source kubeconfig secret
-		var sourceKubeconfigSecret corev1.Secret
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: sourceRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
-			Name:      sourceRemoteCluster.Spec.KubeconfigSecretRef.Name,
-		}, &sourceKubeconfigSecret); err != nil {
-			log.Errorf("unable to fetch source kubeconfig secret: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Get the source kubeconfig data
-		sourceKubeconfigKey := sourceRemoteCluster.Spec.KubeconfigSecretRef.Key
-		if sourceKubeconfigKey == "" {
-			sourceKubeconfigKey = "kubeconfig"
-		}
-		sourceKubeconfigData, ok := sourceKubeconfigSecret.Data[sourceKubeconfigKey]
-		if !ok {
-			err := fmt.Errorf("kubeconfig key %s not found in source secret", sourceKubeconfigKey)
-			log.Errorf("invalid source kubeconfig secret: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Create source cluster clients
-		var err error
-		sourceConfig, err = clientcmd.RESTConfigFromKubeConfig(sourceKubeconfigData)
-		if err != nil {
-			log.Errorf("unable to create source REST config from kubeconfig: %v", err)
-			return ctrl.Result{}, err
-		}
-		// Always disable request/response body logging
-		sourceConfig.WrapTransport = nil
-
-		sourceClient, err = kubernetes.NewForConfig(sourceConfig)
-		if err != nil {
-			log.Errorf("unable to create source Kubernetes client: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		sourceDynamicClient, err = dynamic.NewForConfig(sourceConfig)
-		if err != nil {
-			log.Errorf("unable to create source dynamic client: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Verify source cluster connectivity
-		if _, err := sourceClient.Discovery().ServerVersion(); err != nil {
-			log.Errorf("failed to connect to source cluster: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		log.Info("successfully connected to source cluster")
-
-		// Fetch the destination Cluster instance
-		var destRemoteCluster drv1alpha1.RemoteCluster
-		if err := r.Get(ctx, client.ObjectKey{
-			Name:      destCluster,
-			Namespace: namespacemapping.ObjectMeta.Namespace,
-		}, &destRemoteCluster); err != nil {
-			log.Errorf("unable to fetch destination RemoteCluster: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Get the destination kubeconfig secret
-		var destKubeconfigSecret corev1.Secret
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: destRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
-			Name:      destRemoteCluster.Spec.KubeconfigSecretRef.Name,
-		}, &destKubeconfigSecret); err != nil {
-			log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Get the destination kubeconfig data
-		destKubeconfigKey := destRemoteCluster.Spec.KubeconfigSecretRef.Key
-		if destKubeconfigKey == "" {
-			destKubeconfigKey = "kubeconfig"
-		}
-		destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
-		if !ok {
-			err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
-			log.Errorf("invalid destination kubeconfig secret: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Create destination cluster clients
-		destConfig, err = clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
-		if err != nil {
-			log.Errorf("unable to create destination REST config from kubeconfig: %v", err)
-			return ctrl.Result{}, err
-		}
-		// Always disable request/response body logging
-		destConfig.WrapTransport = nil
-
-		destClient, err = kubernetes.NewForConfig(destConfig)
-		if err != nil {
-			log.Errorf("unable to create destination Kubernetes client: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		destDynamicClient, err = dynamic.NewForConfig(destConfig)
-		if err != nil {
-			log.Errorf("unable to create destination dynamic client: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		// Verify destination cluster connectivity
-		if _, err := destClient.Discovery().ServerVersion(); err != nil {
-			log.Errorf("failed to connect to destination cluster: %v", err)
-			return ctrl.Result{}, err
-		}
-
-		log.Info("successfully connected to destination cluster")
-
-		// Initialize mode handler
-		r.modeHandler = modes.NewModeReconciler(
-			r.Client,
-			sourceDynamicClient,
-			destDynamicClient,
-			sourceClient,
-			destClient,
-			sourceConfig,
-			destConfig,
-		)
+	// Create a new mode handler for this specific reconciliation
+	modeHandler, err := r.setupModeHandlerForNamespaceMapping(ctx, &namespacemapping)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Handle reconciliation based on replication mode
 	log.Info(fmt.Sprintf("starting %s mode reconciliation", namespacemapping.Spec.ReplicationMode))
 
 	var result ctrl.Result
-	var err error
 
-	// Use the NamespaceMapping directly with the mode handler
-
+	// Use the NamespaceMapping with the newly created mode handler
 	switch namespacemapping.Spec.ReplicationMode {
 	case drv1alpha1.ContinuousMode:
-		result, err = r.modeHandler.ReconcileContinuous(ctx, &namespacemapping)
+		result, err = modeHandler.ReconcileContinuous(ctx, &namespacemapping)
 	case drv1alpha1.ManualMode:
-		result, err = r.modeHandler.ReconcileManual(ctx, &namespacemapping)
+		result, err = modeHandler.ReconcileManual(ctx, &namespacemapping)
 	default: // Scheduled mode is the default
-		result, err = r.modeHandler.ReconcileScheduled(ctx, &namespacemapping)
+		result, err = modeHandler.ReconcileScheduled(ctx, &namespacemapping)
 	}
 
 	if err != nil {
@@ -329,115 +317,67 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 
 	// If finalizer is present, we need to clean up resources
 	if containsString(namespacemapping.Finalizers, NamespaceMappingFinalizerName) {
-		// Initialize clients if not already done
-		if r.modeHandler == nil {
-			// Create REST config with verbosity settings
-			restConfig := ctrl.GetConfigOrDie()
-			// Always disable request/response body logging
-			restConfig.WrapTransport = nil
-			log.Info("initializing cluster connections for cleanup")
+		// Create a mode handler specifically for cleanup
+		var destCluster string
 
-			var destCluster string
-
-			// Check if ClusterMapping is specified
-			if namespacemapping.Spec.ClusterMappingRef != nil {
-				// Fetch the ClusterMapping instance
-				var clusterMapping drv1alpha1.ClusterMapping
-				clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
-				if clusterMappingNamespace == "" {
-					clusterMappingNamespace = namespacemapping.Namespace
-				}
-
-				if err := r.Get(ctx, client.ObjectKey{
-					Name:      namespacemapping.Spec.ClusterMappingRef.Name,
-					Namespace: clusterMappingNamespace,
-				}, &clusterMapping); err != nil {
-					log.Errorf("unable to fetch ClusterMapping: %v", err)
-					return ctrl.Result{}, err
-				}
-
-				// Use target cluster from ClusterMapping
-				destCluster = clusterMapping.Spec.TargetCluster
-			} else {
-				// Use directly specified destination cluster
-				if namespacemapping.Spec.DestinationCluster == "" {
-					err := fmt.Errorf("either ClusterMappingRef or DestinationCluster must be specified")
-					log.Errorf("invalid NamespaceMapping configuration: %v", err)
-					return ctrl.Result{}, err
-				}
-
-				destCluster = namespacemapping.Spec.DestinationCluster
+		// Check if ClusterMapping is specified
+		if namespacemapping.Spec.ClusterMappingRef != nil {
+			// Fetch the ClusterMapping instance
+			var clusterMapping drv1alpha1.ClusterMapping
+			clusterMappingNamespace := namespacemapping.Spec.ClusterMappingRef.Namespace
+			if clusterMappingNamespace == "" {
+				clusterMappingNamespace = namespacemapping.Namespace
 			}
 
-			// Fetch the destination Cluster instance
-			var destRemoteCluster drv1alpha1.RemoteCluster
 			if err := r.Get(ctx, client.ObjectKey{
-				Name:      destCluster,
-				Namespace: namespacemapping.ObjectMeta.Namespace,
-			}, &destRemoteCluster); err != nil {
-				log.Errorf("unable to fetch destination RemoteCluster: %v", err)
+				Name:      namespacemapping.Spec.ClusterMappingRef.Name,
+				Namespace: clusterMappingNamespace,
+			}, &clusterMapping); err != nil {
+				log.Errorf("unable to fetch ClusterMapping: %v", err)
 				return ctrl.Result{}, err
 			}
 
-			// Get the destination kubeconfig secret
-			var destKubeconfigSecret corev1.Secret
-			if err := r.Get(ctx, client.ObjectKey{
-				Namespace: destRemoteCluster.Spec.KubeconfigSecretRef.Namespace,
-				Name:      destRemoteCluster.Spec.KubeconfigSecretRef.Name,
-			}, &destKubeconfigSecret); err != nil {
-				log.Errorf("unable to fetch destination kubeconfig secret: %v", err)
+			// Use target cluster from ClusterMapping
+			destCluster = clusterMapping.Spec.TargetCluster
+			
+			// Store for logging
+			namespacemapping.Spec.DestinationCluster = destCluster
+		} else {
+			// Use directly specified destination cluster
+			if namespacemapping.Spec.DestinationCluster == "" {
+				err := fmt.Errorf("either ClusterMappingRef or DestinationCluster must be specified")
+				log.Errorf("invalid NamespaceMapping configuration: %v", err)
 				return ctrl.Result{}, err
 			}
 
-			// Get the destination kubeconfig data
-			destKubeconfigKey := destRemoteCluster.Spec.KubeconfigSecretRef.Key
-			if destKubeconfigKey == "" {
-				destKubeconfigKey = "kubeconfig"
-			}
-			destKubeconfigData, ok := destKubeconfigSecret.Data[destKubeconfigKey]
-			if !ok {
-				err := fmt.Errorf("kubeconfig key %s not found in destination secret", destKubeconfigKey)
-				log.Errorf("invalid destination kubeconfig secret: %v", err)
-				return ctrl.Result{}, err
-			}
-
-			// Create destination cluster clients
-			destConfig, err := clientcmd.RESTConfigFromKubeConfig(destKubeconfigData)
-			if err != nil {
-				log.Errorf("unable to create destination REST config from kubeconfig: %v", err)
-				return ctrl.Result{}, err
-			}
-			// Always disable request/response body logging
-			destConfig.WrapTransport = nil
-
-			destClient, err := kubernetes.NewForConfig(destConfig)
-			if err != nil {
-				log.Errorf("unable to create destination Kubernetes client: %v", err)
-				return ctrl.Result{}, err
-			}
-
-			destDynamicClient, err := dynamic.NewForConfig(destConfig)
-			if err != nil {
-				log.Errorf("unable to create destination dynamic client: %v", err)
-				return ctrl.Result{}, err
-			}
-
-			// Initialize mode handler with nil source clients since we only need destination for cleanup
-			r.modeHandler = modes.NewModeReconciler(
-				r.Client,
-				nil,
-				destDynamicClient,
-				nil,
-				destClient,
-				nil,
-				destConfig,
-			)
+			destCluster = namespacemapping.Spec.DestinationCluster
 		}
 
-		// Use the NamespaceMapping directly with the mode handler
+		log.Info("initializing destination cluster connection for cleanup", 
+			"cluster", destCluster)
+
+		// Setup destination cluster only - we don't need source for cleanup
+		_, destClient, destDynamicClient, err := r.setupClusterClients(
+			ctx, namespacemapping.Namespace, destCluster, "destination")
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Create a new mode handler with only destination cluster clients
+		cleanupModeHandler := modes.NewModeReconciler(
+			r.Client,
+			nil,                // No source dynamic client needed for cleanup
+			destDynamicClient,
+			nil,                // No source client needed for cleanup
+			destClient,
+			nil,                // No source config needed for cleanup
+			nil,                // No dest config needed for CleanupResources
+			"",                 // No source cluster name needed for cleanup
+			destCluster,        // Pass destination cluster name for logging
+		)
 
 		// Clean up synced resources in destination cluster
-		if err := r.modeHandler.CleanupResources(ctx, namespacemapping); err != nil {
+		if err := cleanupModeHandler.CleanupResources(ctx, namespacemapping); err != nil {
 			log.Errorf("failed to cleanup resources: %v", err)
 			return ctrl.Result{}, err
 		}

@@ -1,0 +1,90 @@
+# NamespaceMapping resources for circular replication pattern
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-case-22-a
+  namespace: dr-syncer
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-case-22-a
+  destinationNamespace: test-case-22-a
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-case-22-b
+  namespace: dr-syncer
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-case-22-b
+  destinationNamespace: test-case-22-b
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  clusterMappingRef:
+    name: sfo3-to-tor1
+    namespace: dr-syncer
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-case-22-c
+  namespace: dr-syncer
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-case-22-c
+  destinationNamespace: test-case-22-c
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  clusterMappingRef:
+    name: tor1-to-nyc3
+    namespace: dr-syncer
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-case-22-d
+  namespace: dr-syncer
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-case-22-d
+  destinationNamespace: test-case-22-d
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  clusterMappingRef:
+    name: nyc3-to-sfo3
+    namespace: dr-syncer
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test-case-22-e
+  namespace: dr-syncer
+spec:
+  replicationMode: Manual
+  sourceNamespace: test-case-22-e
+  destinationNamespace: test-case-22-e
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  clusterMappingRef:
+    name: sfo3-to-nyc3
+    namespace: dr-syncer

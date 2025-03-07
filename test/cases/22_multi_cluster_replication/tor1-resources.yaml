@@ -1,0 +1,60 @@
+# Resources for tor1 cluster (namespace: test-case-22-c)
+# Namespace test-case-22-c
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-case-22-c
+  labels:
+    source-cluster: tor1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-tor1-c
+  namespace: test-case-22-c
+data:
+  source: "tor1-c"
+  description: "ConfigMap from tor1 cluster in namespace c"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-tor1-c
+  namespace: test-case-22-c
+type: Opaque
+stringData:
+  source: "tor1-c"
+  key: "test-secret-value-c"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-tor1-c
+  namespace: test-case-22-c
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-tor1-c
+  template:
+    metadata:
+      labels:
+        app: app-tor1-c
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-tor1-c
+  namespace: test-case-22-c
+spec:
+  selector:
+    app: app-tor1-c
+  ports:
+  - port: 80
+    targetPort: 80

@@ -1,0 +1,121 @@
+# Resources for sfo3 cluster (namespaces: test-case-22-b, test-case-22-e)
+# Namespace test-case-22-b
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-case-22-b
+  labels:
+    source-cluster: sfo3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-sfo3-b
+  namespace: test-case-22-b
+data:
+  source: "sfo3-b"
+  description: "ConfigMap from sfo3 cluster in namespace b"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-sfo3-b
+  namespace: test-case-22-b
+type: Opaque
+stringData:
+  source: "sfo3-b"
+  key: "test-secret-value-b"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-sfo3-b
+  namespace: test-case-22-b
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-sfo3-b
+  template:
+    metadata:
+      labels:
+        app: app-sfo3-b
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-sfo3-b
+  namespace: test-case-22-b
+spec:
+  selector:
+    app: app-sfo3-b
+  ports:
+  - port: 80
+    targetPort: 80
+
+# Namespace test-case-22-e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-case-22-e
+  labels:
+    source-cluster: sfo3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-sfo3-e
+  namespace: test-case-22-e
+data:
+  source: "sfo3-e"
+  description: "ConfigMap from sfo3 cluster in namespace e"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: secret-sfo3-e
+  namespace: test-case-22-e
+type: Opaque
+stringData:
+  source: "sfo3-e"
+  key: "test-secret-value-e"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-sfo3-e
+  namespace: test-case-22-e
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app-sfo3-e
+  template:
+    metadata:
+      labels:
+        app: app-sfo3-e
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-sfo3-e
+  namespace: test-case-22-e
+spec:
+  selector:
+    app: app-sfo3-e
+  ports:
+  - port: 80
+    targetPort: 80
