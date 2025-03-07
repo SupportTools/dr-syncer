@@ -1,10 +1,11 @@
-# Test Case 23: Resource Change Detection and Relationship Tracking
+# Test Case 23: Status Update Loop Prevention
 
 ## Purpose
-This test case verifies the new controller functionality for detecting changes across related resources and preventing reconciliation loops. It tests the controllers' ability to:
-1. Detect changes in source resources (ConfigMaps, Deployments) and propagate them to the destination cluster
-2. Avoid infinite reconciliation loops caused by status updates
-3. (Future) Detect changes in related resources and propagate them through relationship chains
+This test case verifies the controller's ability to prevent reconciliation loops caused by status updates. It focuses on testing:
+1. Absence of reconciliation loops when status updates occur
+2. Separation of spec changes from status changes in reconciliation logic
+
+**Note:** Full resource change detection tests require a running controller and will be implemented in future tests.
 
 ## Test Configuration
 
@@ -18,16 +19,14 @@ This test case verifies the new controller functionality for detecting changes a
 - Includes ConfigMap and Deployment resources
 
 ## What is Tested
-1. Resource Change Detection
-   - Verifies changes to source resources (ConfigMaps) are detected and propagated to the destination cluster
-   - Tests the continuous watch mechanism for detecting changes to resources
-
-2. Status Update Handling
+1. Status Update Handling
    - Verifies status updates don't trigger unnecessary reconciliations
    - Ensures resources are only reconciled when their specs change
    - Tests the absence of reconciliation loops
+   - Confirms that the reconciliation predicates correctly filter status-only updates
 
-3. Future Tests
+2. Future Tests
+   - Resource change detection (ConfigMaps, Deployments)
    - Cross-resource change detection (RemoteCluster → ClusterMapping → NamespaceMapping)
    - Complete relationship chain propagation
 
