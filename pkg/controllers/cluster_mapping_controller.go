@@ -798,54 +798,50 @@ func (r *ClusterMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Initialize cluster mutexes map for per-cluster locking
 	r.clusterMutexes = &sync.Map{}
 
+	// Create a predicate that ignores status-only updates
+	statusChangePredicate := predicate.Or(
+		// Reconcile on Create events
+		predicate.GenerationChangedPredicate{},
+		// Also reconcile on delete events
+		predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return !e.DeleteStateUnknown
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Only reconcile if the resource generation changed,
+				// which indicates spec changes (not just status)
+				oldGeneration := e.ObjectOld.GetGeneration()
+				newGeneration := e.ObjectNew.GetGeneration()
+				return oldGeneration != newGeneration
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		// Watch ClusterMapping but only trigger reconciliation for spec changes, not status changes
-		For(&drsyncerio.ClusterMapping{}, builder.WithPredicates(
-			predicate.Or(
-				// Reconcile on Create events
-				predicate.GenerationChangedPredicate{},
-				// Also reconcile on delete events
-				predicate.Funcs{
-					CreateFunc: func(e event.CreateEvent) bool {
-						return true
-					},
-					DeleteFunc: func(e event.DeleteEvent) bool {
-						return !e.DeleteStateUnknown
-					},
-					UpdateFunc: func(e event.UpdateEvent) bool {
-						// Only reconcile if the resource generation changed,
-						// which indicates spec changes (not just status)
-						oldGeneration := e.ObjectOld.GetGeneration()
-						newGeneration := e.ObjectNew.GetGeneration()
-						return oldGeneration != newGeneration
-					},
-					GenericFunc: func(e event.GenericEvent) bool {
-						return false
-					},
-				},
-			),
-		)).
+		For(&drsyncerio.ClusterMapping{}, builder.WithPredicates(statusChangePredicate)).
 		// Watch for changes to RemoteCluster resources referenced by ClusterMapping
 		Watches(
 			&drsyncerio.RemoteCluster{},
-			&remoteClusterToClusterMappingMapper{Client: r.Client},
+			handler.EnqueueRequestsFromMapFunc(r.findClusterMappingsForRemoteCluster),
 		).
 		// Watch for changes to SSH key Secrets referenced by ClusterMapping
 		Watches(
 			&corev1.Secret{},
-			&sshKeySecretToClusterMappingMapper{Client: r.Client},
+			handler.EnqueueRequestsFromMapFunc(r.findClusterMappingsForSecret),
 		).
 		Complete(r)
 }
 
-// remoteClusterToClusterMappingMapper maps from a RemoteCluster to the ClusterMapping resources that reference it
-type remoteClusterToClusterMappingMapper struct {
-	client.Client
-}
-
-// Map returns a list of ClusterMapping objects that reference the given RemoteCluster
-func (m *remoteClusterToClusterMappingMapper) Map(obj client.Object) []ctrl.Request {
-	var requests []ctrl.Request
+// findClusterMappingsForRemoteCluster maps from a RemoteCluster to the ClusterMapping resources that reference it
+func (r *ClusterMappingReconciler) findClusterMappingsForRemoteCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	var requests []reconcile.Request
 	remoteCluster, ok := obj.(*drsyncerio.RemoteCluster)
 	if !ok {
 		return nil
@@ -853,7 +849,7 @@ func (m *remoteClusterToClusterMappingMapper) Map(obj client.Object) []ctrl.Requ
 
 	// List all ClusterMapping resources
 	var clusterMappings drsyncerio.ClusterMappingList
-	err := m.List(context.Background(), &clusterMappings)
+	err := r.List(ctx, &clusterMappings)
 	if err != nil {
 		log.Errorf("Failed to list ClusterMappings: %v", err)
 		return nil
@@ -863,7 +859,7 @@ func (m *remoteClusterToClusterMappingMapper) Map(obj client.Object) []ctrl.Requ
 	for _, cm := range clusterMappings.Items {
 		if (cm.Spec.SourceCluster == remoteCluster.Name && cm.Namespace == remoteCluster.Namespace) ||
 			(cm.Spec.TargetCluster == remoteCluster.Name && cm.Namespace == remoteCluster.Namespace) {
-			requests = append(requests, ctrl.Request{
+			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      cm.Name,
 					Namespace: cm.Namespace,
@@ -875,14 +871,9 @@ func (m *remoteClusterToClusterMappingMapper) Map(obj client.Object) []ctrl.Requ
 	return requests
 }
 
-// sshKeySecretToClusterMappingMapper maps from a Secret to the ClusterMapping resources that reference it
-type sshKeySecretToClusterMappingMapper struct {
-	client.Client
-}
-
-// Map returns a list of ClusterMapping objects that reference the given Secret
-func (m *sshKeySecretToClusterMappingMapper) Map(obj client.Object) []ctrl.Request {
-	var requests []ctrl.Request
+// findClusterMappingsForSecret maps from a Secret to the ClusterMapping resources that reference it
+func (r *ClusterMappingReconciler) findClusterMappingsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var requests []reconcile.Request
 	secret, ok := obj.(*corev1.Secret)
 	if !ok {
 		return nil
@@ -890,7 +881,7 @@ func (m *sshKeySecretToClusterMappingMapper) Map(obj client.Object) []ctrl.Reque
 
 	// List all ClusterMapping resources
 	var clusterMappings drsyncerio.ClusterMappingList
-	err := m.List(context.Background(), &clusterMappings)
+	err := r.List(ctx, &clusterMappings)
 	if err != nil {
 		log.Errorf("Failed to list ClusterMappings: %v", err)
 		return nil
@@ -905,7 +896,7 @@ func (m *sshKeySecretToClusterMappingMapper) Map(obj client.Object) []ctrl.Reque
 			}
 			
 			if cm.Spec.SSHKeySecretRef.Name == secret.Name && secretNamespace == secret.Namespace {
-				requests = append(requests, ctrl.Request{
+				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{
 						Name:      cm.Name,
 						Namespace: cm.Namespace,

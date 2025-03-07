@@ -15,7 +15,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	configCli "github.com/supporttools/dr-syncer/pkg/config"
 
@@ -271,49 +273,46 @@ func (r *RemoteClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Set up a controller that watches RemoteCluster resources
 	// We also watch for Secret resources referenced by RemoteCluster's KubeconfigSecretRef
 	// to trigger reconciliation when the kubeconfig secret changes
+	
+	// Create a predicate that ignores status-only updates
+	statusChangePredicate := predicate.Or(
+		// Reconcile on Create events
+		predicate.GenerationChangedPredicate{},
+		// Also reconcile on delete events
+		predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return !e.DeleteStateUnknown
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Only reconcile if the resource generation changed,
+				// which indicates spec changes (not just status)
+				oldGeneration := e.ObjectOld.GetGeneration()
+				newGeneration := e.ObjectNew.GetGeneration()
+				return oldGeneration != newGeneration
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		},
+	)
+	
 	return ctrl.NewControllerManagedBy(mgr).
 		// Watch RemoteCluster but only trigger reconciliation for spec changes, not status changes
-		For(&drv1alpha1.RemoteCluster{}, builder.WithPredicates(
-			predicate.Or(
-				// Reconcile on Create events
-				predicate.GenerationChangedPredicate{},
-				// Also reconcile on delete events
-				predicate.Funcs{
-					CreateFunc: func(e event.CreateEvent) bool {
-						return true
-					},
-					DeleteFunc: func(e event.DeleteEvent) bool {
-						return !e.DeleteStateUnknown
-					},
-					UpdateFunc: func(e event.UpdateEvent) bool {
-						// Only reconcile if the resource generation changed,
-						// which indicates spec changes (not just status)
-						oldGeneration := e.ObjectOld.GetGeneration()
-						newGeneration := e.ObjectNew.GetGeneration()
-						return oldGeneration != newGeneration
-					},
-					GenericFunc: func(e event.GenericEvent) bool {
-						return false
-					},
-				},
-			),
-		)).
+		For(&drv1alpha1.RemoteCluster{}, builder.WithPredicates(statusChangePredicate)).
 		// Watch for changes to Secrets that could be referenced by RemoteCluster resources
 		Watches(
 			&corev1.Secret{},
-			&secretToRemoteClusterMapper{Client: r.Client},
+			handler.EnqueueRequestsFromMapFunc(r.findRemoteClustersForSecret),
 		).
 		Complete(r)
 }
 
-// secretToRemoteClusterMapper maps from a Secret to the RemoteCluster resources that reference it
-type secretToRemoteClusterMapper struct {
-	client.Client
-}
-
-// Map returns a list of RemoteCluster objects that reference the given Secret
-func (m *secretToRemoteClusterMapper) Map(obj client.Object) []ctrl.Request {
-	var requests []ctrl.Request
+// findRemoteClustersForSecret maps from a Secret to the RemoteCluster resources that reference it
+func (r *RemoteClusterReconciler) findRemoteClustersForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var requests []reconcile.Request
 	secret, ok := obj.(*corev1.Secret)
 	if !ok {
 		return nil
@@ -321,7 +320,7 @@ func (m *secretToRemoteClusterMapper) Map(obj client.Object) []ctrl.Request {
 
 	// List all RemoteCluster resources
 	var remoteClusters drv1alpha1.RemoteClusterList
-	err := m.List(context.Background(), &remoteClusters)
+	err := r.List(ctx, &remoteClusters)
 	if err != nil {
 		log.Errorf("Failed to list RemoteClusters: %v", err)
 		return nil
@@ -331,7 +330,7 @@ func (m *secretToRemoteClusterMapper) Map(obj client.Object) []ctrl.Request {
 	for _, rc := range remoteClusters.Items {
 		if rc.Spec.KubeconfigSecretRef.Namespace == secret.Namespace &&
 			rc.Spec.KubeconfigSecretRef.Name == secret.Name {
-			requests = append(requests, ctrl.Request{
+			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      rc.Name,
 					Namespace: rc.Namespace,

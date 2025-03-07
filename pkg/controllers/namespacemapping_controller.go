@@ -403,68 +403,64 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 
 // SetupWithManager sets up the controller with the Manager
 func (r *NamespaceMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Create a predicate that ignores status-only updates
+	statusChangePredicate := predicate.Or(
+		// Reconcile on Create events
+		predicate.GenerationChangedPredicate{},
+		// Also reconcile on delete events
+		predicate.Funcs{
+			CreateFunc: func(e event.CreateEvent) bool {
+				return true
+			},
+			DeleteFunc: func(e event.DeleteEvent) bool {
+				return !e.DeleteStateUnknown
+			},
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Only reconcile if the resource generation changed,
+				// which indicates spec changes (not just status)
+				oldGeneration := e.ObjectOld.GetGeneration()
+				newGeneration := e.ObjectNew.GetGeneration()
+				
+				// We also want to trigger reconciliation if the sync-now annotation is added
+				// or if other custom annotations that should trigger sync are added
+				oldObj, ok1 := e.ObjectOld.(*drv1alpha1.NamespaceMapping)
+				newObj, ok2 := e.ObjectNew.(*drv1alpha1.NamespaceMapping)
+				if ok1 && ok2 {
+					// Check for "sync-now" annotation
+					_, oldHasSyncNow := oldObj.Annotations["dr-syncer.io/sync-now"]
+					_, newHasSyncNow := newObj.Annotations["dr-syncer.io/sync-now"]
+					if !oldHasSyncNow && newHasSyncNow {
+						return true
+					}
+				}
+				
+				return oldGeneration != newGeneration
+			},
+			GenericFunc: func(e event.GenericEvent) bool {
+				return false
+			},
+		},
+	)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		// Watch NamespaceMapping but only trigger reconciliation for spec changes, not status changes
-		For(&drv1alpha1.NamespaceMapping{}, builder.WithPredicates(
-			predicate.Or(
-				// Reconcile on Create events
-				predicate.GenerationChangedPredicate{},
-				// Also reconcile on delete events
-				predicate.Funcs{
-					CreateFunc: func(e event.CreateEvent) bool {
-						return true
-					},
-					DeleteFunc: func(e event.DeleteEvent) bool {
-						return !e.DeleteStateUnknown
-					},
-					UpdateFunc: func(e event.UpdateEvent) bool {
-						// Only reconcile if the resource generation changed,
-						// which indicates spec changes (not just status)
-						oldGeneration := e.ObjectOld.GetGeneration()
-						newGeneration := e.ObjectNew.GetGeneration()
-						
-						// We also want to trigger reconciliation if the sync-now annotation is added
-						// or if other custom annotations that should trigger sync are added
-						oldObj, ok1 := e.ObjectOld.(*drv1alpha1.NamespaceMapping)
-						newObj, ok2 := e.ObjectNew.(*drv1alpha1.NamespaceMapping)
-						if ok1 && ok2 {
-							// Check for "sync-now" annotation
-							_, oldHasSyncNow := oldObj.Annotations["dr-syncer.io/sync-now"]
-							_, newHasSyncNow := newObj.Annotations["dr-syncer.io/sync-now"]
-							if !oldHasSyncNow && newHasSyncNow {
-								return true
-							}
-						}
-						
-						return oldGeneration != newGeneration
-					},
-					GenericFunc: func(e event.GenericEvent) bool {
-						return false
-					},
-				},
-			),
-		)).
+		For(&drv1alpha1.NamespaceMapping{}, builder.WithPredicates(statusChangePredicate)).
 		// Watch for changes to ClusterMapping resources referenced by NamespaceMapping
 		Watches(
 			&drv1alpha1.ClusterMapping{},
-			&clusterMappingToNamespaceMappingMapper{Client: r.Client},
+			handler.EnqueueRequestsFromMapFunc(r.findNamespaceMappingsForClusterMapping),
 		).
 		// Watch for changes to RemoteCluster resources that could affect NamespaceMapping
 		Watches(
 			&drv1alpha1.RemoteCluster{},
-			&remoteClusterToNamespaceMappingMapper{Client: r.Client},
+			handler.EnqueueRequestsFromMapFunc(r.findNamespaceMappingsForRemoteCluster),
 		).
 		Complete(r)
 }
 
-// clusterMappingToNamespaceMappingMapper maps from a ClusterMapping to the NamespaceMapping resources that reference it
-type clusterMappingToNamespaceMappingMapper struct {
-	client.Client
-}
-
-// Map returns a list of NamespaceMapping objects that reference the given ClusterMapping
-func (m *clusterMappingToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Request {
-	var requests []ctrl.Request
+// findNamespaceMappingsForClusterMapping maps from a ClusterMapping to the NamespaceMapping resources that reference it
+func (r *NamespaceMappingReconciler) findNamespaceMappingsForClusterMapping(ctx context.Context, obj client.Object) []reconcile.Request {
+	var requests []reconcile.Request
 	clusterMapping, ok := obj.(*drv1alpha1.ClusterMapping)
 	if !ok {
 		return nil
@@ -472,7 +468,7 @@ func (m *clusterMappingToNamespaceMappingMapper) Map(obj client.Object) []ctrl.R
 
 	// List all NamespaceMapping resources
 	var namespaceMappings drv1alpha1.NamespaceMappingList
-	err := m.List(context.Background(), &namespaceMappings)
+	err := r.List(ctx, &namespaceMappings)
 	if err != nil {
 		log.Errorf("Failed to list NamespaceMappings: %v", err)
 		return nil
@@ -487,7 +483,7 @@ func (m *clusterMappingToNamespaceMappingMapper) Map(obj client.Object) []ctrl.R
 			}
 			
 			if nm.Spec.ClusterMappingRef.Name == clusterMapping.Name && refNamespace == clusterMapping.Namespace {
-				requests = append(requests, ctrl.Request{
+				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{
 						Name:      nm.Name,
 						Namespace: nm.Namespace,
@@ -500,14 +496,9 @@ func (m *clusterMappingToNamespaceMappingMapper) Map(obj client.Object) []ctrl.R
 	return requests
 }
 
-// remoteClusterToNamespaceMappingMapper maps from a RemoteCluster to the NamespaceMapping resources that reference it
-type remoteClusterToNamespaceMappingMapper struct {
-	client.Client
-}
-
-// Map returns a list of NamespaceMapping objects that reference the given RemoteCluster
-func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Request {
-	var requests []ctrl.Request
+// findNamespaceMappingsForRemoteCluster maps from a RemoteCluster to the NamespaceMapping resources that reference it
+func (r *NamespaceMappingReconciler) findNamespaceMappingsForRemoteCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	var requests []reconcile.Request
 	remoteCluster, ok := obj.(*drv1alpha1.RemoteCluster)
 	if !ok {
 		return nil
@@ -515,7 +506,7 @@ func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Re
 
 	// List all NamespaceMapping resources
 	var namespaceMappings drv1alpha1.NamespaceMappingList
-	err := m.List(context.Background(), &namespaceMappings)
+	err := r.List(ctx, &namespaceMappings)
 	if err != nil {
 		log.Errorf("Failed to list NamespaceMappings: %v", err)
 		return nil
@@ -525,7 +516,7 @@ func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Re
 	for _, nm := range namespaceMappings.Items {
 		if (nm.Spec.SourceCluster == remoteCluster.Name && nm.Namespace == remoteCluster.Namespace) ||
 			(nm.Spec.DestinationCluster == remoteCluster.Name && nm.Namespace == remoteCluster.Namespace) {
-			requests = append(requests, ctrl.Request{
+			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      nm.Name,
 					Namespace: nm.Namespace,
@@ -542,7 +533,7 @@ func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Re
 				clusterMappingNamespace = nm.Namespace
 			}
 			
-			err := m.Get(context.Background(), client.ObjectKey{
+			err := r.Get(ctx, client.ObjectKey{
 				Name:      nm.Spec.ClusterMappingRef.Name,
 				Namespace: clusterMappingNamespace,
 			}, &clusterMapping)
@@ -550,7 +541,7 @@ func (m *remoteClusterToNamespaceMappingMapper) Map(obj client.Object) []ctrl.Re
 			if err == nil {
 				if (clusterMapping.Spec.SourceCluster == remoteCluster.Name && clusterMapping.Namespace == remoteCluster.Namespace) ||
 					(clusterMapping.Spec.TargetCluster == remoteCluster.Name && clusterMapping.Namespace == remoteCluster.Namespace) {
-					requests = append(requests, ctrl.Request{
+					requests = append(requests, reconcile.Request{
 						NamespacedName: types.NamespacedName{
 							Name:      nm.Name,
 							Namespace: nm.Namespace,
