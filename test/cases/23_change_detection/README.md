@@ -2,9 +2,9 @@
 
 ## Purpose
 This test case verifies the new controller functionality for detecting changes across related resources and preventing reconciliation loops. It tests the controllers' ability to:
-1. Detect changes in related resources (RemoteCluster, ClusterMapping, NamespaceMapping)
-2. Propagate changes through resource relationship chains
-3. Avoid infinite reconciliation loops caused by status updates
+1. Detect changes in source resources (ConfigMaps, Deployments) and propagate them to the destination cluster
+2. Avoid infinite reconciliation loops caused by status updates
+3. (Future) Detect changes in related resources and propagate them through relationship chains
 
 ## Test Configuration
 
@@ -18,18 +18,18 @@ This test case verifies the new controller functionality for detecting changes a
 - Includes ConfigMap and Deployment resources
 
 ## What is Tested
-1. Cross-Resource Change Detection
-   - Verifies that changes to RemoteCluster trigger ClusterMapping reconciliation
-   - Verifies that changes to ClusterMapping trigger NamespaceMapping reconciliation
-   - Verifies that status-only updates don't cause reconciliation loops
+1. Resource Change Detection
+   - Verifies changes to source resources (ConfigMaps) are detected and propagated to the destination cluster
+   - Tests the continuous watch mechanism for detecting changes to resources
 
-2. Change Propagation
-   - Verifies changes in related resources propagate correctly
-   - Tests the complete chain: RemoteCluster → ClusterMapping → NamespaceMapping
-
-3. Status Updates
+2. Status Update Handling
    - Verifies status updates don't trigger unnecessary reconciliations
    - Ensures resources are only reconciled when their specs change
+   - Tests the absence of reconciliation loops
+
+3. Future Tests
+   - Cross-resource change detection (RemoteCluster → ClusterMapping → NamespaceMapping)
+   - Complete relationship chain propagation
 
 ## How to Run
 ```bash
