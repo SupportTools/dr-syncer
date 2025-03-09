@@ -30,10 +30,11 @@ ARG BUILD_DATE
 # Build the Go app with versioning information and caching
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    export BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && \
     GOOS=linux GOARCH=amd64 go build \
     -ldflags "-X github.com/supporttools/dr-syncer/pkg/version.Version=${VERSION} \
     -X github.com/supporttools/dr-syncer/pkg/version.GitCommit=${GIT_COMMIT} \
-    -X github.com/supporttools/dr-syncer/pkg/version.BuildTime=${BUILD_DATE}" \
+    -X github.com/supporttools/dr-syncer/pkg/version.BuildTime=${BUILD_TIME}" \
     -o /bin/dr-syncer
 
 # Use distroless for a more secure and smaller final image

@@ -45,7 +45,7 @@ all: build
 # Version information
 VERSION ?= $(shell git describe --tags --always --dirty)
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
-BUILD_DATE ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Helm chart settings
 HELM_NAMESPACE ?= dr-syncer

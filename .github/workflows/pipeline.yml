@@ -80,7 +80,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+            BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           cache-from: type=registry,ref=docker.io/supporttools/dr-syncer:latest
           cache-to: type=inline
 
@@ -97,7 +97,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+            BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           cache-from: type=registry,ref=docker.io/supporttools/dr-syncer-agent:latest
           cache-to: type=inline
 
@@ -114,7 +114,7 @@ jobs:
           build-args: |
             VERSION=${{ env.VERSION }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+            BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           cache-from: type=registry,ref=docker.io/supporttools/dr-syncer-rsync:latest
           cache-to: type=inline
 
