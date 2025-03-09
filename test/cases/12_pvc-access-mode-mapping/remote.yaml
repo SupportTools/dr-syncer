@@ -35,14 +35,14 @@ metadata:
     test-type: pvc-access-mode-mapping
     access-mode: rwo
   annotations:
-    description: "ReadWriteOnce PVC with single node access"
+    description: "ReadWriteOnce PVC for single node access"
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # ReadWriteMany PVC
@@ -56,14 +56,14 @@ metadata:
     test-type: pvc-access-mode-mapping
     access-mode: rwm
   annotations:
-    description: "ReadWriteMany PVC with multi-node access"
+    description: "ReadWriteMany PVC for multi-node read-write access"
 spec:
   accessModes:
     - ReadWriteMany
   resources:
     requests:
-      storage: 5Gi
-  storageClassName: standard
+      storage: 1Gi
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # ReadOnlyMany PVC
@@ -77,14 +77,14 @@ metadata:
     test-type: pvc-access-mode-mapping
     access-mode: rom
   annotations:
-    description: "ReadOnlyMany PVC with shared read-only access"
+    description: "ReadOnlyMany PVC for multi-node read-only access"
 spec:
   accessModes:
     - ReadOnlyMany
   resources:
     requests:
-      storage: 10Gi
-  storageClassName: standard
+      storage: 1Gi
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # ReadWriteOncePod PVC
@@ -98,14 +98,14 @@ metadata:
     test-type: pvc-access-mode-mapping
     access-mode: rwop
   annotations:
-    description: "ReadWriteOncePod PVC with pod-exclusive access"
+    description: "ReadWriteOncePod PVC for single pod access"
 spec:
   accessModes:
     - ReadWriteOncePod
   resources:
     requests:
-      storage: 20Gi
-  storageClassName: standard
+      storage: 1Gi
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # Deployment using all PVCs
@@ -137,7 +137,6 @@ spec:
               mountPath: /data/rwm
             - name: rom-storage
               mountPath: /data/rom
-              readOnly: true
             - name: rwop-storage
               mountPath: /data/rwop
           resources:

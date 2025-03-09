@@ -17,13 +17,13 @@ const (
 
 	// SyncerKey is used to store the PVCSyncer in context
 	SyncerKey ContextKey = "pvcsync"
-	
+
 	// SourceClusterKey is used to store the source cluster name in context
 	SourceClusterKey ContextKey = "source-cluster"
-	
+
 	// DestClusterKey is used to store the destination cluster name in context
 	DestClusterKey ContextKey = "dest-cluster"
-	
+
 	// ClusterTypeKey is used to store the cluster type (source/destination) in context
 	ClusterTypeKey ContextKey = "cluster-type"
 )

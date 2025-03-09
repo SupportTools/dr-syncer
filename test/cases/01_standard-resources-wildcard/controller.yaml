@@ -1,7 +1,7 @@
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
-  name: standard-resources-wildcard
+  name: test01-standard-resources-wildcard
   namespace: dr-syncer
   labels:
     dr-syncer.io/test-case: "01"
@@ -11,21 +11,17 @@ spec:
   # Use scheduled mode for predictable testing
   replicationMode: Scheduled
   schedule: "*/5 * * * *" # Run every 5 minutes
-
-  # Cluster configuration
+  # Reference the ClusterMapping
   clusterMappingRef:
-    name: nyc3-to-sfo3
+    name: prod-to-dr
     namespace: dr-syncer
   sourceNamespace: dr-sync-test-case01
   destinationNamespace: dr-sync-test-case01
-
   # Resource types to test wildcard functionality
   resourceTypes:
     - "*" # Wildcard to replicate all resources
-
   # Scale deployments to zero in DR
   scaleToZero: true
-
   # Configure immutable resource handling
   immutableResourceConfig:
     defaultHandling: NoChange

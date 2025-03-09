@@ -6,7 +6,9 @@ This test case verifies the PVC storage class mapping functionality of the DR Sy
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Configures PVC replication with:
   - Storage class mapping from `do-block-storage-xfs` to `do-block-storage-xfs-retain`
   - Does not preserve volume attributes like volumeName
@@ -37,7 +39,7 @@ Deploys the following resources in the source namespace:
    - Verifies service is properly replicated
 
 4. Status Updates
-   - Verifies the Replication resource status is updated correctly
+   - Verifies the NamespaceMapping resource status is updated correctly
    - Checks for "Synced: True" condition
    - Confirms sync statistics are tracked
 

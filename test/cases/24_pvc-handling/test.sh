@@ -192,8 +192,8 @@ wait_for_replication() {
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
         # Check phase and conditions
-        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.phase}' 2>/dev/null)
-        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.phase}' 2>/dev/null)
+        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
         
         if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
@@ -321,16 +321,16 @@ main() {
         print_result "Service not found" "fail"
     fi
     
-    # Verify Replication status fields
+    # Verify NamespaceMapping status fields
     echo "Verifying replication status..."
     
     # Get status fields
-    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.phase}')
-    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.syncStats.failedSyncs}')
-    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.lastSyncTime}')
-    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.nextSyncTime}')
-    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.syncStats.lastSyncDuration}')
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.nextSyncTime}')
+    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.syncStats.lastSyncDuration}')
     
     # Verify phase and sync counts
     if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then
@@ -354,7 +354,7 @@ main() {
     fi
     
     # Verify detailed resource status
-    local resource_status_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling -o jsonpath='{.status.resourceStatus[*].status}' | tr ' ' '\n' | grep -c "Synced" || echo "0")
+    local resource_status_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling -o jsonpath='{.status.resourceStatus[*].status}' | tr ' ' '\n' | grep -c "Synced" || echo "0")
     if [ "$resource_status_count" -ge 5 ]; then
         print_result "Detailed resource status (5 resources synced)" "pass"
     else
@@ -362,7 +362,7 @@ main() {
     fi
     
     # Verify printer columns
-    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-handling)
+    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling)
     if echo "$columns" | grep -q "Completed" && echo "$columns" | grep -q "[0-9]"; then
         print_result "Printer columns visible" "pass"
     else

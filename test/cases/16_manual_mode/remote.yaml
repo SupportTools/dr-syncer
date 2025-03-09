@@ -38,41 +38,7 @@ data:
   username: YWRtaW4=  # admin
   password: cGFzc3dvcmQ=  # password
 ---
-# Stateful Resources - Manual Mode
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: test-pv-manual
-  labels:
-    type: local
-    test-type: manual-mode
-    mode: manual
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: do-block-storage
-  csi:
-    driver: dobs.csi.digitalocean.com
-    volumeHandle: test-pv-manual
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-pvc
-  namespace: dr-sync-test-case16-manual
-  labels:
-    app: test-app
-    test-type: manual-mode
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-  storageClassName: do-block-storage
+# No PVC resources for this test
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -101,5 +67,4 @@ spec:
               mountPath: /data
       volumes:
         - name: data
-          persistentVolumeClaim:
-            claimName: test-pvc
+          emptyDir: {}

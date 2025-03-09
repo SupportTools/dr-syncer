@@ -1,12 +1,14 @@
-# Test Case 14: PVC Sync Persistent Volumes
+# Test Case 14: PVC Sync with Volume Name Preservation
 
 ## Purpose
-This test case verifies the DR Syncer controller's ability to properly synchronize PVCs along with their associated Persistent Volumes (PVs). It tests that both PVCs and their bound PVs are correctly synchronized to the DR cluster while maintaining their relationships and configurations.
+This test case verifies the DR Syncer controller's ability to properly synchronize PVCs while preserving their volume name references. It tests that PVCs are synchronized to the DR cluster with their `volumeName` field intact, which helps maintain the relationship between PVCs and their volumes.
 
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Uses wildcard resource type selection:
   ```yaml
   resourceTypes:
@@ -15,16 +17,9 @@ This test case verifies the DR Syncer controller's ability to properly synchroni
 - PVC and PV configuration:
   ```yaml
   pvcConfig:
-    enabled: true
+    syncPersistentVolumes: true  # Key difference from test case 13
     preserveVolumeAttributes: true
-    syncPersistentVolumes: true
-    volumeConfig:
-      preserveCapacity: true
-      preserveAccessModes: true
-      preserveReclaimPolicy: true
-      preserveMountOptions: true
-      preserveVolumeMode: true
-      preserveNodeAffinity: true
+    syncData: false
   ```
 
 ### Source Resources (`remote.yaml`)
@@ -112,7 +107,7 @@ Deploys test resources in the source namespace:
    - Verifies resource relationships
 
 9. Status Updates
-   - Verifies the Replication resource status
+   - Verifies the NamespaceMapping resource status
    - Checks for "Synced: True" condition
    - Verifies PVC-specific status fields
    - Monitors binding progress
@@ -127,12 +122,9 @@ Deploys test resources in the source namespace:
 ```
 
 ## Expected Results
-- All PVs should be synchronized to DR cluster
-- All PVCs should be synchronized to DR cluster
-- PVC-PV bindings should be maintained
-- Volume configurations should be preserved
-- Storage settings should be matched
-- Node affinity rules should be preserved
-- Mount configurations should be kept
-- Deployment mounts should be configured
+- All PVCs should be synchronized to DR cluster with volume name references preserved
+- PVCs in the DR cluster should have the same volumeName as in the source cluster
+- PVCs may remain in Pending state since actual PVs aren't synchronized (just their references)
+- Volume attributes should be preserved in the PVC specifications
+- Deployment specifications should be preserved with volume mounts
 - Status should show successful synchronization

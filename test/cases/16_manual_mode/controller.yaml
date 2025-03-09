@@ -1,7 +1,58 @@
 ---
-# Manual Mode Replication
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: RemoteCluster
+metadata:
+  name: test-remote-nyc3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "16"
+    dr-syncer.io/test-name: "manual-mode"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-nyc3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - "*" # Wildcard to include all resources
+  pvcSync:
+    enabled: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: test-remote-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "16"
+    dr-syncer.io/test-name: "manual-mode"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-sfo3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - "*" # Wildcard to include all resources
+  pvcSync:
+    enabled: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: test-nyc3-to-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "16"
+    dr-syncer.io/test-name: "manual-mode"
+    dr-syncer.io/test: "true"
+spec:
+  sourceCluster: test-remote-nyc3
+  targetCluster: test-remote-sfo3
+  verifyConnectivity: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
 metadata:
   name: replication-manual
   namespace: dr-syncer
@@ -9,24 +60,26 @@ metadata:
     dr-syncer.io/test-case: "16"
     dr-syncer.io/test-name: "manual-mode"
     dr-syncer.io/test: "true"
-    dr-syncer.io/mode: "manual"
 spec:
   # Manual mode configuration
   replicationMode: Manual
   
   # Cluster configuration using ClusterMapping
   clusterMappingRef:
-    name: nyc3-to-sfo3
+    name: test-nyc3-to-sfo3
     namespace: dr-syncer
-  # Legacy cluster configuration (commented out)
-  # sourceCluster: dr-syncer-nyc3
-  # destinationCluster: dr-syncer-sfo3
+  
   sourceNamespace: dr-sync-test-case16-manual
   destinationNamespace: dr-sync-test-case16-manual
   
   # Resource types to sync
   resourceTypes:
-    - "*"  # Sync all resource types
+    - ConfigMaps
+    - Secrets
+    - Deployments
+    - StatefulSets
+    - Services
+    - Ingresses
   
   # Scale deployments to zero in DR
   scaleToZero: true
@@ -36,14 +89,3 @@ spec:
     defaultHandling: Recreate
     drainTimeout: 5m
     forceDeleteTimeout: 2m
-
-  # Configure PVC handling
-  pvcConfig:
-    storageClassMappings:
-      - from: do-block-storage
-        to: do-block-storage-xfs
-    accessModeMappings:
-      - from: ReadWriteOnce
-        to: ReadWriteOnce
-    preserveVolumeAttributes: true
-    syncPersistentVolumes: true

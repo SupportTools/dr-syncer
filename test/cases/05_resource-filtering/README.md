@@ -6,7 +6,9 @@ This test case verifies the DR Syncer controller's ability to selectively synchr
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Explicitly specifies resource types to sync:
   ```yaml
   resourceTypes:
@@ -41,7 +43,7 @@ Deploys test resources in the source namespace:
      * Verifies labels and annotations are preserved
 
 4. Status Updates
-   - Verifies the Replication resource status is updated correctly
+   - Verifies the NamespaceMapping resource status is updated correctly
    - Checks for "Synced: True" condition
    - Verifies resource status counts match expectations
 

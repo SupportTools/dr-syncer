@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: dr-sync-test-case09
+  name: dr-sync-test-case24
   labels:
-    dr-syncer.io/test-case: "09"
+    dr-syncer.io/test-case: "24"
     dr-syncer.io/test-name: "pvc-handling"
     dr-syncer.io/test: "true"
 ---
@@ -13,7 +13,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: test-pvc-basic
-  namespace: dr-sync-test-case09
+  namespace: dr-sync-test-case24
   labels:
     app: test-app
     test-type: pvc-handling
@@ -25,7 +25,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # Multi-access PVC with shared storage
@@ -33,7 +33,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: test-pvc-multi
-  namespace: dr-sync-test-case09
+  namespace: dr-sync-test-case24
   labels:
     app: test-app
     test-type: pvc-handling
@@ -45,7 +45,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: premium
+  storageClassName: do-block-storage-retain
   volumeMode: Filesystem
 ---
 # Dynamic PVC with specific requirements
@@ -53,7 +53,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: test-pvc-dynamic
-  namespace: dr-sync-test-case09
+  namespace: dr-sync-test-case24
   labels:
     app: test-app
     test-type: pvc-handling
@@ -66,7 +66,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  storageClassName: premium
+  storageClassName: do-block-storage-retain
   volumeMode: Filesystem
   selector:
     matchLabels:
@@ -78,7 +78,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: test-deployment
-  namespace: dr-sync-test-case09
+  namespace: dr-sync-test-case24
   labels:
     app: test-app
     test-type: pvc-handling
@@ -125,7 +125,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: test-service
-  namespace: dr-sync-test-case09
+  namespace: dr-sync-test-case24
   labels:
     app: test-app
     test-type: pvc-handling

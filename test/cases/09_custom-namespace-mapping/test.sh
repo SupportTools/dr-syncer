@@ -68,12 +68,12 @@ verify_namespace() {
     echo "Source namespace annotations: $source_annotations"
     echo "DR namespace annotations: $dr_annotations"
     
-    # Check if environment label is preserved
-    if [[ $(echo "$source_labels" | jq -r '.environment // ""') != "" ]]; then
-        if [[ $(echo "$source_labels" | jq -r '.environment') == $(echo "$dr_labels" | jq -r '.environment // ""') ]]; then
-            echo "Environment label correctly preserved"
+    # Check if essential labels are preserved
+    if [[ $(echo "$source_labels" | jq 'has("dr-syncer.io/replicate")') == "true" ]]; then
+        if [[ $(echo "$source_labels" | jq -r '.["dr-syncer.io/replicate"]') == $(echo "$dr_labels" | jq -r '.["dr-syncer.io/replicate"] // ""') ]]; then
+            echo "dr-syncer.io/replicate label correctly preserved"
         else
-            echo "Environment label not preserved correctly"
+            echo "dr-syncer.io/replicate label not preserved correctly"
             return 1
         fi
     fi
@@ -153,7 +153,7 @@ verify_metadata() {
     done
     
     # Special handling for controller added labels
-    if [ "$resource_type" = "deployment" ] || [ "$resource_type" = "service" ] || [ "$resource_type" = "persistentvolumeclaim" ]; then
+    if [ "$resource_type" = "deployment" ] || [ "$resource_type" = "service" ] || [ "$resource_type" = "ingress" ]; then
         # These resources are expected to have some metadata differences due to controller actions
         return 0
     fi
@@ -185,64 +185,27 @@ verify_configmap() {
     return 0
 }
 
-# Function to verify PVC with exact matching
-verify_pvc() {
+# Function to verify Secret
+verify_secret() {
     local source_namespace=$1
     local dr_namespace=$2
     local name=$3
     
     # Verify metadata
-    if ! verify_metadata "$source_namespace" "$dr_namespace" "persistentvolumeclaim" "$name"; then
-        echo "PVC metadata verification failed"
+    if ! verify_metadata "$source_namespace" "$dr_namespace" "secret" "$name"; then
+        echo "Secret metadata verification failed"
         return 1
     fi
     
-    # Get PVC specs from both clusters
-    local source_spec=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get pvc ${name} -o json)
-    local dr_spec=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get pvc ${name} -o json)
+    # Compare data (after decoding)
+    local source_data=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get secret ${name} -o json | jq -S '.data | map_values(@base64d)')
+    local dr_data=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get secret ${name} -o json | jq -S '.data | map_values(@base64d)')
     
-    # Compare storage class (must match exactly)
-    local source_storage_class=$(echo "$source_spec" | jq -r '.spec.storageClassName')
-    local dr_storage_class=$(echo "$dr_spec" | jq -r '.spec.storageClassName')
-    if [ "$source_storage_class" != "$dr_storage_class" ]; then
-        echo "Storage class mismatch: expected $source_storage_class, got $dr_storage_class"
+    if [ "$source_data" != "$dr_data" ]; then
+        echo "Secret data mismatch:"
+        diff <(echo "$source_data") <(echo "$dr_data")
         return 1
     fi
-    
-    # Compare access modes (must match exactly)
-    local source_access_modes=$(echo "$source_spec" | jq -r '.spec.accessModes[]' | sort)
-    local dr_access_modes=$(echo "$dr_spec" | jq -r '.spec.accessModes[]' | sort)
-    if [ "$source_access_modes" != "$dr_access_modes" ]; then
-        echo "Access modes mismatch:"
-        diff <(echo "$source_access_modes") <(echo "$dr_access_modes")
-        return 1
-    fi
-    
-    # Compare storage requests (must match exactly)
-    local source_storage=$(echo "$source_spec" | jq -r '.spec.resources.requests.storage')
-    local dr_storage=$(echo "$dr_spec" | jq -r '.spec.resources.requests.storage')
-    if [ "$source_storage" != "$dr_storage" ]; then
-        echo "Storage request mismatch: expected $source_storage, got $dr_storage"
-        return 1
-    fi
-    
-    # Compare volume mode (must match exactly)
-    local source_volume_mode=$(echo "$source_spec" | jq -r '.spec.volumeMode')
-    local dr_volume_mode=$(echo "$dr_spec" | jq -r '.spec.volumeMode')
-    if [ "$source_volume_mode" != "$dr_volume_mode" ]; then
-        echo "Volume mode mismatch: expected $source_volume_mode, got $dr_volume_mode"
-        return 1
-    fi
-    
-    # Compare selector if present (must match exactly)
-    local source_selector=$(echo "$source_spec" | jq -r '.spec.selector // ""')
-    local dr_selector=$(echo "$dr_spec" | jq -r '.spec.selector // ""')
-    if [ "$source_selector" != "$dr_selector" ]; then
-        echo "Selector mismatch:"
-        diff <(echo "$source_selector") <(echo "$dr_selector")
-        return 1
-    fi
-    
     return 0
 }
 
@@ -281,38 +244,6 @@ verify_deployment() {
         diff <(echo "$source_spec" | jq -S .) <(echo "$dr_spec" | jq -S .)
         return 1
     fi
-    
-    # Add specific checks for PVC-related configuration
-    # Compare volume mounts and PVC references
-    local source_volumes=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.volumes')
-    local dr_volumes=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.volumes')
-    
-    if [ "$source_volumes" != "$dr_volumes" ]; then
-        echo "Volume configuration mismatch:"
-        diff <(echo "$source_volumes") <(echo "$dr_volumes")
-        return 1
-    fi
-    
-    # Compare volume mounts in containers
-    local source_mounts=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.containers[].volumeMounts')
-    local dr_mounts=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.containers[].volumeMounts')
-    
-    if [ "$source_mounts" != "$dr_mounts" ]; then
-        echo "Volume mounts mismatch:"
-        diff <(echo "$source_mounts") <(echo "$dr_mounts")
-        return 1
-    fi
-    
-    # Compare volume devices in containers
-    local source_devices=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.containers[].volumeDevices')
-    local dr_devices=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get deployment ${name} -o json | jq -S '.spec.template.spec.containers[].volumeDevices')
-    
-    if [ "$source_devices" != "$dr_devices" ]; then
-        echo "Volume devices mismatch:"
-        diff <(echo "$source_devices") <(echo "$dr_devices")
-        return 1
-    fi
-    
     return 0
 }
 
@@ -364,6 +295,30 @@ verify_service() {
     return 0
 }
 
+# Function to verify Ingress
+verify_ingress() {
+    local source_namespace=$1
+    local dr_namespace=$2
+    local name=$3
+    
+    # Verify metadata
+    if ! verify_metadata "$source_namespace" "$dr_namespace" "ingress" "$name"; then
+        echo "Ingress metadata verification failed"
+        return 1
+    fi
+    
+    # Compare specs (excluding status)
+    local source_spec=$(kubectl --kubeconfig ${PROD_KUBECONFIG} -n ${source_namespace} get ingress ${name} -o json | jq 'del(.status, .metadata) | .spec')
+    local dr_spec=$(kubectl --kubeconfig ${DR_KUBECONFIG} -n ${dr_namespace} get ingress ${name} -o json | jq 'del(.status, .metadata) | .spec')
+    
+    if [ "$source_spec" != "$dr_spec" ]; then
+        echo "Ingress spec mismatch:"
+        diff <(echo "$source_spec" | jq -S .) <(echo "$dr_spec" | jq -S .)
+        return 1
+    fi
+    return 0
+}
+
 # Function to wait for replication to be ready
 wait_for_replication() {
     local max_attempts=300
@@ -373,8 +328,8 @@ wait_for_replication() {
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
         # Check phase and conditions
-        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.phase}' 2>/dev/null)
-        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.phase}' 2>/dev/null)
+        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
         
         if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
@@ -420,19 +375,19 @@ verify_replication_status() {
 # Function to deploy resources
 deploy_resources() {
     echo "Deploying resources in production cluster..."
-    kubectl --kubeconfig ${PROD_KUBECONFIG} apply -f test/cases/10_pvc-basic-sync/remote.yaml
+    kubectl --kubeconfig ${PROD_KUBECONFIG} apply -f test/cases/09_custom-namespace-mapping/remote.yaml
     
     echo "Deploying controller resources..."
-    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} apply -f test/cases/10_pvc-basic-sync/controller.yaml
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} apply -f test/cases/09_custom-namespace-mapping/controller.yaml
     
     # Force an immediate sync
     echo "Forcing an immediate sync..."
-    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} annotate namespacemapping -n dr-syncer pvc-basic-sync dr-syncer.io/sync-now=true --overwrite
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} annotate namespacemapping -n dr-syncer test09-custom-namespace-mapping dr-syncer.io/sync-now=true --overwrite
 }
 
 # Main test function
 main() {
-    echo "Testing DR-Sync functionality for case 10 (PVC Basic Sync)..."
+    echo "Testing DR-Sync functionality for case 09 (Custom Namespace Mapping)..."
     
     # Deploy resources
     deploy_resources
@@ -449,23 +404,27 @@ main() {
     sleep 15
     
     # Verify namespace exists in DR cluster with expected properties
-    echo "Checking for dr-sync-test-case10 in DR cluster..."
-    
-    # Skip namespace check if verification fails but still let other tests continue
-    # This allows for different DR-Syncer implementations that may not create the
-    # destination namespace directly
-    if verify_resource "" "namespace" "dr-sync-test-case10"; then
+    echo "Checking for namespace-prod-dr in DR cluster..."
+    if kubectl --kubeconfig ${DR_KUBECONFIG} get namespace namespace-prod-dr &>/dev/null; then
         print_result "Namespace created" "pass"
+        
+        # Do a basic check for label/annotation preservation rather than exact match
+        if [[ $(kubectl --kubeconfig ${PROD_KUBECONFIG} get namespace namespace-prod -o json | jq -r '.metadata.labels["dr-syncer.io/replicate"] // ""') == "true" ]]; then
+            print_result "Source namespace has dr-syncer.io/replicate label" "pass"
+        fi
+        
+        # Check if description annotation was preserved
+        local description=$(kubectl --kubeconfig ${DR_KUBECONFIG} get namespace namespace-prod-dr -o json | jq -r '.metadata.annotations.description // ""')
+        if [[ $description == *"replication test"* ]]; then
+            print_result "Description annotation preserved" "pass"
+        fi
     else
-        echo "WARNING: Namespace dr-sync-test-case10 not found in DR cluster."
-        echo "This might be expected depending on DR-Syncer configuration."
-        echo "Continuing with other tests..."
-        print_result "Namespace found" "pass" # Pass anyway to not fail the entire test
+        print_result "Namespace not found" "fail"
     fi
     
     # Verify ConfigMap
-    if verify_resource "dr-sync-test-case10" "configmap" "test-configmap"; then
-        if verify_configmap "dr-sync-test-case10" "dr-sync-test-case10" "test-configmap"; then
+    if verify_resource "namespace-prod-dr" "configmap" "test-configmap"; then
+        if verify_configmap "namespace-prod" "namespace-prod-dr" "test-configmap"; then
             print_result "ConfigMap synced and verified" "pass"
         else
             print_result "ConfigMap verification failed" "fail"
@@ -474,42 +433,20 @@ main() {
         print_result "ConfigMap not found" "fail"
     fi
     
-    # Verify Standard PVC
-    if verify_resource "dr-sync-test-case10" "persistentvolumeclaim" "test-pvc-standard"; then
-        if verify_pvc "dr-sync-test-case10" "dr-sync-test-case10" "test-pvc-standard"; then
-            print_result "Standard PVC synced and verified" "pass"
+    # Verify Secret
+    if verify_resource "namespace-prod-dr" "secret" "test-secret"; then
+        if verify_secret "namespace-prod" "namespace-prod-dr" "test-secret"; then
+            print_result "Secret synced and verified" "pass"
         else
-            print_result "Standard PVC verification failed" "fail"
+            print_result "Secret verification failed" "fail"
         fi
     else
-        print_result "Standard PVC not found" "fail"
+        print_result "Secret not found" "fail"
     fi
     
-    # Verify Block PVC
-    if verify_resource "dr-sync-test-case10" "persistentvolumeclaim" "test-pvc-block"; then
-        if verify_pvc "dr-sync-test-case10" "dr-sync-test-case10" "test-pvc-block"; then
-            print_result "Block PVC synced and verified" "pass"
-        else
-            print_result "Block PVC verification failed" "fail"
-        fi
-    else
-        print_result "Block PVC not found" "fail"
-    fi
-    
-    # Verify Filesystem PVC
-    if verify_resource "dr-sync-test-case10" "persistentvolumeclaim" "test-pvc-filesystem"; then
-        if verify_pvc "dr-sync-test-case10" "dr-sync-test-case10" "test-pvc-filesystem"; then
-            print_result "Filesystem PVC synced and verified" "pass"
-        else
-            print_result "Filesystem PVC verification failed" "fail"
-        fi
-    else
-        print_result "Filesystem PVC not found" "fail"
-    fi
-    
-    # Verify Deployment
-    if verify_resource "dr-sync-test-case10" "deployment" "test-deployment"; then
-        if verify_deployment "dr-sync-test-case10" "dr-sync-test-case10" "test-deployment"; then
+    # Verify Deployment (should be scaled to zero)
+    if verify_resource "namespace-prod-dr" "deployment" "test-deployment"; then
+        if verify_deployment "namespace-prod" "namespace-prod-dr" "test-deployment"; then
             print_result "Deployment synced and verified (scaled to zero)" "pass"
         else
             print_result "Deployment verification failed" "fail"
@@ -519,8 +456,8 @@ main() {
     fi
     
     # Verify Service
-    if verify_resource "dr-sync-test-case10" "service" "test-service"; then
-        if verify_service "dr-sync-test-case10" "dr-sync-test-case10" "test-service"; then
+    if verify_resource "namespace-prod-dr" "service" "test-service"; then
+        if verify_service "namespace-prod" "namespace-prod-dr" "test-service"; then
             print_result "Service synced and verified" "pass"
         else
             print_result "Service verification failed" "fail"
@@ -529,16 +466,26 @@ main() {
         print_result "Service not found" "fail"
     fi
     
+    # Verify Ingress
+    if verify_resource "namespace-prod-dr" "ingress" "test-ingress"; then
+        if verify_ingress "namespace-prod" "namespace-prod-dr" "test-ingress"; then
+            print_result "Ingress synced and verified" "pass"
+        else
+            print_result "Ingress verification failed" "fail"
+        fi
+    else
+        print_result "Ingress not found" "fail"
+    fi
+    
     # Verify NamespaceMapping status fields
     echo "Verifying replication status..."
     
     # Get status fields
-    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.phase}')
-    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.syncStats.successfulSyncs}' 2>/dev/null || echo "0")
-    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.syncStats.failedSyncs}' 2>/dev/null || echo "0")
-    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.lastSyncTime}')
-    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.nextSyncTime}')
-    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.syncStats.lastSyncDuration}' 2>/dev/null || echo "")
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test09-custom-namespace-mapping -o jsonpath='{.status.nextSyncTime}')
     
     # Verify phase and sync counts
     if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then
@@ -552,33 +499,6 @@ main() {
         print_result "Sync timestamps present" "pass"
     else
         print_result "Sync timestamps present" "fail"
-    fi
-    
-    # Verify sync duration
-    if [ ! -z "$sync_duration" ]; then
-        print_result "Sync duration tracked" "pass"
-    else
-        print_result "Sync duration tracked" "fail"
-    fi
-    
-    # Verify detailed resource status
-    local resource_status=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.resourceStatus[*].status}' 2>/dev/null || echo "")
-    
-    if [ ! -z "$resource_status" ]; then
-        local resource_status_count=$(echo "$resource_status" | tr ' ' '\n' | grep -c "Synced" || echo "0")
-        if [ "$resource_status_count" -ge 5 ]; then
-            print_result "Detailed resource status (5 resources synced)" "pass"
-        else
-            print_result "Detailed resource status" "fail"
-        fi
-    else
-        # If resourceStatus doesn't exist in the CR, check if the sync was successful instead
-        local sync_condition=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-basic-sync -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}')
-        if [ "$sync_condition" = "True" ]; then
-            print_result "Detailed resource status (using Synced condition)" "pass"
-        else
-            print_result "Detailed resource status" "fail"
-        fi
     fi
     
     # Print summary

@@ -45,7 +45,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # PVC with Resource Requirements
@@ -61,17 +61,16 @@ metadata:
   annotations:
     description: "PVC with specific resource requirements"
     performance.tuning: "high-iops"
+    dr-syncer.io/resource-requests-iops: "5000"
+    dr-syncer.io/resource-limits-storage: "20Gi"
+    dr-syncer.io/resource-limits-iops: "10000"
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 10Gi
-      iops: "5000"
-    limits:
-      storage: 20Gi
-      iops: "10000"
-  storageClassName: premium-performance
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # PVC with Selector
@@ -92,7 +91,7 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
   selector:
     matchLabels:
@@ -117,15 +116,15 @@ metadata:
     storage-type: volume-name
   annotations:
     description: "PVC with pre-provisioned volume name"
+    dr-syncer.io/volume-name: "pre-provisioned-vol-001"
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 8Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
-  volumeName: pre-provisioned-vol-001
 ---
 # PVC with Data Source
 apiVersion: v1
@@ -145,14 +144,14 @@ spec:
   resources:
     requests:
       storage: 15Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
   dataSource:
     name: snapshot-001
     kind: VolumeSnapshot
     apiGroup: snapshot.storage.k8s.io
 ---
-# PVC with Mount Options
+# PVC with Mount Options in Annotations
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -164,19 +163,15 @@ metadata:
     storage-type: mount-options
   annotations:
     description: "PVC with custom mount options"
+    mountOptions: "noatime,nodiratime,discard,_netdev"
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 12Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
-  mountOptions:
-    - noatime
-    - nodiratime
-    - discard
-    - _netdev
 ---
 # PVC with Node Affinity
 apiVersion: v1
@@ -190,28 +185,41 @@ metadata:
     storage-type: node-affinity
   annotations:
     description: "PVC with node affinity rules"
+    dr-syncer.io/node-affinity: |
+      {
+        "required": {
+          "nodeSelectorTerms": [
+            {
+              "matchExpressions": [
+                {
+                  "key": "topology.kubernetes.io/zone",
+                  "operator": "In",
+                  "values": [
+                    "us-east-1a",
+                    "us-east-1b"
+                  ]
+                },
+                {
+                  "key": "storage.kubernetes.io/type",
+                  "operator": "In",
+                  "values": [
+                    "ssd",
+                    "nvme"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 25Gi
-  storageClassName: standard
+  storageClassName: do-block-storage
   volumeMode: Filesystem
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: topology.kubernetes.io/zone
-              operator: In
-              values:
-                - us-east-1a
-                - us-east-1b
-            - key: storage.kubernetes.io/type
-              operator: In
-              values:
-                - ssd
-                - nvme
 ---
 # Deployment using all PVCs
 apiVersion: apps/v1

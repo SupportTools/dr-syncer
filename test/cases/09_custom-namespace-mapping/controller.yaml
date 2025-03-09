@@ -1,11 +1,11 @@
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
-  name: namespace-mapping-with-selector
+  name: test09-custom-namespace-mapping
   namespace: dr-syncer
   labels:
-    dr-syncer.io/test-case: "08"
-    dr-syncer.io/test-name: "namespace-mapping-with-selector"
+    dr-syncer.io/test-case: "09"
+    dr-syncer.io/test-name: "custom-namespace-mapping"
     dr-syncer.io/test: "true"
 spec:
   # Use scheduled mode for predictable testing
@@ -14,14 +14,12 @@ spec:
   
   # Cluster configuration
   clusterMappingRef:
-    name: nyc3-to-sfo3
+    name: prod-to-dr
     namespace: dr-syncer
   
-  # Use namespace selector instead of direct mapping
-  namespaceSelector:
-    labelSelector:
-      dr-syncer.io/replicate: "true"
-    destinationSuffix: "-dr"
+  # Direct mapping with custom destination namespace
+  sourceNamespace: namespace-prod
+  destinationNamespace: namespace-prod-dr
   
   # Resource types to sync
   resourceTypes:

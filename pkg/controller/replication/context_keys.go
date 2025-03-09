@@ -23,7 +23,7 @@ const (
 	syncerKey    syncerContextKey = "pvcsync"
 
 	// Exported keys for cross-package use
-	K8sConfigKey  = contextkeys.K8sConfigKey
-	SyncerKey     = contextkeys.SyncerKey
+	K8sConfigKey                       = contextkeys.K8sConfigKey
+	SyncerKey                          = contextkeys.SyncerKey
 	PVCClusterKey PVCClusterContextKey = "pvcCluster"
 )

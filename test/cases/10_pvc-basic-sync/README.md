@@ -6,7 +6,9 @@ This test case verifies the DR Syncer controller's basic PVC synchronization cap
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Uses wildcard resource type selection:
   ```yaml
   resourceTypes:
@@ -80,7 +82,7 @@ Deploys test resources in the source namespace:
    - Verifies resource relationships
 
 7. Status Updates
-   - Verifies the Replication resource status
+   - Verifies the NamespaceMapping resource status
    - Checks for "Synced: True" condition
    - Verifies PVC-specific status fields
    - Monitors binding progress

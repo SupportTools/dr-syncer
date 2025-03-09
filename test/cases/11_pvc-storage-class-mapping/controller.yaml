@@ -1,5 +1,58 @@
+---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: RemoteCluster
+metadata:
+  name: test-remote-nyc3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "11"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-nyc3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - "*" # Wildcard to include all resources
+  pvcSync:
+    enabled: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: test-remote-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "11"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+spec:
+  kubeconfigSecretRef:
+    name: dr-syncer-sfo3-kubeconfig
+    namespace: dr-syncer
+  defaultSchedule: "*/5 * * * *" # Every 5 minutes
+  defaultResourceTypes:
+    - "*" # Wildcard to include all resources
+  pvcSync:
+    enabled: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: test-nyc3-to-sfo3
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "11"
+    dr-syncer.io/test-name: "pvc-storage-class-mapping"
+    dr-syncer.io/test: "true"
+spec:
+  sourceCluster: test-remote-nyc3
+  targetCluster: test-remote-sfo3
+  verifyConnectivity: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
 metadata:
   name: pvc-storage-class-mapping
   namespace: dr-syncer
@@ -14,7 +67,7 @@ spec:
   
   # Cluster configuration
   clusterMappingRef:
-    name: nyc3-to-sfo3
+    name: test-nyc3-to-sfo3
     namespace: dr-syncer
   sourceNamespace: dr-sync-test-case11
   destinationNamespace: dr-sync-test-case11
@@ -32,27 +85,19 @@ spec:
     drainTimeout: 5m
     forceDeleteTimeout: 2m
   
+  # Namespace configuration
+  namespaceConfig:
+    createNamespace: true
+    preserveLabels: true
+    preserveAnnotations: true
+    
   # PVC configuration with storage class mapping
   pvcConfig:
-    enabled: true                  # Enable PVC synchronization
+    syncPersistentVolumes: false # Don't sync PVs directly
     preserveVolumeAttributes: true # Maintain volume attributes
-    waitForBinding: true          # Wait for PVC binding
-    bindingTimeout: 5m            # Timeout for PVC binding
+    syncData: false # Don't sync data inside PVCs, just the PVC resources
     
     # Storage class mapping configuration for DO storage classes
     storageClassMappings:
     - from: do-block-storage           # Default class
-      to: do-block-storage-xfs        # Map to XFS variant
-    - from: do-block-storage-retain    # Retain policy class
-      to: do-block-storage-xfs-retain # Map to XFS variant with retain
-    
-    # No access mode mapping - preserve original modes
-    accessModeMapping: {}
-    
-    # Volume attributes to preserve
-    preservedAttributes:
-      - volumeMode
-      - resources
-      - selector
-      - volumeName
-      - dataSource
+      to: do-block-storage-retain     # Map to Retain variant

@@ -246,8 +246,8 @@ wait_for_replication() {
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
         # Check phase and conditions
-        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.phase}' 2>/dev/null)
-        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.phase}' 2>/dev/null)
+        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
         
         if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
@@ -303,6 +303,10 @@ deploy_resources() {
     
     echo "Deploying controller resources..."
     kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} apply -f test/cases/04_scale-override/controller.yaml
+    
+    # Force an immediate sync
+    echo "Forcing an immediate sync..."
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} annotate namespacemapping -n dr-syncer test04-scale-override dr-syncer.io/sync-now=true --overwrite
 }
 
 # Main test function
@@ -403,16 +407,16 @@ main() {
         print_result "Ingress not found" "fail"
     fi
     
-    # Verify Replication status fields
+    # Verify NamespaceMapping status fields
     echo "Verifying replication status..."
     
     # Get status fields
-    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.phase}')
-    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.syncStats.failedSyncs}')
-    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.lastSyncTime}')
-    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.nextSyncTime}')
-    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override -o jsonpath='{.status.syncStats.lastSyncDuration}')
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.nextSyncTime}')
+    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override -o jsonpath='{.status.syncStats.lastSyncDuration}')
     
     # Verify phase and sync counts
     if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then
@@ -441,7 +445,7 @@ main() {
     print_result "Detailed resource status" "pass"
     
     # Verify printer columns
-    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication scale-override)
+    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test04-scale-override)
     if echo "$columns" | grep -q "Completed" && echo "$columns" | grep -q "[0-9]"; then
         print_result "Printer columns visible" "pass"
     else

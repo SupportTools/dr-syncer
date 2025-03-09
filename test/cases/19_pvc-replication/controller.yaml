@@ -43,8 +43,8 @@ spec:
       
     # Storage class mappings (if needed)
     storageClassMappings:
-      - from: standard
-        to: standard-dest
+      - from: do-block-storage
+        to: do-block-storage-retain
         
     # Preserve volume attributes for better fidelity
     preserveVolumeAttributes: true

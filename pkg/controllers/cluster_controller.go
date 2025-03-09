@@ -273,7 +273,7 @@ func (r *RemoteClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Set up a controller that watches RemoteCluster resources
 	// We also watch for Secret resources referenced by RemoteCluster's KubeconfigSecretRef
 	// to trigger reconciliation when the kubeconfig secret changes
-	
+
 	// Create a predicate that ignores status-only updates
 	statusChangePredicate := predicate.Or(
 		// Reconcile on Create events
@@ -298,7 +298,7 @@ func (r *RemoteClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			},
 		},
 	)
-	
+
 	return ctrl.NewControllerManagedBy(mgr).
 		// Watch RemoteCluster but only trigger reconciliation for spec changes, not status changes
 		For(&drv1alpha1.RemoteCluster{}, builder.WithPredicates(statusChangePredicate)).

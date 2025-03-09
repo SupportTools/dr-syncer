@@ -536,12 +536,12 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 		var keyUsed string
 		var keyType string
 
-	// Try with different key types
-	possibleKeys := []interface{}{
-		contextkeys.SyncerKey,           // shared key (type contextkeys.ContextKey)
-		contextkeys.SyncerKey.String(),  // as string
-		"pvcsync",                       // string literal
-	}
+		// Try with different key types
+		possibleKeys := []interface{}{
+			contextkeys.SyncerKey,          // shared key (type contextkeys.ContextKey)
+			contextkeys.SyncerKey.String(), // as string
+			"pvcsync",                      // string literal
+		}
 
 		for _, key := range possibleKeys {
 			if value := ctx.Value(key); value != nil {

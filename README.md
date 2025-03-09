@@ -1,18 +1,145 @@
 # DR-Syncer
 
-DR-Syncer is a Kubernetes operator for disaster recovery that synchronizes resources between Kubernetes clusters.
+DR-Syncer is a Kubernetes controller designed to automate and simplify disaster recovery synchronization between Kubernetes clusters.
 
-## Overview
+## Introduction and Problem Statement
 
-This controller synchronizes Kubernetes resources across clusters enabling disaster recovery and multi-cluster operations. It supports continuous sync mode and scheduled sync operations for PVCs, deployments, and other cluster resources.
+Organizations running Kubernetes in production face several challenges when establishing and maintaining disaster recovery environments:
 
-## Features
+1. **Manual Configuration Burden**
+   - Time-consuming manual setup of DR environments
+   - Error-prone resource copying
+   - Inconsistent state between clusters
 
-- Cross-cluster resource synchronization
-- Persistent Volume Claim (PVC) data replication
-- Scheduled and continuous sync modes
-- Resource filtering and transformation
-- Automatic backoff and retry mechanisms
+2. **Resource Management Complexity**
+   - Difficult tracking of which resources need replication
+   - Challenges with resource version management
+   - Selective resource synchronization complications
+
+3. **Operational Overhead**
+   - Frequent manual intervention required for updates
+   - Lack of automation in DR processes
+   - Time-intensive DR maintenance and testing
+
+DR-Syncer addresses these challenges by providing automated, scheduled synchronization of resources from source namespaces to destination namespaces in remote clusters. It enables reliable disaster recovery setups with minimal operational overhead.
+
+## How It Works
+
+DR-Syncer follows the Kubernetes operator pattern:
+
+1. **Custom Resources**
+   - `RemoteCluster`: Defines remote cluster configuration and authentication
+   - `Replication`: Defines synchronization configuration and resource filtering
+
+2. **Reconciliation Flow**
+   - Controller watches for custom resource changes
+   - Compares desired state with actual state in remote clusters
+   - Executes synchronization operations when discrepancies are found
+   - Updates status and metrics
+
+3. **Synchronization Process**
+   - Resources are filtered based on type and exclusion rules
+   - Resources are transformed as needed (e.g., scaling deployments to zero)
+   - Resources are applied to remote clusters
+   - Status is updated with synchronization results
+
+## Key Features
+
+### Resource Synchronization
+- Synchronizes multiple resource types (ConfigMaps, Secrets, Deployments, Services, Ingresses, PVCs)
+- Maintains resource state and metadata across clusters
+- Handles immutable fields and resource versions
+
+### Deployment Strategies
+- Zero replicas in DR cluster by default (preventing resource consumption)
+- Scale override capability via labels (`dr-syncer.io/scale-override`)
+- Original replica count preservation (stored in annotations)
+
+### Multiple Synchronization Modes
+- Manual sync (on-demand)
+- Scheduled sync (cron-based)
+- Continuous sync (real-time monitoring)
+
+### Resource Management
+- Type-based filtering (include/exclude specific resource types)
+- Label-based exclusion (`dr-syncer.io/ignore` label)
+- Namespace mapping between source and destination clusters
+- Service and Ingress handling with network configuration adaptation
+
+### PVC Data Replication
+- Cross-cluster PVC data synchronization using rsync
+- Secure SSH-based transfer mechanism
+- Storage class mapping for different cluster environments
+- Access mode mapping for different storage requirements
+- Volume size handling and attribute preservation
+
+### Security and Operations
+- Multi-cluster support with secure authentication
+- Comprehensive status reporting and metrics
+- Health monitoring and readiness checks
+- Leader election for high availability
+
+## Architecture Overview
+
+### Controller Components
+- **Manager**: Handles controller lifecycle and shared dependencies
+- **Reconcilers**: Implement controller business logic for custom resources
+- **Clients**: Interact with Kubernetes API in source and remote clusters
+- **Custom Resources**: Define configuration and state for synchronization
+
+### PVC Sync Architecture
+- **Agent DaemonSet**: Deployed on remote clusters with SSH/rsync capability
+- **SSH Security Model**: Secure key management with proper access restrictions
+- **Direct Access Pattern**: Agent pod accesses PVCs directly without root access
+- **Data Flow**: Secure rsync over SSH between controller and agent
+
+## Quick Start
+
+### Installation with Helm
+
+```bash
+# Add the DR-Syncer Helm repository
+helm repo add dr-syncer https://supporttools.github.io/dr-syncer/charts
+
+# Update repositories
+helm repo update
+
+# Install DR-Syncer
+helm install dr-syncer dr-syncer/dr-syncer \
+  --namespace dr-syncer-system \
+  --create-namespace
+```
+
+### Basic Configuration Example
+
+```yaml
+# Define a remote cluster
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: dr-cluster
+spec:
+  kubeconfigSecret: dr-cluster-kubeconfig
+  
+---
+# Define a replication
+apiVersion: dr-syncer.io/v1alpha1
+kind: Replication
+metadata:
+  name: production-to-dr
+spec:
+  sourceNamespace: production
+  destinationNamespace: production-dr
+  destinationCluster: dr-cluster
+  resourceTypes:
+    - ConfigMap
+    - Secret
+    - Deployment
+    - Service
+  schedule: "0 */6 * * *"  # Every 6 hours
+```
+
+For more comprehensive documentation, visit our [documentation site](https://supporttools.github.io/dr-syncer/).
 
 ## Development
 
@@ -31,12 +158,6 @@ The script handles:
 - Setting the KUBECONFIG environment variable
 - Restoring the original deployment when you exit
 
-### Architectural Notes
-
-- The controller implements exponential backoff with jitter to prevent API server flooding during failure conditions
-- Concurrent operations are managed via a configurable worker pool
-- Thread-safe mechanisms are used to handle status updates and prevent race conditions
-
 ### Build and Deploy
 
 Build the container:
@@ -50,6 +171,12 @@ Deploy the controller:
 ```bash
 make deploy
 ```
+
+### Architectural Notes
+
+- The controller implements exponential backoff with jitter to prevent API server flooding during failure conditions
+- Concurrent operations are managed via a configurable worker pool
+- Thread-safe mechanisms are used to handle status updates and prevent race conditions
 
 ### Release Process
 
@@ -102,18 +229,62 @@ For pre-release versions, use formats like:
 
 ### Common Issues
 
-**Log Spamming**: 
+#### Log Spamming
 If the remote cluster API calls seem excessive, check the logs for rapid cycling between states. The controller implements exponential backoff to reduce API load during failures.
 
-**Authentication Errors**:
+#### Authentication Errors
 When running locally, ensure you're using the proper kubeconfig with the necessary permissions:
-```
+```bash
 ./run-local.sh /path/to/controller/kubeconfig
 ```
 
-## Contributing
+#### Resource Synchronization Failures
+Check the status of the Replication resource for error messages:
+```bash
+kubectl get replications -n <namespace> -o yaml
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details on contributing to DR-Syncer.
+#### PVC Sync Issues
+Verify the agent DaemonSet is running on remote clusters:
+```bash
+kubectl get daemonset -n dr-syncer-system --context=<remote-context>
+```
+
+Check agent logs for rsync or SSH errors:
+```bash
+kubectl logs -n dr-syncer-system -l app=dr-syncer-agent --context=<remote-context> --tail=100
+```
+
+#### SSH Key Management
+If experiencing SSH authentication problems, check the secrets containing SSH keys:
+```bash
+kubectl get secret <remote-cluster>-ssh-key -n dr-syncer-system -o yaml
+```
+
+### Viewing Logs Properly
+Always use `--tail` flag to limit log output:
+```bash
+kubectl logs pod-name --tail=100  # Last 100 lines
+```
+
+Never use `-f/--follow` in automated scripts or tests as these commands will never return and cause scripts to hang.
+
+## Community and Contributing
+
+We welcome contributions from the community! Here's how you can get involved:
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on contributing to DR-Syncer, including:
+- Code contribution guidelines
+- Pull request process
+- Development environment setup
+- Testing requirements
+
+### Communication
+
+- GitHub Issues: Bug reports, feature requests, and discussions
+- Slack Channel: #dr-syncer on Kubernetes community Slack
 
 ## License
 

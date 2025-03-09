@@ -90,7 +90,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  storageClassName: do-block-storage
+  storageClassName: freenas-iscsi-csi
 ---
 # Network Resources - Scheduled Mode
 apiVersion: v1

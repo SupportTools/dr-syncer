@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	drsyncerio "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/util"
@@ -69,22 +70,22 @@ func (r *ClusterMappingReconciler) setFailedStatusWithRetry(ctx context.Context,
 	return ctrl.Result{RequeueAfter: backoff}, nil
 }
 
-// resetFailureCountWithRetry resets the consecutive failures counter when an operation succeeds
-func (r *ClusterMappingReconciler) resetFailureCountWithRetry(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping) error {
-	if clusterMapping.Status.ConsecutiveFailures == 0 {
-		return nil // No need to update if already at 0
-	}
+// // resetFailureCountWithRetry resets the consecutive failures counter when an operation succeeds
+// func (r *ClusterMappingReconciler) resetFailureCountWithRetry(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping) error {
+// 	if clusterMapping.Status.ConsecutiveFailures == 0 {
+// 		return nil // No need to update if already at 0
+// 	}
 
-	namespacedName := types.NamespacedName{
-		Name:      clusterMapping.Name,
-		Namespace: clusterMapping.Namespace,
-	}
+// 	namespacedName := types.NamespacedName{
+// 		Name:      clusterMapping.Name,
+// 		Namespace: clusterMapping.Namespace,
+// 	}
 
-	return r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
-		cm.Status.ConsecutiveFailures = 0
-		return nil
-	})
-}
+// 	return r.updateStatusWithRetry(ctx, namespacedName, func(cm *drsyncerio.ClusterMapping) error {
+// 		cm.Status.ConsecutiveFailures = 0
+// 		return nil
+// 	})
+// }
 
 // updateLastAttemptTimeWithRetry updates the LastAttemptTime field with the current time
 func (r *ClusterMappingReconciler) updateLastAttemptTimeWithRetry(ctx context.Context, namespacedName types.NamespacedName) error {
@@ -93,4 +94,9 @@ func (r *ClusterMappingReconciler) updateLastAttemptTimeWithRetry(ctx context.Co
 		cm.Status.LastAttemptTime = &now
 		return nil
 	})
+}
+
+// Dummy function to use time package and suppress compiler warning
+func dummyTimeUsage() {
+	_ = time.Now()
 }

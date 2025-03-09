@@ -402,8 +402,8 @@ wait_for_replication() {
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
         # Check phase and conditions
-        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.phase}' 2>/dev/null)
-        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.phase}' 2>/dev/null)
+        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
         
         if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
@@ -485,7 +485,7 @@ main() {
     # Verify storage class mapping PVC
     if verify_resource "dr-sync-test-case20" "pvc" "test-pvc-storage-class"; then
         if verify_pvc "dr-sync-test-case20" "test-pvc-storage-class"; then
-            if verify_storage_class "dr-sync-test-case20" "test-pvc-storage-class" "do-block-storage-xfs" "do-block-storage-xfs-retain"; then
+            if verify_storage_class "dr-sync-test-case20" "test-pvc-storage-class" "do-block-storage" "do-block-storage-retain"; then
                 print_result "Storage class mapping PVC fully verified" "pass"
                 
                 # Test data replication by writing timestamp to PVCs
@@ -572,16 +572,16 @@ main() {
         print_result "Service not found" "fail"
     fi
     
-    # Verify Replication status fields
+    # Verify NamespaceMapping status fields
     echo "Verifying replication status..."
     
     # Get status fields
-    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.phase}')
-    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.syncStats.failedSyncs}')
-    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.lastSyncTime}')
-    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.nextSyncTime}')
-    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication pvc-storage-class-mapping -o jsonpath='{.status.syncStats.lastSyncDuration}')
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.nextSyncTime}')
+    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-storage-class-mapping -o jsonpath='{.status.syncStats.lastSyncDuration}')
     
     # Verify phase and sync counts
     if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then

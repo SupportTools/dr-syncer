@@ -1,7 +1,7 @@
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
-  name: ingress-handling
+  name: test07-ingress-handling
   namespace: dr-syncer
   labels:
     dr-syncer.io/test-case: "07"
@@ -14,7 +14,7 @@ spec:
   
   # Cluster configuration
   clusterMappingRef:
-    name: nyc3-to-sfo3
+    name: prod-to-dr
     namespace: dr-syncer
   sourceNamespace: dr-sync-test-case07
   destinationNamespace: dr-sync-test-case07

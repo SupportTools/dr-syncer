@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
-	controller "github.com/supporttools/dr-syncer/pkg/controller/replication"
 	"github.com/supporttools/dr-syncer/pkg/contextkeys"
+	controller "github.com/supporttools/dr-syncer/pkg/controller/replication"
 	syncerrors "github.com/supporttools/dr-syncer/pkg/controllers/syncer/errors"
 	"github.com/supporttools/dr-syncer/pkg/controllers/syncer/validation"
 	"github.com/supporttools/dr-syncer/pkg/controllers/utils"
@@ -526,20 +526,20 @@ func (r *ResourceSyncer) getPVCSyncer(ctx context.Context) (*controller.PVCSynce
 
 	// Create a new context with the REST configs stored using multiple key formats
 	// to ensure compatibility with different parts of the codebase
-	
+
 	// Use both package-specific constants and contextkeys constants
 	newCtx := context.WithValue(ctx, controller.K8sConfigKey, r.destConfig)
-	newCtx = context.WithValue(newCtx, "k8s-config", r.destConfig)                // string literal
-	newCtx = context.WithValue(newCtx, contextkeys.K8sConfigKey, r.destConfig)    // shared key
-	newCtx = context.WithValue(newCtx, contextkeys.ConfigKey, r.destConfig)       // alias
+	newCtx = context.WithValue(newCtx, "k8s-config", r.destConfig)             // string literal
+	newCtx = context.WithValue(newCtx, contextkeys.K8sConfigKey, r.destConfig) // shared key
+	newCtx = context.WithValue(newCtx, contextkeys.ConfigKey, r.destConfig)    // alias
 
 	// Store the syncer with multiple key formats
 	newCtx = context.WithValue(newCtx, controller.SyncerKey, syncer)
-	newCtx = context.WithValue(newCtx, "pvcsync", syncer)                         // string literal
-	newCtx = context.WithValue(newCtx, contextkeys.SyncerKey, syncer)             // shared key
-	
+	newCtx = context.WithValue(newCtx, "pvcsync", syncer)             // string literal
+	newCtx = context.WithValue(newCtx, contextkeys.SyncerKey, syncer) // shared key
+
 	// Log what we're storing in the context
-	log.Info(fmt.Sprintf("Storing configs in context. Source host: %s, Destination host: %s", 
+	log.Info(fmt.Sprintf("Storing configs in context. Source host: %s, Destination host: %s",
 		r.sourceConfig.Host, r.destConfig.Host))
 
 	// Replace the original context

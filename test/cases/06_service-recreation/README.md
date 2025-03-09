@@ -6,7 +6,9 @@ This test case verifies the DR Syncer controller's ability to properly handle se
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Uses wildcard resource type selection:
   ```yaml
   resourceTypes:
@@ -51,7 +53,7 @@ Deploys test resources in the source namespace:
    - Ensures backend pods are properly referenced
 
 5. Status Updates
-   - Verifies the Replication resource status is updated correctly
+   - Verifies the NamespaceMapping resource status is updated correctly
    - Checks for "Synced: True" condition
    - Verifies service-specific status fields
 

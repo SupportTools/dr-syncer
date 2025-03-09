@@ -40,7 +40,7 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: standard
+  storageClassName: do-block-storage-retain
   hostPath:
     path: /mnt/data/standard
     type: DirectoryOrCreate
@@ -63,7 +63,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
-  storageClassName: standard
+  storageClassName: do-block-storage-retain
   volumeName: test-standard-pv
 ---
 # Premium PVC with Access Mode Mapping
@@ -88,9 +88,9 @@ spec:
     limits:
       storage: 30Gi
       iops: "20000"
-  storageClassName: premium
+  storageClassName: do-block-storage-retain
 ---
-# Local PV with Node Affinity
+# Local PV (without Node Affinity)
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -104,17 +104,10 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: local-storage
-  local:
+  storageClassName: do-block-storage-retain
+  hostPath:
     path: /mnt/data/local
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - node-1
+    type: DirectoryOrCreate
 ---
 # Local PVC with Node Affinity
 apiVersion: v1
@@ -134,10 +127,10 @@ spec:
   resources:
     requests:
       storage: 50Gi
-  storageClassName: local-storage
+  storageClassName: do-block-storage-retain
   volumeName: test-local-pv
 ---
-# Block PV with Volume Mode
+# Block PV with Volume Mode (without Node Affinity)
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -151,18 +144,11 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: block-storage
+  storageClassName: do-block-storage-retain
   volumeMode: Block
-  local:
-    path: /dev/sdb
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - node-2
+  hostPath:
+    path: /tmp/testblockdevice
+    type: FileOrCreate
 ---
 # Block PVC with Volume Mode
 apiVersion: v1
@@ -182,7 +168,7 @@ spec:
   resources:
     requests:
       storage: 100Gi
-  storageClassName: block-storage
+  storageClassName: do-block-storage-retain
   volumeMode: Block
   volumeName: test-block-pv
 ---
@@ -208,7 +194,7 @@ spec:
     limits:
       storage: 300Gi
       iops: "30000"
-  storageClassName: premium
+  storageClassName: do-block-storage-retain
 ---
 # Static PV with Mount Options
 apiVersion: v1
@@ -224,7 +210,7 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: standard
+  storageClassName: do-block-storage-retain
   mountOptions:
     - noatime
     - nodiratime
@@ -252,7 +238,7 @@ spec:
   resources:
     requests:
       storage: 150Gi
-  storageClassName: standard
+  storageClassName: do-block-storage-retain
   volumeName: test-static-pv
 ---
 # Deployment using all PVCs

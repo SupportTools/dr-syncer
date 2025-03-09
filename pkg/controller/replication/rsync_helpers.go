@@ -546,17 +546,17 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 
 	// First try: Use df to find the mount path - most efficient approach
 	log.WithFields(logrus.Fields{
-		"pvc_name":   pvcName,
-		"pv_name":    pvc.Spec.VolumeName,
-		"agent_pod":  agentPod.Name,
-		"approach":   "df-grep",
+		"pvc_name":  pvcName,
+		"pv_name":   pvc.Spec.VolumeName,
+		"agent_pod": agentPod.Name,
+		"approach":  "df-grep",
 	}).Info(logging.LogTagDetail + " Trying df approach to find mount path")
 
 	// Execute df command with timeout
 	dfCmd := []string{
 		"bash",
 		"-c",
-		fmt.Sprintf("df | grep -E '%s|%s' | awk '{print $6}' | head -n 1", 
+		fmt.Sprintf("df | grep -E '%s|%s' | awk '{print $6}' | head -n 1",
 			pvc.Spec.VolumeName, pvcName),
 	}
 
@@ -566,7 +566,7 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 
 	dfStdout, dfStderr, dfErr := p.execCommandOnPod(dfCtx, agentPod.Namespace, agentPod.Name, dfCmd)
 	mountPath := strings.TrimSpace(dfStdout)
-	
+
 	if mountPath != "" {
 		log.WithFields(logrus.Fields{
 			"pvc_name":   pvcName,
@@ -579,10 +579,10 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 
 	// If df approach failed, try the 'mount' command - moderately efficient
 	log.WithFields(logrus.Fields{
-		"pvc_name":   pvcName,
-		"pv_name":    pvc.Spec.VolumeName,
-		"agent_pod":  agentPod.Name,
-		"approach":   "mount-grep",
+		"pvc_name":  pvcName,
+		"pv_name":   pvc.Spec.VolumeName,
+		"agent_pod": agentPod.Name,
+		"approach":  "mount-grep",
 	}).Info(logging.LogTagDetail + " Trying mount approach to find mount path")
 
 	mountCmd := []string{
@@ -597,7 +597,7 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 
 	mountStdout, mountStderr, mountErr := p.execCommandOnPod(mountCtx, agentPod.Namespace, agentPod.Name, mountCmd)
 	mountPath = strings.TrimSpace(mountStdout)
-	
+
 	if mountPath != "" {
 		log.WithFields(logrus.Fields{
 			"pvc_name":   pvcName,
@@ -610,17 +610,17 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 
 	// Last resort: Use the find command with a strict timeout - least efficient but most thorough
 	log.WithFields(logrus.Fields{
-		"pvc_name":   pvcName,
-		"pv_name":    pvc.Spec.VolumeName,
-		"agent_pod":  agentPod.Name,
-		"approach":   "find-command",
+		"pvc_name":  pvcName,
+		"pv_name":   pvc.Spec.VolumeName,
+		"agent_pod": agentPod.Name,
+		"approach":  "find-command",
 	}).Info(logging.LogTagDetail + " Trying find approach to find mount path (with timeout)")
 
 	// Use a time-limited find command to avoid getting stuck
 	findCmd := []string{
 		"bash",
 		"-c",
-		fmt.Sprintf("timeout 30s find /var/lib/kubelet/pods -name %s -type d -path '*/volumes/*' | grep -v plugins | head -n 1", 
+		fmt.Sprintf("timeout 30s find /var/lib/kubelet/pods -name %s -type d -path '*/volumes/*' | grep -v plugins | head -n 1",
 			pvc.Spec.VolumeName),
 	}
 
@@ -634,16 +634,16 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 	if mountPath == "" {
 		// If we still haven't found anything, log all our attempts and return an error
 		log.WithFields(logrus.Fields{
-			"namespace":   namespace,
-			"pvc_name":    pvcName,
-			"pv_name":     pvc.Spec.VolumeName,
-			"agent_pod":   agentPod.Name,
-			"df_error":    dfErr,
-			"df_stderr":   dfStderr,
-			"mount_error": mountErr,
+			"namespace":    namespace,
+			"pvc_name":     pvcName,
+			"pv_name":      pvc.Spec.VolumeName,
+			"agent_pod":    agentPod.Name,
+			"df_error":     dfErr,
+			"df_stderr":    dfStderr,
+			"mount_error":  mountErr,
 			"mount_stderr": mountStderr,
-			"find_error":  findErr, 
-			"find_stderr": findStderr,
+			"find_error":   findErr,
+			"find_stderr":  findStderr,
 		}).Error(logging.LogTagError + " Mount path not found for PVC after trying all methods")
 		return "", fmt.Errorf("mount path not found for PVC %s/%s after trying multiple methods", namespace, pvcName)
 	}

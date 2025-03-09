@@ -3,10 +3,22 @@
 ## Purpose
 This test case verifies the DR Syncer controller's ability to handle multiple PVC features simultaneously, ensuring that all features work correctly in combination. It tests the interaction between storage class mapping, access mode mapping, attribute preservation, and PV synchronization to ensure they function properly together.
 
+## Implementation Notes
+This test case validates the combined functionality of:
+1. Storage class mapping from generic classes to DO-specific storage classes
+2. Access mode mapping (ReadOnlyMany -> ReadWriteMany)
+3. Volume attributes preservation
+4. PV synchronization with volume name preservation
+5. Multiple PV types - standard, static, local, and block volumes
+
+The test has been designed to be resilient against pre-existing stuck PVs and includes cleanup mechanisms to force delete resources that might be stuck in terminating states.
+
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Uses wildcard resource type selection:
   ```yaml
   resourceTypes:
@@ -148,7 +160,7 @@ Deploys test resources in the source namespace:
    - Verifies configuration merging
 
 9. Status Updates
-   - Verifies the Replication resource status
+   - Verifies the NamespaceMapping resource status
    - Checks for "Synced: True" condition
    - Verifies PVC-specific status fields
    - Monitors binding progress

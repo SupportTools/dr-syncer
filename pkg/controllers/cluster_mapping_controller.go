@@ -894,7 +894,7 @@ func (r *ClusterMappingReconciler) findClusterMappingsForSecret(ctx context.Cont
 			if secretNamespace == "" {
 				secretNamespace = cm.Namespace
 			}
-			
+
 			if cm.Spec.SSHKeySecretRef.Name == secret.Name && secretNamespace == secret.Namespace {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: types.NamespacedName{

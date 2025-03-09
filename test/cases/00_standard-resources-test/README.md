@@ -6,7 +6,9 @@ This test case verifies the basic resource synchronization functionality of the 
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace to define replication
 - Explicitly specifies resource types to sync:
   - ConfigMaps
   - Secrets

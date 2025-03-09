@@ -1,13 +1,13 @@
-# Test Case 08: Basic Namespace Mapping
+# Test Case 09: Custom Namespace Mapping
 
 ## Purpose
-This test case verifies the DR Syncer controller's ability to properly handle basic namespace mapping functionality. It tests direct namespace-to-namespace mapping with identical names in source and destination, ensuring resources are correctly synchronized between clusters.
+This test case verifies the DR Syncer controller's ability to properly handle custom destination namespace mapping functionality. It tests mapping a source namespace to a destination namespace with a different name, ensuring resources are correctly synchronized between clusters.
 
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
 - Creates a NamespaceMapping resource in the `dr-syncer` namespace
-- Maps `namespace-prod` directly to `namespace-dr`
+- Maps `namespace-prod` directly to `namespace-prod-dr` (using a suffix naming convention)
 - Uses the ClusterMapping reference `prod-to-dr`
 - Uses wildcard resource type selection:
   ```yaml
@@ -28,9 +28,10 @@ Deploys test resources in the source namespace:
 
 ## What is Tested
 
-1. Direct Namespace Mapping
-   - Verifies mapping from `namespace-prod` to `namespace-dr`
-   - Ensures namespace is created in DR cluster
+1. Custom Destination Namespace Mapping
+   - Verifies direct mapping to a custom destination namespace name
+   - Tests explicit naming with suffix (`-dr`)
+   - Ensures namespace is created in DR cluster with the custom name
    - Validates that labels and annotations are preserved
 
 2. Resource Synchronization
@@ -54,15 +55,15 @@ Deploys test resources in the source namespace:
 ## How to Run
 ```bash
 # Run this test case only
-./test/run-tests.sh --test 08
+./test/run-tests.sh --test 09
 
 # Run as part of all tests
 ./test/run-tests.sh
 ```
 
 ## Expected Results
-- Direct namespace mapping should work correctly
-- All resources should be synchronized to DR cluster
+- Custom destination namespace mapping should work correctly
+- All resources should be synchronized to DR cluster with the custom namespace name
 - Namespace metadata should be preserved according to configuration
 - Deployments should be scaled to zero in the DR environment
 - Replication status should show successful synchronization

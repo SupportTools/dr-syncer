@@ -42,14 +42,14 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	// Simple default rsync options
 	rsyncOptions := []string{
-		"-avz",                  // Archive mode, verbose, compress
-		"--progress",            // Show progress during transfer
-		"--delete",              // Delete files on destination that don't exist on source
+		"-avz",       // Archive mode, verbose, compress
+		"--progress", // Show progress during transfer
+		"--delete",   // Delete files on destination that don't exist on source
 	}
-	
+
 	// By default we won't use checksums for faster performance
 	useChecksum := false
-	
+
 	// Get NamespaceMapping to check for bandwidth limit and custom options
 	var nm drv1alpha1.NamespaceMapping
 	nmKey := client.ObjectKey{Name: fmt.Sprintf("%s-%s", p.SourceNamespace, p.DestinationNamespace)}
@@ -64,7 +64,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 				})
 				entry.Debug(logging.LogTagDetail + " Adding custom rsync options from NamespaceMapping")
 				rsyncOptions = append(rsyncOptions, customOptions...)
-				
+
 				// Check if any custom option includes checksum mode
 				for _, opt := range customOptions {
 					if opt == "--checksum" {
@@ -74,7 +74,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 					}
 				}
 			}
-			
+
 			// Check for thorough flag in rsync options via timeout
 			if nm.Spec.PVCConfig.DataSyncConfig.Timeout != nil {
 				defaultDuration, _ := time.ParseDuration("30m")
@@ -86,7 +86,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 					entry.Debug(logging.LogTagDetail + " Longer timeout requested, enabling checksum mode")
 				}
 			}
-			
+
 			// Check for bandwidth limit
 			if nm.Spec.PVCConfig.DataSyncConfig.BandwidthLimit != nil {
 				bwLimit := *nm.Spec.PVCConfig.DataSyncConfig.BandwidthLimit
@@ -105,7 +105,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		})
 		entry.Debug(logging.LogTagDetail + " Failed to get NamespaceMapping for custom options, continuing with defaults")
 	}
-	
+
 	// Add checksum option if thorough verification needed
 	if useChecksum {
 		rsyncOptions = append(rsyncOptions, "--checksum")
@@ -205,7 +205,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		// Set a minimal timeout since we're not capturing the full output
 		execCtx, cancel := context.WithTimeout(pvcSyncCtx, 30*time.Second)
 		defer cancel()
-		
+
 		_, stderr, execErr := rsyncpod.ExecuteCommandInPod(execCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
 
 		if execErr != nil {
@@ -240,14 +240,14 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	// Since we're not capturing rsync output anymore, we can't parse transfer stats
 	// Instead, we'll set reasonable placeholder values with correct types
-	bytesTransferred := int64(1000)  // bytes as int64
-	filesTransferred := 10           // files as int
+	bytesTransferred := int64(1000) // bytes as int64
+	filesTransferred := 10          // files as int
 
 	entry = log.WithFields(logrus.Fields{
-		"deployment":        destDeployment.Name,
-		"pod_name":          destDeployment.PodName,
-		"node_ip":           nodeIP,
-		"mount_path":        mountPath,
+		"deployment": destDeployment.Name,
+		"pod_name":   destDeployment.PodName,
+		"node_ip":    nodeIP,
+		"mount_path": mountPath,
 	})
 	entry.Info(logging.LogTagInfo + " Rsync command executed successfully. See pod logs for details.")
 

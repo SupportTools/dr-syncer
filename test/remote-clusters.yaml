@@ -2,11 +2,11 @@
 apiVersion: dr-syncer.io/v1alpha1
 kind: RemoteCluster
 metadata:
-  name: dr-syncer-nyc3
+  name: prod
   namespace: dr-syncer
 spec:
   kubeconfigSecretRef:
-    name: dr-syncer-nyc3-kubeconfig
+    name: prod
     namespace: dr-syncer
   defaultSchedule: "*/5 * * * *" # Every 5 minutes
   defaultResourceTypes:
@@ -45,11 +45,11 @@ spec:
 apiVersion: dr-syncer.io/v1alpha1
 kind: RemoteCluster
 metadata:
-  name: dr-syncer-sfo3
+  name: dr
   namespace: dr-syncer
 spec:
   kubeconfigSecretRef:
-    name: dr-syncer-sfo3-kubeconfig
+    name: dr
     namespace: dr-syncer
   defaultSchedule: "*/5 * * * *" # Every 5 minutes
   defaultResourceTypes:
@@ -84,26 +84,15 @@ spec:
           memory: "128Mi"
       priorityClassName: "system-node-critical"
       privileged: true
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: ClusterMapping
-metadata:
-  name: nyc3-to-sfo3
-  namespace: dr-syncer
-spec:
-  sourceCluster: dr-syncer-nyc3
-  targetCluster: dr-syncer-sfo3
-  verifyConnectivity: true
-  connectivityTimeoutSeconds: 60
 ---
 apiVersion: dr-syncer.io/v1alpha1
 kind: RemoteCluster
 metadata:
-  name: dr-syncer-tor1
+  name: edge
   namespace: dr-syncer
 spec:
   kubeconfigSecretRef:
-    name: dr-syncer-tor1-kubeconfig
+    name: edge
     namespace: dr-syncer
   defaultSchedule: "*/5 * * * *" # Every 5 minutes
   defaultResourceTypes:
@@ -142,32 +131,66 @@ spec:
 apiVersion: dr-syncer.io/v1alpha1
 kind: ClusterMapping
 metadata:
-  name: sfo3-to-tor1
+  name: prod-to-dr
   namespace: dr-syncer
 spec:
-  sourceCluster: dr-syncer-sfo3
-  targetCluster: dr-syncer-tor1
+  sourceCluster: prod
+  targetCluster: dr
   verifyConnectivity: true
   connectivityTimeoutSeconds: 60
 ---
 apiVersion: dr-syncer.io/v1alpha1
 kind: ClusterMapping
 metadata:
-  name: tor1-to-nyc3
+  name: prod-to-edge
   namespace: dr-syncer
 spec:
-  sourceCluster: dr-syncer-tor1
-  targetCluster: dr-syncer-nyc3
+  sourceCluster: prod
+  targetCluster: edge
   verifyConnectivity: true
   connectivityTimeoutSeconds: 60
 ---
 apiVersion: dr-syncer.io/v1alpha1
 kind: ClusterMapping
 metadata:
-  name: sfo3-to-nyc3
+  name: dr-to-prod
   namespace: dr-syncer
 spec:
-  sourceCluster: dr-syncer-sfo3
-  targetCluster: dr-syncer-nyc3
+  sourceCluster: dr
+  targetCluster: prod
   verifyConnectivity: true
   connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: dr-to-edge
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr
+  targetCluster: edge
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: edge-to-prod
+  namespace: dr-syncer
+spec:
+  sourceCluster: edge
+  targetCluster: prod
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: edge-to-dr
+  namespace: dr-syncer
+spec:
+  sourceCluster: edge
+  targetCluster: edge
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---

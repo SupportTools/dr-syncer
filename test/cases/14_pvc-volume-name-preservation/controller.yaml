@@ -5,8 +5,8 @@ metadata:
   name: test-remote-nyc3
   namespace: dr-syncer
   labels:
-    dr-syncer.io/test-case: "15"
-    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test-case: "14"
+    dr-syncer.io/test-name: "pvc-sync-persistent-volumes"
     dr-syncer.io/test: "true"
 spec:
   kubeconfigSecretRef:
@@ -24,8 +24,8 @@ metadata:
   name: test-remote-sfo3
   namespace: dr-syncer
   labels:
-    dr-syncer.io/test-case: "15"
-    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test-case: "14"
+    dr-syncer.io/test-name: "pvc-sync-persistent-volumes"
     dr-syncer.io/test: "true"
 spec:
   kubeconfigSecretRef:
@@ -43,8 +43,8 @@ metadata:
   name: test-nyc3-to-sfo3
   namespace: dr-syncer
   labels:
-    dr-syncer.io/test-case: "15"
-    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test-case: "14"
+    dr-syncer.io/test-name: "pvc-sync-persistent-volumes"
     dr-syncer.io/test: "true"
 spec:
   sourceCluster: test-remote-nyc3
@@ -54,11 +54,11 @@ spec:
 apiVersion: dr-syncer.io/v1alpha1
 kind: NamespaceMapping
 metadata:
-  name: pvc-combined-features
+  name: pvc-sync-persistent-volumes
   namespace: dr-syncer
   labels:
-    dr-syncer.io/test-case: "15"
-    dr-syncer.io/test-name: "pvc-combined-features"
+    dr-syncer.io/test-case: "14"
+    dr-syncer.io/test-name: "pvc-sync-persistent-volumes"
     dr-syncer.io/test: "true"
 spec:
   # Use scheduled mode for predictable testing
@@ -69,8 +69,8 @@ spec:
   clusterMappingRef:
     name: test-nyc3-to-sfo3
     namespace: dr-syncer
-  sourceNamespace: dr-sync-test-case15
-  destinationNamespace: dr-sync-test-case15
+  sourceNamespace: dr-sync-test-case14
+  destinationNamespace: dr-sync-test-case14
   
   # Namespace configuration
   namespaceConfig:
@@ -91,28 +91,8 @@ spec:
     drainTimeout: 5m
     forceDeleteTimeout: 2m
   
-  # Combined PVC configuration
+  # PVC configuration with PV sync enabled
   pvcConfig:
+    syncPersistentVolumes: true   # Key setting: Sync PVs along with PVCs
     preserveVolumeAttributes: true
-    syncPersistentVolumes: true
-    syncData: false
-    
-    # Storage class mapping - using available storage classes
-    storageClassMappings:
-      - from: standard
-        to: do-block-storage-retain
-      - from: premium
-        to: do-block-storage-retain
-      - from: local-storage
-        to: do-block-storage-retain
-      - from: block-storage
-        to: do-block-storage-retain
-    
-    # Access mode mapping
-    accessModeMappings:
-      - from: ReadWriteOnce
-        to: ReadWriteOnce
-      - from: ReadWriteMany
-        to: ReadWriteMany
-      - from: ReadOnlyMany
-        to: ReadWriteMany
+    syncData: false  # Don't sync data inside PVCs

@@ -25,7 +25,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: do-block-storage-xfs
+  storageClassName: do-block-storage
   volumeMode: Filesystem
 ---
 # Deployment using the storage class PVC

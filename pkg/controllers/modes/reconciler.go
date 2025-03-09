@@ -45,9 +45,9 @@ type ModeReconciler struct {
 }
 
 // NewModeReconciler creates a new ModeReconciler
-func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interface, k8sSource, k8sDest kubernetes.Interface, 
+func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interface, k8sSource, k8sDest kubernetes.Interface,
 	sourceConfig, destConfig *rest.Config, sourceClusterName, destClusterName string) *ModeReconciler {
-	
+
 	// Use defaults if no cluster names provided
 	if sourceClusterName == "" {
 		sourceClusterName = "source"
@@ -55,7 +55,7 @@ func NewModeReconciler(c client.Client, sourceClient, destClient dynamic.Interfa
 	if destClusterName == "" {
 		destClusterName = "destination"
 	}
-	
+
 	return &ModeReconciler{
 		Client:            c,
 		sourceClient:      sourceClient,
@@ -344,7 +344,40 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 		mapping.Spec.SourceCluster, mapping.Spec.SourceNamespace,
 		mapping.Spec.DestinationCluster, mapping.Spec.DestinationNamespace))
 
-	// Always start in Pending state
+	// Check for sync-now or trigger-sync annotation first
+	syncNow := false
+	if mapping.ObjectMeta.Annotations != nil {
+		if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/sync-now"]; ok {
+			syncNow = true
+			log.Info(fmt.Sprintf("detected dr-syncer.io/sync-now annotation for mapping '%s', triggering immediate sync from phase %s",
+				mapping.Name, mapping.Status.Phase))
+		} else if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/trigger-sync"]; ok {
+			// Support both annotation formats for backward compatibility
+			syncNow = true
+			log.Info(fmt.Sprintf("using deprecated dr-syncer.io/trigger-sync annotation for mapping '%s', please use dr-syncer.io/sync-now instead",
+				mapping.Name))
+		}
+	}
+
+	// If syncNow is true, proceed with syncing regardless of current phase
+	if syncNow {
+		log.Info(fmt.Sprintf("sync-now annotation detected for %s, immediately setting state to Running and performing sync",
+			mapping.Name))
+
+		// Update status to Running for sync
+		if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
+			now := metav1.Now()
+			status.Phase = drv1alpha1.SyncPhaseRunning
+			status.LastSyncTime = &now
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Skip the state transition switch and proceed directly to sync
+		goto performSync
+	}
+
+	// Initialize to Pending state if no status is set
 	if mapping.Status.Phase == "" {
 		if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
 			status.Phase = drv1alpha1.SyncPhasePending
@@ -354,34 +387,13 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 		return ctrl.Result{}, nil
 	}
 
-	// Check for sync-now or trigger-sync annotation
-	syncNow := false
-	if mapping.ObjectMeta.Annotations != nil {
-		if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/sync-now"]; ok {
-			syncNow = true
-		} else if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/trigger-sync"]; ok {
-			// Support both annotation formats for backward compatibility
-			syncNow = true
-			log.Info(fmt.Sprintf("using deprecated dr-syncer.io/trigger-sync annotation for mapping '%s', please use dr-syncer.io/sync-now instead", 
-				mapping.Name))
-		}
-	}
-
 	// Handle state transitions
 	switch mapping.Status.Phase {
 	case drv1alpha1.SyncPhasePending:
-		if syncNow {
-			// Move to Running state
-			if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
-				now := metav1.Now()
-				status.Phase = drv1alpha1.SyncPhaseRunning
-				status.LastSyncTime = &now
-			}); err != nil {
-				return ctrl.Result{}, err
-			}
-		} else {
-			return ctrl.Result{}, nil
-		}
+		// In Pending state without sync-now annotation, just wait
+		log.Info(fmt.Sprintf("mapping '%s' in Pending state without sync-now annotation, waiting for manual trigger",
+			mapping.Name))
+		return ctrl.Result{}, nil
 	case drv1alpha1.SyncPhaseCompleted, drv1alpha1.SyncPhaseFailed:
 		// Reset to Pending state
 		if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
@@ -399,9 +411,13 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 		return ctrl.Result{}, nil
 	case drv1alpha1.SyncPhaseRunning:
 		// Continue with sync
+		log.Info(fmt.Sprintf("mapping '%s' already in Running state, continuing with sync",
+			mapping.Name))
 		break
 	default:
 		// Reset to Pending for unknown states
+		log.Info(fmt.Sprintf("mapping '%s' in unknown state '%s', resetting to Pending",
+			mapping.Name, mapping.Status.Phase))
 		if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
 			status.Phase = drv1alpha1.SyncPhasePending
 		}); err != nil {
@@ -409,6 +425,8 @@ func (r *ModeReconciler) ReconcileManual(ctx context.Context, mapping *drv1alpha
 		}
 		return ctrl.Result{}, nil
 	}
+
+performSync:
 
 	// Update status to Running for sync
 	if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {

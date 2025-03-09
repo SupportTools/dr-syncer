@@ -1,95 +1,89 @@
 # Test Case 12: PVC Access Mode Mapping
 
 ## Purpose
-This test case verifies the DR Syncer controller's ability to properly map PVC access modes between source and destination clusters. It tests that PVCs are correctly synchronized while applying configured access mode mappings to ensure appropriate access patterns are used in the DR cluster.
+This test case verifies the DR Syncer controller's ability to map PVC access modes between source and target clusters. It tests that PVCs with different access modes are correctly synchronized to the target cluster with the appropriate access modes according to the configured mappings.
 
 ## Test Configuration
 
 ### Controller Resources (`controller.yaml`)
-- Creates a Replication resource in the `dr-syncer` namespace
+- Creates RemoteCluster resources for the source and target clusters
+- Creates a ClusterMapping resource to connect the source and target clusters
+- Creates a NamespaceMapping resource in the `dr-syncer` namespace
 - Uses wildcard resource type selection:
   ```yaml
   resourceTypes:
     - "*"  # Synchronize all resource types
   ```
-- Access mode mapping configuration:
+- PVC configuration with access mode mapping:
   ```yaml
   pvcConfig:
-    enabled: true
+    syncPersistentVolumes: false
     preserveVolumeAttributes: true
-    accessModeMapping:
-      ReadWriteOnce: ReadWriteOnce     # Keep RWO as is
-      ReadWriteMany: ReadWriteMany     # Keep RWM as is
-      ReadOnlyMany: ReadWriteMany      # Map ROM to RWM
-      ReadWriteOncePod: ReadWriteOnce  # Map RWOP to RWO
+    accessModeMappings:
+    - from: ReadOnlyMany 
+      to: ReadWriteMany
+    - from: ReadWriteOncePod
+      to: ReadWriteOnce
   ```
 
 ### Source Resources (`remote.yaml`)
 Deploys test resources in the source namespace:
-1. ReadWriteOnce PVC:
-   - Uses `ReadWriteOnce` access mode
-   - Single node access
-   - Standard configuration
+1. Different PVC Access Modes:
+   - ReadWriteOnce PVC (`test-pvc-rwo`)
+     * Standard single-node access
+     * Stays as ReadWriteOnce in DR cluster
 
-2. ReadWriteMany PVC:
-   - Uses `ReadWriteMany` access mode
-   - Multi-node access
-   - Shared storage configuration
+   - ReadWriteMany PVC (`test-pvc-rwm`)
+     * Multi-node read-write access
+     * Stays as ReadWriteMany in DR cluster
 
-3. ReadOnlyMany PVC:
-   - Uses `ReadOnlyMany` access mode
-   - Read-only shared access
-   - Distributed configuration
+   - ReadOnlyMany PVC (`test-pvc-rom`)
+     * Multi-node read-only access
+     * Maps to ReadWriteMany in DR cluster
 
-4. ReadWriteOncePod PVC:
-   - Uses `ReadWriteOncePod` access mode
-   - Pod-exclusive access
-   - Performance optimized
+   - ReadWriteOncePod PVC (`test-pvc-rwop`)
+     * Single pod access
+     * Maps to ReadWriteOnce in DR cluster
 
-5. Supporting Resources:
-   - Deployment with PVC mounts
+2. Supporting Resources:
+   - Deployment with PVC mounts for all access modes
    - ConfigMap for application settings
    - Service for network access
 
 ## What is Tested
+
 1. Access Mode Mapping
-   - Verifies access mode translation
-   - Verifies mapping configuration
-   - Verifies default handling
-   - Verifies mode preservation
+   - Verifies ReadWriteOnce is preserved
+   - Verifies ReadWriteMany is preserved
+   - Verifies ReadOnlyMany is mapped to ReadWriteMany
+   - Verifies ReadWriteOncePod is mapped to ReadWriteOnce
 
-2. PVC Creation
-   - Verifies PVCs created with correct modes
-   - Verifies volume attributes preserved
-   - Verifies storage classes maintained
-   - Verifies capacity requests matched
+2. Basic PVC Creation
+   - Verifies PVCs are created in DR cluster
+   - Verifies basic attributes are preserved
+   - Verifies storage requests match
+   - Verifies volume modes are maintained
 
-3. Access Patterns
-   - Verifies ReadWriteOnce handling
-   - Verifies ReadWriteMany handling
-   - Verifies ReadOnlyMany mapping
-   - Verifies ReadWriteOncePod mapping
-
-4. Resource References
+3. Resource References
    - Verifies deployment volume mounts
    - Verifies PVC references
    - Verifies namespace settings
    - Verifies label preservation
 
-5. Status Verification
+4. Status Verification
    - Verifies binding status
    - Verifies phase transitions
    - Verifies capacity tracking
    - Verifies access status
 
-6. Supporting Resources
+5. Supporting Resources
    - Verifies deployment synchronization
    - Verifies configmap synchronization
    - Verifies service synchronization
    - Verifies resource relationships
 
-7. Status Updates
-   - Verifies the Replication resource status
+6. Status Updates
+   - Verifies the NamespaceMapping resource status
    - Checks for "Synced: True" condition
    - Verifies PVC-specific status fields
    - Monitors binding progress
@@ -104,11 +98,11 @@ Deploys test resources in the source namespace:
 ```
 
 ## Expected Results
-- All PVCs should be synchronized to DR cluster
-- Access modes should be correctly mapped
-- Volume attributes should be preserved
-- Storage classes should be maintained
-- Capacity requests should match
-- Deployment mounts should be configured
+- PVCs should be synchronized to DR cluster with appropriate access modes
+- ReadWriteOnce should remain ReadWriteOnce
+- ReadWriteMany should remain ReadWriteMany
+- ReadOnlyMany should be mapped to ReadWriteMany
+- ReadWriteOncePod should be mapped to ReadWriteOnce
+- All other PVC attributes should be preserved
+- Deployment mounts should be configured properly
 - Status should show successful synchronization
-- Each PVC should use its mapped access mode

@@ -66,6 +66,19 @@ verify_metadata() {
     source_metadata=$(echo "$source_metadata" | jq 'del(.annotations["kubectl.kubernetes.io/last-applied-configuration"])')
     dr_metadata=$(echo "$dr_metadata" | jq 'del(.annotations["kubectl.kubernetes.io/last-applied-configuration"])')
     
+    # Handle empty annotations (make sure both source and dr have consistent annotations)
+    if [[ $(echo "$source_metadata" | jq 'has("annotations")') == "true" ]]; then
+        if [[ $(echo "$source_metadata" | jq '.annotations | length') == "0" ]]; then
+            source_metadata=$(echo "$source_metadata" | jq 'del(.annotations)')
+        fi
+    fi
+    
+    if [[ $(echo "$dr_metadata" | jq 'has("annotations")') == "true" ]]; then
+        if [[ $(echo "$dr_metadata" | jq '.annotations | length') == "0" ]]; then
+            dr_metadata=$(echo "$dr_metadata" | jq 'del(.annotations)')
+        fi
+    fi
+    
     echo "DEBUG: After filtering:"
     echo "Source metadata: $source_metadata"
     echo "DR metadata: $dr_metadata"
@@ -256,8 +269,8 @@ wait_for_replication() {
     echo "Waiting for replication to be ready..."
     while [ $attempt -le $max_attempts ]; do
         # Check phase and conditions
-        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.phase}' 2>/dev/null)
-        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+        PHASE=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.phase}' 2>/dev/null)
+        REPLICATION_STATUS=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
         
         if [ "$PHASE" = "Completed" ] && [ "$REPLICATION_STATUS" = "True" ]; then
             echo "Replication is ready"
@@ -307,6 +320,10 @@ deploy_resources() {
     
     echo "Deploying controller resources..."
     kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} apply -f test/cases/07_ingress-handling/controller.yaml
+    
+    # Force an immediate sync
+    echo "Forcing an immediate sync..."
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} annotate namespacemapping -n dr-syncer test07-ingress-handling dr-syncer.io/sync-now=true --overwrite
 }
 
 # Main test function
@@ -417,16 +434,16 @@ main() {
             print_result "${ingress} backend references preserved" "fail"
         fi
     
-    # Verify Replication status fields
+    # Verify NamespaceMapping status fields
     echo "Verifying replication status..."
     
     # Get status fields
-    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.phase}')
-    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
-    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.syncStats.failedSyncs}')
-    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.lastSyncTime}')
-    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.nextSyncTime}')
-    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.syncStats.lastSyncDuration}')
+    local phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.phase}')
+    local synced_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local failed_count=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.syncStats.failedSyncs}')
+    local last_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.lastSyncTime}')
+    local next_sync=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.nextSyncTime}')
+    local sync_duration=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.syncStats.lastSyncDuration}')
     
     # Verify phase and sync counts
     if verify_replication_status "$phase" "Completed" "$synced_count" "$failed_count"; then
@@ -451,8 +468,8 @@ main() {
     
     # Verify detailed resource status
     echo "Checking replication status..."
-    local total_resources=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.syncStats.totalResources}')
-    local successful_syncs=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
+    local total_resources=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.syncStats.totalResources}')
+    local successful_syncs=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling -o jsonpath='{.status.syncStats.successfulSyncs}')
     
     echo "Total resources: $total_resources"
     echo "Successful syncs: $successful_syncs"
@@ -465,7 +482,7 @@ main() {
     fi
     
     # Verify printer columns
-    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get replication ingress-handling)
+    local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping test07-ingress-handling)
     if echo "$columns" | grep -q "Completed" && echo "$columns" | grep -q "[0-9]"; then
         print_result "Printer columns visible" "pass"
     else
