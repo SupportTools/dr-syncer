@@ -4,6 +4,8 @@ description: A Kubernetes controller for managing disaster recovery synchronizat
 type: application
 version: ${CHART_VERSION}
 appVersion: "${APP_VERSION}"
+# Add icon URL for the Helm chart
+icon: https://raw.githubusercontent.com/supporttools/dr-syncer/main/charts/dr-syncer/icon.png
 dependencies: []
 annotations:
   # Automatically load CRDs from crds/ directory

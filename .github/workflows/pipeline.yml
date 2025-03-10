@@ -174,14 +174,19 @@ jobs:
         run: |
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             # For tags (releases), use the tag directly
+            # Strip 'v' prefix if present to ensure proper SemVer
             CHART_VERSION="${{ env.VERSION }}"
+            if [[ $CHART_VERSION == v* ]]; then
+              CHART_VERSION="${CHART_VERSION#v}"
+            fi
             # Use the production Helm chart repo
             HELM_REPO="SupportTools/helm-chart"
             HELM_URL="https://charts.support.tools/"
             echo "Using release version: ${CHART_VERSION} for production chart repository"
           else
-            # For non-tag builds (development), use master-v prefix
-            CHART_VERSION="master-v${{ github.run_number }}"
+            # For non-tag builds (development), use SemVer format with pre-release identifier
+            # Format: 0.0.{run_number}-dev
+            CHART_VERSION="0.0.${{ github.run_number }}-dev"
             # Use the development Helm chart repo
             HELM_REPO="SupportTools/helm-chart-dev"
             HELM_URL="https://charts-dev.support.tools/"
