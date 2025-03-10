@@ -170,13 +170,33 @@ jobs:
             sed -i 's|rsyncPod.image.tag:.*|rsyncPod.image.tag: ${IMAGE_TAG}|g' charts/dr-syncer/values.yaml.template
           fi
 
+      - name: Determine chart version name format
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            # For tags (releases), use the tag directly
+            CHART_VERSION="${{ env.VERSION }}"
+            # Use the production Helm chart repo
+            HELM_REPO="SupportTools/helm-chart"
+            HELM_URL="https://charts.support.tools/"
+            echo "Using release version: ${CHART_VERSION} for production chart repository"
+          else
+            # For non-tag builds (development), use master-v prefix
+            CHART_VERSION="master-v${{ github.run_number }}"
+            # Use the development Helm chart repo
+            HELM_REPO="SupportTools/helm-chart-dev"
+            HELM_URL="https://charts-dev.support.tools/"
+            echo "Using development version: ${CHART_VERSION} for development chart repository"
+          fi
+          echo "CHART_VERSION=${CHART_VERSION}" >> $GITHUB_ENV
+          echo "HELM_REPO=${HELM_REPO}" >> $GITHUB_ENV
+          echo "HELM_URL=${HELM_URL}" >> $GITHUB_ENV
+
       - name: Package Helm chart
         run: |
-          export CHART_VERSION="${{ env.VERSION }}"
           export APP_VERSION="${{ env.VERSION }}"
           export IMAGE_TAG="${{ env.VERSION }}"
           
-          echo "CHART_VERSION=${CHART_VERSION}"
+          echo "CHART_VERSION=${{ env.CHART_VERSION }}"
           echo "APP_VERSION=${APP_VERSION}"
           echo "IMAGE_TAG=${IMAGE_TAG}"
           
@@ -189,10 +209,10 @@ jobs:
           helm lint charts/dr-syncer/
           helm package charts/dr-syncer --destination helm/repo
 
-      - name: Checkout helm-chart repository
+      - name: Checkout appropriate helm-chart repository
         uses: actions/checkout@v4
         with:
-          repository: SupportTools/helm-chart
+          repository: ${{ env.HELM_REPO }}
           path: helm-chart
           token: ${{ secrets.BOT_TOKEN }}
 
@@ -205,9 +225,9 @@ jobs:
         run: |
           cp helm/repo/dr-syncer-*.tgz helm-chart/
           cd helm-chart
-          helm repo index . --url https://charts.support.tools/
+          helm repo index . --url ${{ env.HELM_URL }}
           git add .
-          git commit -m "Update DR Syncer Helm chart to ${{ env.VERSION }}"
+          git commit -m "Update DR Syncer Helm chart to ${{ env.CHART_VERSION }}"
           git push
 
   Release:

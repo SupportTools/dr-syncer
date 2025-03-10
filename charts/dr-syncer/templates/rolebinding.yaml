@@ -1,0 +1,17 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "dr-syncer.fullname" . }}-watcher-rolebinding
+  namespace: {{ .Values.sourceNamespace | default .Release.Namespace }}
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "dr-syncer.fullname" . }}-watcher-role
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.serviceAccount.name | default (include "dr-syncer.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

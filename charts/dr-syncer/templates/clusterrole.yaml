@@ -1,0 +1,69 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dr-syncer.fullname" . }}-manager-role
+  labels:
+    {{- include "dr-syncer.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - "dr-syncer.io"
+  resources:
+  - remoteclusters
+  - remoteclusters/status
+  - remoteclusters/finalizers
+  - namespacemappings
+  - namespacemappings/status
+  - namespacemappings/finalizers
+  - clustermappings
+  - clustermappings/status
+  - clustermappings/finalizers
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - get
+  - list
+  - watch
+- nonResourceURLs:
+  - "/api"
+  - "/api/*"
+  - "/apis"
+  - "/apis/*"
+  verbs:
+  - get
+{{- end }}
