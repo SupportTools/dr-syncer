@@ -72,3 +72,4 @@ This will create a `build` directory with the compiled static site.
 The site is automatically deployed to GitHub Pages via the GitHub Actions workflow `.github/workflows/docs.yml` when changes are pushed to the `main` branch.
 
 You can also manually trigger a deployment from the "Actions" tab in GitHub by selecting the "Deploy Documentation" workflow and clicking "Run workflow".
+
