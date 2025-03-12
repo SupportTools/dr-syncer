@@ -47,26 +47,19 @@ jobs:
       - name: Validate build output
         run: |
           if [ ! -f docs/build/index.html ]; then
-            echo "Build output is missing index.html!"
+            echo "❌ Build output is missing index.html!"
             exit 1
           fi
-          echo "✓ Build validation successful"
+          echo "✅ Build validation successful"
       
-      - name: Verify CNAME and .nojekyll exist
+      - name: Ensure CNAME and .nojekyll exist
         run: |
-          if [ ! -f docs/build/CNAME ]; then
-            echo "dr-syncer.io" > docs/build/CNAME
-            echo "✓ Created CNAME file"
-          else
-            echo "✓ CNAME file already exists"
-          fi
-          
-          # Ensure .nojekyll file exists to disable Jekyll processing
+          echo "dr-syncer.io" > docs/build/CNAME
           touch docs/build/.nojekyll
-          echo "✓ Created/verified .nojekyll file"
+          echo "✅ CNAME and .nojekyll ensured"
       
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v2
         with:
           path: docs/build
 
@@ -76,7 +69,9 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Display deployment URL
         run: |
