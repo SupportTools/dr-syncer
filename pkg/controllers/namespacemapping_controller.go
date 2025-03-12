@@ -164,13 +164,13 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 	// Create a new mode handler with only destination cluster clients
 	cleanupModeHandler := modes.NewModeReconciler(
 		r.Client,
-		nil, // No source dynamic client needed for cleanup
-		nil, // No destination dynamic client needed for cleanup
-		nil, // No source client needed for cleanup
-		nil, // No destination client needed for cleanup
-		nil, // No source config needed for cleanup
-		nil, // No dest config needed for CleanupResources
-		"",  // No source cluster name needed for cleanup
+		nil,         // No source dynamic client needed for cleanup
+		nil,         // No destination dynamic client needed for cleanup
+		nil,         // No source client needed for cleanup
+		nil,         // No destination client needed for cleanup
+		nil,         // No source config needed for cleanup
+		nil,         // No dest config needed for CleanupResources
+		"",          // No source cluster name needed for cleanup
 		destCluster, // Pass destination cluster name for logging
 	)
 
