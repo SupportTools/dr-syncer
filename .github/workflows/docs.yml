@@ -52,7 +52,7 @@ jobs:
           fi
           echo "✓ Build validation successful"
       
-      - name: Verify CNAME exists
+      - name: Verify CNAME and .nojekyll exist
         run: |
           if [ ! -f docs/build/CNAME ]; then
             echo "dr-syncer.io" > docs/build/CNAME
@@ -60,6 +60,10 @@ jobs:
           else
             echo "✓ CNAME file already exists"
           fi
+          
+          # Ensure .nojekyll file exists to disable Jekyll processing
+          touch docs/build/.nojekyll
+          echo "✓ Created/verified .nojekyll file"
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1

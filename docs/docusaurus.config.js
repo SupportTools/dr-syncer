@@ -7,6 +7,7 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
+// Updated to trigger GitHub Actions workflow
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
