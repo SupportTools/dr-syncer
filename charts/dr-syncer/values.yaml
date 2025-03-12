@@ -1,4 +1,5 @@
 # Default values for dr-syncer.
+# Logo: https://cdn.support.tools/dr-syncer/logo_no_background.png
 
 replicaCount: 1
 

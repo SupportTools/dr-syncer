@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://cdn.support.tools/dr-syncer/logo_no_background.png" alt="DR-Syncer Logo" width="250"/>
+</p>
+
 # DR-Syncer
 
 DR-Syncer is a Kubernetes controller designed to automate and simplify disaster recovery synchronization between Kubernetes clusters.
