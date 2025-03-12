@@ -1,0 +1,8 @@
+{
+  "label": "CLI Advanced Topics",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "description": "Advanced techniques and strategies for the DR-Syncer CLI"
+  }
+}

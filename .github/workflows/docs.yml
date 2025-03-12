@@ -1,4 +1,4 @@
-name: Deploy Documentation
+name: Deploy Documentation to dr-syncer.io
 
 on:
   push:
@@ -22,26 +22,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          ruby-version: '3.2'
-          bundler-cache: true
-          working-directory: docs
-      - name: Setup Pages
-        uses: actions/configure-pages@v3
-      - name: Build with Jekyll
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: docs/package-lock.json
+      
+      - name: Install dependencies
         run: |
           cd docs
-          bundle install
-          bundle exec jekyll build
-        env:
-          JEKYLL_ENV: production
+          npm ci
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      
+      - name: Build with Docusaurus
+        run: |
+          cd docs
+          npm run build
+      
+      - name: Validate build output
+        run: |
+          if [ ! -f docs/build/index.html ]; then
+            echo "Build output is missing index.html!"
+            exit 1
+          fi
+          echo "✓ Build validation successful"
+      
+      - name: Verify CNAME exists
+        run: |
+          if [ ! -f docs/build/CNAME ]; then
+            echo "dr-syncer.io" > docs/build/CNAME
+            echo "✓ Created CNAME file"
+          else
+            echo "✓ CNAME file already exists"
+          fi
+      
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v4
         with:
-          path: docs/_site
+          path: docs/build
 
   deploy:
     runs-on: ubuntu-latest
@@ -49,4 +72,9 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
+      
+      - name: Display deployment URL
+        run: |
+          echo "📚 Documentation deployed to https://dr-syncer.io"
+          echo "Deployment URL: https://dr-syncer.io" >> $GITHUB_STEP_SUMMARY

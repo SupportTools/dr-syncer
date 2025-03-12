@@ -40,6 +40,7 @@ docs/.env.production.local
 docs/npm-debug.log*
 docs/yarn-debug.log*
 docs/yarn-error.log*
+docs/.DS_Store
+docs/.cache
 
-docs/
 CLAUDE.md
