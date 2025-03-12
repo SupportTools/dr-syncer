@@ -2,7 +2,7 @@
 sidebar_position: 1
 ---
 
-<div style="text-align: center; margin-bottom: 30px;">
+<div style={{textAlign: 'center', marginBottom: '30px'}}>
   <img src="https://cdn.support.tools/dr-syncer/logo_no_background.png" alt="DR-Syncer Logo" width="200"/>
 </div>
 
