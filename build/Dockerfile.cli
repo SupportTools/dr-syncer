@@ -1,0 +1,50 @@
+# Build stage
+FROM golang:1.23-alpine AS builder
+
+# Set build args
+ARG VERSION="development"
+ARG GIT_COMMIT="unknown"
+ARG BUILD_DATE="unknown"
+
+WORKDIR /app
+
+# Copy dependencies first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the CLI binary with build information
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -o /bin/dr-syncer-cli \
+    cmd/cli/main.go
+
+# Create minimal runtime image
+FROM alpine:3.19
+
+# Install required runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata && \
+    mkdir -p /opt/dr-syncer
+
+# Copy binary from builder stage
+COPY --from=builder /bin/dr-syncer-cli /usr/local/bin/dr-syncer-cli
+
+# Set metadata
+LABEL org.opencontainers.image.title="DR Syncer CLI"
+LABEL org.opencontainers.image.description="CLI tool for DR Syncer"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+LABEL org.opencontainers.image.source="https://github.com/supporttools/dr-syncer"
+
+# Create non-root user for security
+RUN addgroup -g 1000 dr-syncer && \
+    adduser -u 1000 -G dr-syncer -s /bin/sh -D dr-syncer && \
+    chown -R dr-syncer:dr-syncer /opt/dr-syncer
+
+USER dr-syncer
+WORKDIR /opt/dr-syncer
+
+ENTRYPOINT ["/usr/local/bin/dr-syncer-cli"]

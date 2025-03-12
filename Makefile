@@ -180,11 +180,20 @@ vet: ## Run go vet against code
 test: fmt vet ## Run tests
 	go test ./... $(if $(filter 1,$(DEBUG)),-v) -coverprofile cover.out
 
+.PHONY: test-cli
+test-cli: build-cli ## Run CLI tests
+	@echo "Running CLI tests..."
+	./test/cli/test-cli.sh
+
 ##@ Build
 
 .PHONY: build
-build: fmt vet ## Build dr-syncer binary
+build: fmt vet build-cli ## Build dr-syncer binary and CLI
 	go build -o bin/dr-syncer main.go
+
+.PHONY: build-cli
+build-cli: fmt vet ## Build dr-syncer-cli binary
+	go build -o bin/dr-syncer-cli cmd/cli/main.go
 
 .PHONY: run
 run: fmt vet ## Run against the configured Kubernetes cluster in ~/.kube/config
@@ -240,8 +249,36 @@ docker-build-rsync: check-docker ## Build and push rsync docker image with cachi
 		echo "  Git commit: $(GIT_COMMIT)"; \
 	fi
 
+.PHONY: docker-build-cli
+docker-build-cli: check-docker ## Build CLI docker image with caching
+	@echo "Building CLI image with version $(VERSION)..."
+	docker build \
+		$(if $(filter 0,$(DEBUG)),--quiet) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f build/Dockerfile.cli \
+		-t $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:$(TIMESTAMP) \
+		-t $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:latest .
+	
+	@echo "✓ CLI Docker image build complete"
+	@echo "  Image: $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:$(TIMESTAMP)"
+	@echo "  Version: $(VERSION)"
+	@if [ $(DEBUG) -eq 1 ]; then \
+		echo "  Git commit: $(GIT_COMMIT)"; \
+	fi
+
+.PHONY: docker-push-cli
+docker-push-cli: docker-build-cli ## Push CLI docker image
+	@echo "Pushing CLI images..."
+	docker push $(if $(filter 0,$(DEBUG)),--quiet) $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:$(TIMESTAMP)
+	docker push $(if $(filter 0,$(DEBUG)),--quiet) $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:latest
+	
+	@echo "✓ CLI Docker image push complete"
+	@echo "  Image: $(DOCKER_REGISTRY)/supporttools/dr-syncer-cli:$(TIMESTAMP)"
+
 .PHONY: docker-build-all
-docker-build-all: docker-build docker-build-agent docker-build-rsync ## Build all images
+docker-build-all: docker-build docker-build-agent docker-build-rsync docker-build-cli ## Build all images
 
 .PHONY: docker-build
 docker-build: check-docker ## Build and push controller docker image with caching
