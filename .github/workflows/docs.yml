@@ -19,15 +19,18 @@ concurrency:
 
 jobs:
   build:
+    name: Build Docusaurus
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 18
           cache: 'npm'
           cache-dependency-path: docs/package-lock.json
       
@@ -59,19 +62,24 @@ jobs:
           echo "✅ CNAME and .nojekyll ensured"
       
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3
         with:
           path: docs/build
 
   deploy:
+    name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
     needs: build
+    
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+      
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/deploy-pages@v4
       
       - name: Display deployment URL
         run: |
