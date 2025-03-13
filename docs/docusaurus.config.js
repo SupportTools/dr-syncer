@@ -18,7 +18,7 @@ const config = {
   themes: ['@docusaurus/theme-mermaid'],
   title: 'DR-Syncer',
   tagline: 'Kubernetes controller for disaster recovery synchronization',
-  favicon: 'img/favicon.ico',
+  favicon: 'assets/logo.ico',
 
   // Set the production url of your site here
   url: 'https://dr-syncer.io',
