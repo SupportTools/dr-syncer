@@ -140,9 +140,11 @@ jobs:
           else
             git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD > changelog.txt
           fi
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          # Using proper delimiter syntax for GitHub Actions outputs
+          delimiter="EOF_$(date +%s)"
+          echo "changelog<<$delimiter" >> $GITHUB_OUTPUT
           cat changelog.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "$delimiter" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
