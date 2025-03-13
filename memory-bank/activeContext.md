@@ -244,7 +244,14 @@
 
 ## Recent Changes
 
-1. Build System Improvements
+1. GitHub Actions Workflow Improvements
+   - Fixed changelog generation in CLI GitHub workflow
+   - Updated multiline output syntax for GitHub Actions
+   - Changed from static EOF delimiter to dynamic timestamp-based delimiter
+   - Resolved "Invalid value. Matching delimiter not found 'EOF'" error
+   - Improved reliability of automated releases for CLI tool
+
+2. Build System Improvements
    - Added DEBUG variable to Makefile to control log output verbosity
    - Updated kubeconfig settings to use files in the kubeconfig directory
    - Added conditional output based on DEBUG value for Docker, Helm, and kubectl commands
