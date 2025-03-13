@@ -131,21 +131,6 @@ jobs:
           find artifacts -type f -name "*.zip" -o -name "*.tar.gz" | xargs -I{} cp {} release/
           cd release && sha256sum * > checksums.txt
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -z "$PREVIOUS_TAG" ]; then
-            git log --pretty=format:"* %s (%h)" > changelog.txt
-          else
-            git log --pretty=format:"* %s (%h)" $PREVIOUS_TAG..HEAD > changelog.txt
-          fi
-          # Using proper delimiter syntax for GitHub Actions outputs
-          delimiter="EOF_$(date +%s)"
-          echo "changelog<<$delimiter" >> $GITHUB_OUTPUT
-          cat changelog.txt >> $GITHUB_OUTPUT
-          echo "$delimiter" >> $GITHUB_OUTPUT
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         env:
@@ -153,9 +138,9 @@ jobs:
         with:
           name: Release ${{ github.ref_name }}
           body: |
-            ## Changes in this release
+            ## DR-Syncer CLI Release ${{ github.ref_name }}
 
-            ${{ steps.changelog.outputs.changelog }}
+            This release includes the DR-Syncer CLI tool.
 
             ## Binary Downloads
 
