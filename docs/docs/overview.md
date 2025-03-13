@@ -4,7 +4,14 @@ sidebar_position: 2
 
 # Architecture Overview
 
-## System Architecture
+DR-Syncer offers two distinct tools for disaster recovery synchronization:
+
+1. **Controller**: A Kubernetes operator that runs continuously in your clusters
+2. **CLI**: A standalone command-line tool for direct disaster recovery operations
+
+Each tool serves different use cases but provides similar core functionality. This document outlines their architectures and key components.
+
+## Controller System Architecture
 
 DR-Syncer is built on the Kubernetes operator pattern, using custom controllers and custom resources to implement disaster recovery synchronization between clusters.
 
@@ -48,7 +55,98 @@ flowchart TD
 
 3. **Custom Resources**:
    - `RemoteCluster`: Defines connection details for remote clusters
-   - `Replication`: Defines what and how to synchronize between namespaces
+   - `NamespaceMapping`: Defines what and how to synchronize between namespaces
+
+## CLI Architecture
+
+The CLI tool provides a direct interface for disaster recovery operations without requiring the deployment of a controller or custom resources.
+
+```mermaid
+flowchart TD
+    subgraph "CLI Tool"
+        Config["Configuration<br/>(Command-line flags)"]
+        ResourceClient["Kubernetes Resource Client"]
+        ResourceProcessor["Resource Processor"]
+        PVMigrate["PV-Migrate Integration"]
+        Operations["Operation Modes<br/>(Stage, Cutover, Failback)"]
+        
+        Config --> ResourceClient
+        ResourceClient --> ResourceProcessor
+        ResourceProcessor --> Operations
+        Operations --> PVMigrate
+    end
+    
+    subgraph "Source Cluster"
+        SourceAPI["Kubernetes API Server"]
+        SourceNS["Source Namespace"]
+    end
+    
+    subgraph "Destination Cluster"
+        DestAPI["Kubernetes API Server"]
+        DestNS["Destination Namespace"]
+    end
+    
+    ResourceClient -- "Reads Resources" --> SourceAPI
+    ResourceClient -- "Applies Resources" --> DestAPI
+    SourceAPI -- "Provides Resources" --> SourceNS
+    DestAPI -- "Updates Resources" --> DestNS
+    PVMigrate -- "Data Migration" --> SourceNS
+    PVMigrate -- "Data Migration" --> DestNS
+```
+
+### CLI Components
+
+1. **Command-line Interface**: Processes user inputs and flags
+   - Validates configuration
+   - Sets up clients and operation modes
+   - Handles logging and output
+
+2. **Resource Client**: Interfaces with Kubernetes APIs
+   - Connects to source and destination clusters
+   - Lists, gets, creates, and updates resources
+   - Handles API versioning and conversion
+
+3. **Resource Processor**: Transforms resources during synchronization
+   - Filters resources based on type and labels
+   - Modifies resources for destination environment
+   - Handles namespace references and immutable fields
+
+4. **Operation Modes**: Implements the three primary modes
+   - Stage: Prepares DR environment without activation
+   - Cutover: Activates DR environment by scaling
+   - Failback: Returns to source environment
+
+5. **PV-Migrate Integration**: Handles persistent data migration
+   - Uses pv-migrate for efficient PVC data copying
+   - Supports bi-directional data transfer
+   - Configurable migration parameters
+
+### CLI Operation Flow
+
+1. **Initialization**:
+   - Process command-line flags
+   - Connect to source and destination clusters
+   - Validate configuration
+
+2. **Resource Discovery**:
+   - Identify resources in source namespace
+   - Apply type and label filters
+   - Build dependency order
+
+3. **Resource Processing**:
+   - Transform resources for destination
+   - Set scaling parameters based on mode
+   - Preserve original configurations
+
+4. **Execution**:
+   - Apply resources to destination
+   - Scale deployments according to mode
+   - Trigger PVC data migration if enabled
+
+5. **Completion**:
+   - Validate results
+   - Report success/failure
+   - Exit with appropriate status code
 
 ## Controller Design
 
@@ -130,7 +228,7 @@ flowchart LR
     Synchronization --> StatusUpdate["Status Update"]
 ```
 
-## PVC Sync Architecture
+## Controller PVC Sync Architecture
 
 One of DR-Syncer's key features is its ability to replicate data from Persistent Volume Claims (PVCs) between clusters, which traditional Kubernetes replication doesn't handle.
 

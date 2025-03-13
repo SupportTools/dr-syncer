@@ -4,7 +4,7 @@
 
 # DR-Syncer
 
-DR-Syncer is a Kubernetes controller designed to automate and simplify disaster recovery synchronization between Kubernetes clusters.
+DR-Syncer provides tools designed to automate and simplify disaster recovery synchronization between Kubernetes clusters.
 
 ## Introduction and Problem Statement
 
@@ -25,9 +25,26 @@ Organizations running Kubernetes in production face several challenges when esta
    - Lack of automation in DR processes
    - Time-intensive DR maintenance and testing
 
-DR-Syncer addresses these challenges by providing automated, scheduled synchronization of resources from source namespaces to destination namespaces in remote clusters. It enables reliable disaster recovery setups with minimal operational overhead.
+DR-Syncer addresses these challenges by providing automated synchronization of resources from source namespaces to destination namespaces in remote clusters. It enables reliable disaster recovery setups with minimal operational overhead.
 
-## How It Works
+## DR-Syncer Tools
+
+DR-Syncer offers **two distinct tools** to handle disaster recovery synchronization:
+
+1. **Controller**: A Kubernetes operator that runs continuously inside your cluster, providing automated and scheduled synchronization
+   - Ideal for ongoing automation and "set it and forget it" scenarios
+   - Uses Custom Resource Definitions (CRDs) for configuration
+   - Supports continuous, scheduled, and manual synchronization modes
+
+2. **CLI**: A standalone command-line tool for direct, on-demand synchronization operations
+   - Does not require deploying anything to your clusters
+   - Perfect for manual operations, testing, or one-off scenarios
+   - Supports Stage, Cutover, and Failback operations with a single command
+   - Ideal for organizations that prefer not to deploy additional controllers
+
+Both tools maintain feature parity for the core synchronization capabilities, but are used in different contexts and deployment models.
+
+## How the Controller Works
 
 DR-Syncer follows the Kubernetes operator pattern:
 
@@ -97,9 +114,9 @@ DR-Syncer follows the Kubernetes operator pattern:
 - **Direct Access Pattern**: Agent pod accesses PVCs directly without root access
 - **Data Flow**: Secure rsync over SSH between controller and agent
 
-## Quick Start
+## Controller Quick Start
 
-### Installation with Helm
+### Controller Installation with Helm
 
 ```bash
 # Add the DR-Syncer Helm repository
@@ -128,7 +145,7 @@ spec:
 ---
 # Define a replication
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: production-to-dr
 spec:
@@ -144,6 +161,81 @@ spec:
 ```
 
 For more comprehensive documentation, visit our [documentation site](https://supporttools.github.io/dr-syncer/).
+
+## CLI Usage
+
+The DR-Syncer CLI provides a simple way to perform disaster recovery operations directly from the command line without needing to deploy the controller.
+
+### CLI Installation
+
+Build the CLI binary:
+
+```bash
+make build
+```
+
+This will create the `dr-syncer-cli` binary in the `bin/` directory.
+
+### Basic CLI Usage
+
+The CLI supports three primary operation modes:
+
+#### Stage Mode (Prepare DR Environment)
+
+```bash
+bin/dr-syncer-cli \
+  --source-kubeconfig=/path/to/source/kubeconfig \
+  --dest-kubeconfig=/path/to/destination/kubeconfig \
+  --source-namespace=my-namespace \
+  --dest-namespace=my-namespace-dr \
+  --mode=Stage
+```
+
+Stage mode synchronizes resources and scales down deployments to 0 replicas in the destination.
+
+#### Cutover Mode (Activate DR Environment)
+
+```bash
+bin/dr-syncer-cli \
+  --source-kubeconfig=/path/to/source/kubeconfig \
+  --dest-kubeconfig=/path/to/destination/kubeconfig \
+  --source-namespace=my-namespace \
+  --dest-namespace=my-namespace-dr \
+  --mode=Cutover
+```
+
+Cutover mode synchronizes resources, scales down source deployments, and scales up destination deployments.
+
+#### Failback Mode (Return to Original Environment)
+
+```bash
+bin/dr-syncer-cli \
+  --source-kubeconfig=/path/to/source/kubeconfig \
+  --dest-kubeconfig=/path/to/destination/kubeconfig \
+  --source-namespace=my-namespace \
+  --dest-namespace=my-namespace-dr \
+  --mode=Failback
+```
+
+Failback mode scales down destination deployments and scales up source deployments.
+
+### Additional CLI Options
+
+The CLI supports many additional options for resource filtering, PVC data migration, and more:
+
+```bash
+bin/dr-syncer-cli \
+  --source-kubeconfig=/path/to/source/kubeconfig \
+  --dest-kubeconfig=/path/to/destination/kubeconfig \
+  --source-namespace=my-namespace \
+  --dest-namespace=my-namespace-dr \
+  --mode=Stage \
+  --include-custom-resources=true \
+  --migrate-pvc-data=true \
+  --resource-types=configmaps,secrets,deployments
+```
+
+For complete CLI documentation, refer to the [CLI Usage Guide](https://supporttools.github.io/dr-syncer/docs/cli-usage).
 
 ## Development
 

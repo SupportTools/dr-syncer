@@ -19,7 +19,8 @@
 
 1. Custom Resources
    - RemoteCluster: Defines remote cluster configuration and authentication
-   - Replication: Defines synchronization configuration and resource filtering
+   - NamespaceMapping: Defines synchronization configuration between namespaces
+   - ClusterMapping: Defines the relationship between clusters for multiple namespace mappings
 
 2. Resource Processing
    - Resource filtering based on type
@@ -86,7 +87,8 @@
 
 2. Reconcilers
    - RemoteClusterReconciler: Manages remote cluster connections
-   - ReplicationReconciler: Handles resource synchronization
+   - NamespaceMappingReconciler: Handles resource synchronization
+   - ClusterMappingReconciler: Manages cluster relationship configuration
    - Resource synchronization logic
    - Status management
 
@@ -148,13 +150,13 @@
    - Two-layer SSH key management:
      * DR→Agent: Cluster-level keys stored in secrets
      * Agent→Temp: Operation-specific internal keys
-     * Replication→Temp: Replication-specific keys for isolation
+     * NamespaceMapping→Temp: NamespaceMapping-specific keys for isolation
    - Controller-managed key generation and rotation
    - Restricted RBAC permissions
    - Secure rsync over SSH
    - Minimal pod permissions
    - Key management implementation:
-     * Replication-level key generation and storage
+     * NamespaceMapping-level key generation and storage
      * Automatic key rotation
      * Secure key distribution to temporary pods
      * Fingerprint tracking for key verification
@@ -168,7 +170,7 @@
 
 4. Data Flow Pattern
    ```
-   DR Replication Pod → Agent SSH (port 2222) → Temp Pod rsync (internal port)
+   DR NamespaceMapping Pod → Agent SSH (port 2222) → Temp Pod rsync (internal port)
    ```
    - Direct node-to-node path
    - Minimal network overhead
@@ -282,7 +284,7 @@
 
 1. CRD Locations and Flow
    - Source of Truth: Go types in pkg/api/v1alpha1/types.go
-   - Generated CRDs: config/crd/bases/dr-syncer.io_{remoteclusters,replications}.yaml
+   - Generated CRDs: config/crd/bases/dr-syncer.io_{remoteclusters,namespacemappings,clustermappings}.yaml
    - Helm Chart CRDs: charts/dr-syncer/crds/*.yaml
    - Automated sync via `make manifests`
 
@@ -329,14 +331,14 @@
      * For Spec Changes:
        - api/v1alpha1/types.go: Add new structs and fields
        - api/v1alpha1/types.go: Add DeepCopy methods for new types
-       - api/v1alpha1/types.go: Update ReplicationSpec/RemoteClusterSpec
+       - api/v1alpha1/types.go: Update appropriate Spec (NamespaceMappingSpec, RemoteClusterSpec, ClusterMappingSpec)
        - test/cases/XX_*: Add test cases covering new fields
        - charts/dr-syncer/values.yaml: Add default values if needed
 
      * For Status Changes:
        - api/v1alpha1/types.go: Add new status structs and fields
        - api/v1alpha1/types.go: Add DeepCopy methods for new types
-       - api/v1alpha1/types.go: Update ReplicationStatus/RemoteClusterStatus
+       - api/v1alpha1/types.go: Update appropriate Status (NamespaceMappingStatus, RemoteClusterStatus, ClusterMappingStatus)
        - controllers/*_controller.go: Update status handling in reconciler
 
      * Generated/Updated by make manifests:
@@ -352,7 +354,7 @@
    - Step 3: Apply Changes
      * Apply updated CRD to cluster:
        ```bash
-       kubectl apply -f config/crd/bases/dr-syncer.io_replications.yaml
+       kubectl apply -f config/crd/bases/dr-syncer.io_namespacemappings.yaml
        ```
      * For production:
        - Update via Helm chart

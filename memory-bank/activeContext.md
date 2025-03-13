@@ -60,7 +60,7 @@
      * No root filesystem access required
      * Direct access to mounted PVCs on the node
    - Data Flow:
-     * DR replication pod → Agent SSH (port 2222)
+     * DR namespace mapping pod → Agent SSH (port 2222)
      * Agent → Direct mount path access
      * Direct node-to-node path with minimal network overhead
    - SSH Key Management:
@@ -76,7 +76,8 @@
 
 2. Custom Resources
    - RemoteCluster CRD implemented and validated
-   - Replication CRD implemented and validated
+   - NamespaceMapping CRD implemented and validated (renamed from Replication)
+   - ClusterMapping CRD implemented and validated
    - Resource definitions streamlined and optimized
 
 3. Synchronization
@@ -172,8 +173,8 @@
        - Verifies feature interactions
        - Verifies complex configurations
        - Enhanced validation coverage
-     * [] Test case 16 (Replication modes)
-       - Added replication mode verification
+     * [] Test case 16 (NamespaceMapping modes)
+       - Added namespace mapping mode verification
        - Verifies mode transitions
        - Verifies sync behaviors
        - Enhanced mode validation
@@ -189,7 +190,7 @@
 2. Test Implementation Requirements
    - Each test case must include:
      * README.md with consistent documentation
-     * controller.yaml for Replication resource
+     * controller.yaml for NamespaceMapping resource
      * remote.yaml for source resources
      * test.sh with standardized structure
    - Standard test script components:
@@ -236,7 +237,7 @@
       * Combined features
 
    f. Mode Tests (16)
-      * Replication mode verification
+      * NamespaceMapping mode verification
       * Schedule handling
       * Mode transitions
       * Status updates
@@ -273,14 +274,15 @@
    - Created comprehensive docs for SSH/rsync integration
 
 4. Core Features
-   - Simplified CRD architecture to two core CRDs
-   - Enhanced Replication CRD with comprehensive status fields
-   - Integrated namespace mapping into Replication CRD
-   - Added IngressConfig to Replication CRD
+   - Simplified CRD architecture to three core CRDs
+   - Enhanced NamespaceMapping CRD with comprehensive status fields
+   - Integrated namespace mapping into NamespaceMapping CRD
+   - Added ClusterMapping CRD for multi-cluster relationships
+   - Added IngressConfig to NamespaceMapping CRD
      * Supports preserveAnnotations, preserveTLS, preserveBackends
      * Implemented following CRD update workflow:
        1. Added IngressConfig struct to types.go
-       2. Added field to ReplicationSpec
+       2. Added field to NamespaceMappingSpec
        3. Generated CRDs with `make manifests`
        4. Applied updated CRD to cluster
      * Successfully validated with test case 07
@@ -318,7 +320,10 @@
    - Established Go types as single source of truth
    - Enhanced Helm chart CRD integration
    - Automated CRD sync via `make manifests`
-   - Reduced CRD complexity by maintaining only remoteclusters and replications
+   - Reduced CRD complexity by maintaining three essential CRDs:
+     * remoteclusters - Defines connection details for remote clusters
+     * namespacemappings - Defines synchronization configuration between namespaces
+     * clustermappings - Defines the relationship between clusters for multiple namespace mappings
 
 ## Active Decisions
 
@@ -372,7 +377,7 @@
    - Go types are now single source of truth
    - CRDs automatically sync to Helm chart
    - Helm templating automatically applied
-   - Only two CRDs maintained: remoteclusters and replications
+   - Three CRDs maintained: remoteclusters, namespacemappings, and clustermappings
 
 ## Current Implementation Tasks
 
@@ -410,16 +415,16 @@
 - Status: Completed
 - Files Created/Modified:
   * New pkg/agent/ssh/keygen.go (refactored from previous sshkeys package)
-  * New pkg/controller/replication/keys.go
-  * New pkg/controller/replication/log.go
-  * New pkg/controller/replication/pvc_sync.go
+  * New pkg/controller/namespacemapping/keys.go
+  * New pkg/controller/namespacemapping/log.go
+  * New pkg/controller/namespacemapping/pvc_sync.go
   * Controller code updates
 - Key Changes:
   * Two-layer key generation
   * Key rotation logic
   * Secret management
   * Secure SSH key handling
-  * Replication-level key management
+  * NamespaceMapping-level key management
   * Temporary pod key integration
   * Simplified key management structure
   * Direct rsync pod key generation
@@ -428,7 +433,7 @@
   * Rotation works smoothly
   * Secrets properly managed
   * Secure communication between pods
-  * Proper key isolation between replications
+  * Proper key isolation between namespace mappings
 
 ### Task 4: SSH Security Enhancement
 - Status: Completed

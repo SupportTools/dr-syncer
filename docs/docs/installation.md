@@ -4,7 +4,12 @@ sidebar_position: 4
 
 # Installation & Configuration
 
-This guide will walk you through the installation and configuration of DR-Syncer. There are multiple installation methods available depending on your requirements.
+This guide will walk you through the installation and configuration of DR-Syncer. DR-Syncer provides **two distinct tools** with different installation methods:
+
+1. **Controller**: A Kubernetes operator that runs continuously in your cluster
+2. **CLI**: A standalone command-line tool that doesn't require deployment to your clusters
+
+Choose the installation method that best fits your requirements and operational model.
 
 > **Note:** For details on how DR-Syncer works and its architecture, see [Architecture & Principles](./architecture.md).
 
@@ -13,15 +18,64 @@ This guide will walk you through the installation and configuration of DR-Syncer
 Before installing DR-Syncer, ensure you have the following:
 
 - Kubernetes clusters (both source and destination)
-- Helm 3.x installed
+- Helm 3.x installed (for controller installation only)
 - kubectl configured with access to both clusters
 - Adequate permissions to create resources in both clusters (namespace-admin or cluster-admin)
 
-## Installation Options
+## CLI Installation
 
-### Option 1: Using Helm (Recommended)
+The DR-Syncer CLI is a standalone binary that provides command-line operations for disaster recovery without requiring controller deployment.
 
-DR-Syncer can be installed using Helm, which is the recommended installation method for most users:
+### Building from Source
+
+The simplest way to install the CLI is to build it from source:
+
+```bash
+# Clone the repository
+git clone https://github.com/supporttools/dr-syncer.git
+cd dr-syncer
+
+# Build just the CLI binary
+make build-cli
+
+# The binary will be available at bin/dr-syncer-cli
+```
+
+### Downloading Pre-built Binaries
+
+You can also download pre-built binaries from the GitHub Releases page:
+
+```bash
+# Example for Linux amd64
+curl -LO https://github.com/supporttools/dr-syncer/releases/download/v1.0.0/dr-syncer-cli_1.0.0_linux_amd64.tar.gz
+tar -xzf dr-syncer-cli_1.0.0_linux_amd64.tar.gz
+chmod +x dr-syncer-cli
+
+# Move to a directory in your PATH
+sudo mv dr-syncer-cli /usr/local/bin/
+```
+
+### Basic CLI Usage
+
+The CLI can be used directly without installing anything to your Kubernetes clusters:
+
+```bash
+# Basic stage mode example
+dr-syncer-cli \
+  --source-kubeconfig=/path/to/source/kubeconfig \
+  --dest-kubeconfig=/path/to/destination/kubeconfig \
+  --source-namespace=production \
+  --dest-namespace=production-dr \
+  --mode=Stage
+```
+
+For complete CLI usage documentation, see the [CLI Usage Guide](./cli-usage.md).
+
+## Controller Installation Options
+
+### Option 1: Using Helm (Recommended for Controller)
+
+DR-Syncer controller can be installed using Helm, which is the recommended installation method for most users:
 
 ```bash
 # Add the DR-Syncer Helm repository
@@ -37,7 +91,7 @@ helm install dr-syncer supporttools/dr-syncer \
   --values values.yaml
 ```
 
-### Option 2: Using Make (For Development)
+### Option 2: Using Make (For Controller Development)
 
 The project includes a comprehensive Makefile that simplifies building, deployment, and management of DR-Syncer. This method is particularly useful during development or when you need to customize the installation.
 
@@ -89,7 +143,7 @@ make docker-build-agent  # Agent only
 make docker-build-rsync  # Rsync only
 ```
 
-### Option 3: Install CRDs Only
+### Option 3: Install Controller CRDs Only
 
 If you only want to install the Custom Resource Definitions:
 
@@ -146,11 +200,11 @@ rsyncPod:
 
 For a complete list of configuration options, refer to the [values.yaml template](https://github.com/supporttools/dr-syncer/blob/main/charts/dr-syncer/values.yaml.template).
 
-## Remote Cluster Configuration
+## Controller Remote Cluster Configuration
 
-### Creating Remote Cluster Resources
+### Creating Controller Remote Cluster Resources
 
-After installing DR-Syncer, you need to configure Remote Cluster resources:
+After installing the DR-Syncer controller, you need to configure Remote Cluster resources:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
@@ -685,9 +739,9 @@ If you installed with make, you can also check the deployment status:
 helm status dr-syncer -n dr-syncer
 ```
 
-## Troubleshooting
+## Controller Troubleshooting
 
-### Common Issues
+### Common Controller Issues
 
 1. **Authentication Errors**:
    - Ensure the kubeconfig secret is correctly formatted
@@ -722,9 +776,40 @@ kubectl get namespacemappings -n dr-syncer -o custom-columns=NAME:.metadata.name
 
 Look for the status conditions and phase information to diagnose issues.
 
+## CLI Troubleshooting
+
+### Common CLI Issues
+
+#### Authentication Errors
+If you encounter authentication errors when using the CLI:
+- Ensure both kubeconfig files are valid and have the necessary permissions
+- Check if the kubeconfig context is set properly
+- Verify that tokens or certificates in the kubeconfig have not expired
+
+#### Resource Synchronization Failures
+If resources fail to synchronize:
+- Check if the destination namespace exists
+- Ensure you have permissions to create/update resources in both namespaces
+- Examine the CLI output with higher verbosity (`--log-level=debug`)
+
+#### PVC Data Migration Issues
+For PVC data migration problems:
+- Verify that pv-migrate is installed and in your PATH
+- Check if PVCs exist in both namespaces
+- Ensure proper access to volumes in both clusters
+- Look at pv-migrate logs for specific errors
+
+#### CLI Command Hangs
+If the CLI command seems to hang:
+- It might be waiting for load balancer services to be assigned IPs
+- Use the `--pv-migrate-flags="--lbsvc-timeout 5m"` to adjust timeouts
+- Cancel and retry with different strategies (e.g., `--pv-migrate-flags="--strategy mnt2"`)
+
 ## Uninstallation
 
-To remove DR-Syncer from your cluster:
+### Uninstalling the Controller
+
+To remove the DR-Syncer controller from your cluster:
 
 ```bash
 # Using make
@@ -738,3 +823,11 @@ make uninstall
 # Or
 kubectl delete -f config/crd/bases/
 ```
+
+### Uninstalling the CLI
+
+Since the CLI is a standalone binary, simply delete it from your system:
+
+```bash
+# If installed in /usr/local/bin
+sudo rm /usr/local/bin/dr-syncer-cli

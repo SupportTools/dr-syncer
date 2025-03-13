@@ -21,7 +21,7 @@ spec:
     name: dr-cluster-kubeconfig
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: basic-replication
   namespace: default
@@ -67,7 +67,7 @@ spec:
       "standard": "standard-dr"
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: scheduled-pvc-replication
   namespace: default
@@ -100,7 +100,7 @@ This example uses labels to select specific resources for replication:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: label-based-replication
   namespace: default
@@ -160,7 +160,7 @@ This example demonstrates how to control deployment scaling in DR environments:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: scale-control-replication
   namespace: default
@@ -218,7 +218,7 @@ spec:
       "prod-standard": "dr-standard"
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: storage-class-mapping
   namespace: default
@@ -243,7 +243,7 @@ This example demonstrates advanced ingress handling configurations:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: ingress-handling
   namespace: default
@@ -272,7 +272,7 @@ This example configures manual replication for controlled DR testing:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: manual-replication
   namespace: default
@@ -294,7 +294,7 @@ spec:
 To trigger a manual replication:
 
 ```bash
-kubectl annotate replication manual-replication dr-syncer.io/sync=$(date +%s) --overwrite
+kubectl annotate namespacemapping manual-replication dr-syncer.io/sync=$(date +%s) --overwrite
 ```
 
 ## Multiple DR Clusters
@@ -321,7 +321,7 @@ spec:
     name: dr-cluster-west-kubeconfig
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: east-replication
   namespace: default
@@ -339,7 +339,7 @@ spec:
     type: Continuous
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: west-replication
   namespace: default

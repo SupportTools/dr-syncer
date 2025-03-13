@@ -64,13 +64,13 @@ status:
 | `agentStatus.observedGeneration` | Integer | The observed generation of the agent DaemonSet |
 | `conditions` | Array | List of status conditions |
 
-## Replication
+## NamespaceMapping
 
-The `Replication` CRD defines synchronization configuration between namespaces.
+The `NamespaceMapping` CRD defines synchronization configuration between namespaces.
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: production-to-dr
 spec:
@@ -144,7 +144,7 @@ status:
       message: "Synchronization in progress"
 ```
 
-### Replication Spec Fields
+### NamespaceMapping Spec Fields
 
 | Field | Type | Description | Required |
 |-------|------|-------------|----------|
@@ -174,7 +174,7 @@ status:
 | `pvcConfig.storageClassMapping` | Map | Mapping of source storage classes to destination storage classes | No |
 | `pvcConfig.accessModeMapping` | Map | Mapping of source access modes to destination access modes | No |
 
-### Replication Status Fields
+### NamespaceMapping Status Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -248,7 +248,7 @@ spec:
   kubeconfigSecret: dr-cluster-kubeconfig
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: production-to-dr
 spec:
@@ -279,7 +279,7 @@ spec:
   sshKeySecret: dr-cluster-ssh-key
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: data-replication
 spec:
@@ -300,11 +300,11 @@ spec:
 
 ### Multi-Namespace Replication
 
-For each namespace pair you want to replicate, create a separate Replication resource:
+For each namespace pair you want to replicate, create a separate NamespaceMapping resource:
 
 ```yaml
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: production-to-dr
 spec:
@@ -318,7 +318,7 @@ spec:
     - Service
 ---
 apiVersion: dr-syncer.io/v1alpha1
-kind: Replication
+kind: NamespaceMapping
 metadata:
   name: staging-to-dr
 spec:
@@ -347,12 +347,12 @@ spec:
 
 ### Monitoring
 
-- Create alerts for Replication resources with a Failed status
+- Create alerts for NamespaceMapping resources with a Failed status
 - Monitor `syncStats` to track synchronization health over time
 - Set up dashboards to visualize replication status across multiple namespaces
 
 ### Performance
 
 - Consider the impact of large PVC data replication on network performance
-- For large clusters, use multiple Replication resources with specific resource types rather than a single resource with all types
+- For large clusters, use multiple NamespaceMapping resources with specific resource types rather than a single resource with all types
 - Schedule synchronizations during off-peak hours for production workloads

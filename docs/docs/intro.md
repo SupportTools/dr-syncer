@@ -37,26 +37,59 @@ Organizations running Kubernetes in production environments face significant cha
 
 ## What is DR-Syncer?
 
-DR-Syncer is a Kubernetes controller designed to automate and simplify disaster recovery synchronization between Kubernetes clusters. It provides automated, scheduled synchronization of resources from source namespaces to destination namespaces in remote clusters.
+DR-Syncer provides two distinct tools designed to automate and simplify disaster recovery synchronization between Kubernetes clusters:
 
-By following Kubernetes controller patterns and leveraging Custom Resource Definitions (CRDs), DR-Syncer creates a declarative, Kubernetes-native approach to disaster recovery that integrates seamlessly with existing workflows.
+1. **Controller**: A Kubernetes operator that runs continuously inside your clusters
+   - Provides automated, scheduled synchronization of resources
+   - Uses Custom Resource Definitions (CRDs) for configuration
+   - Creates a declarative, Kubernetes-native approach to disaster recovery
+   - Ideal for ongoing automation and "set it and forget it" scenarios
+
+2. **CLI**: A standalone command-line tool for direct, on-demand synchronization
+   - Performs disaster recovery operations without requiring controller deployment
+   - Supports Stage, Cutover, and Failback operations with a single command
+   - Perfect for manual operations, testing, or one-off scenarios
+   - Ideal for organizations that prefer not to deploy additional controllers
+
+Both tools maintain feature parity for core synchronization capabilities, but are used in different contexts and deployment models.
 
 ## Key Concepts
 
-### Custom Resources
+### Controller Approach
 
-DR-Syncer defines two primary custom resources:
+The DR-Syncer controller defines two primary custom resources:
 
 1. **RemoteCluster**: Defines connection details and authentication for a remote cluster
    - Stores kubeconfig reference
    - Configures SSH access for PVC replication
    - Manages agent deployment
 
-2. **Replication**: Defines synchronization configuration between namespaces
+2. **NamespaceMapping**: Defines synchronization configuration between namespaces
    - Specifies source and destination namespaces
    - Configures resource filtering rules
    - Sets synchronization schedule and mode
    - Tracks synchronization status
+
+### CLI Approach
+
+The DR-Syncer CLI provides three primary operation modes:
+
+1. **Stage Mode**: Prepare a DR environment
+   - Synchronizes resources from source to destination namespace
+   - Scales down deployments in the destination namespace to 0 replicas
+   - Optionally migrates PVC data if enabled
+
+2. **Cutover Mode**: Activate a DR environment
+   - Synchronizes resources from source to destination namespace
+   - Preserves original replica counts by annotating source deployments
+   - Scales down deployments in the source namespace to 0 replicas
+   - Scales up deployments in the destination namespace
+   - Optionally migrates PVC data if enabled
+
+3. **Failback Mode**: Return to the original environment
+   - Optionally migrates PVC data from destination back to source
+   - Scales down deployments in the destination namespace to 0 replicas
+   - Scales up deployments in the source namespace to their original replica counts
 
 ### Controller Components
 
@@ -75,7 +108,9 @@ For persistent data replication, DR-Syncer deploys:
 
 ## How DR-Syncer Works
 
-DR-Syncer operates as a Kubernetes controller, following a reconciliation pattern:
+### Controller Operation
+
+The DR-Syncer controller operates as a Kubernetes operator, following a reconciliation pattern:
 
 1. **Resource Watching**:
    - The controller watches for changes to custom resources
@@ -129,9 +164,24 @@ DR-Syncer operates as a Kubernetes controller, following a reconciliation patter
 - **Comprehensive monitoring**: Track synchronization status and health
 - **Leader election**: Supports high availability deployments
 
+### CLI Operation
+
+The DR-Syncer CLI operates as a standalone tool:
+
+1. **Configuration**: Command-line flags specify source and destination clusters/namespaces
+2. **Resource Discovery**: The CLI identifies resources in the source namespace based on filtering
+3. **Resource Processing**: Resources are processed according to the selected operation mode
+4. **Destination Application**: Processed resources are applied to the destination namespace
+5. **Scaling Operations**: Deployments are scaled according to the operation mode
+6. **Data Migration**: PVC data is optionally migrated using pv-migrate
+
 ## Getting Started
 
-To get started with DR-Syncer, navigate to the [Installation & Configuration](/docs/installation) section to learn how to deploy the controller to your cluster.
+You can get started with DR-Syncer in two ways:
+
+1. **Controller Approach**: Navigate to the [Installation & Configuration](/docs/installation) section to learn how to deploy the controller to your cluster.
+
+2. **CLI Approach**: Check out the [CLI Usage](/docs/cli-usage) section to learn how to use the command-line tool for direct operations.
 
 For a complete overview of DR-Syncer's features, visit the [Features](/docs/features) section.
 
