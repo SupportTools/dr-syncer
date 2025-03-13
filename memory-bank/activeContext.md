@@ -1,5 +1,20 @@
 # Active Context: DR Syncer Controller
 
+## Release Status
+
+### v0.1.0 - First Public Release
+- Tag created: v0.1.0 
+- Date: March 13, 2025
+- Status: Released - GitHub Actions workflow triggered
+- Release Type: First public release
+- Key Components:
+  * Core Controller with all primary functionality
+  * CLI tool for direct operations
+  * PVC Sync Agent Implementation
+  * Comprehensive documentation
+  * Test suite
+  * Helm chart for deployment
+
 ## Current State
 
 ### Implementation Status

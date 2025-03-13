@@ -259,22 +259,33 @@
    - Manual steps in some upgrades
    - Resource quota recommendations
 
+## Release History
+
+### v0.1.0 (March 13, 2025)
+- First public release
+- Core controller with all primary functionality
+- CLI tool for direct operations
+- PVC Sync Agent with secure SSH/rsync implementation
+- Comprehensive documentation
+- Test suite with standardized test cases
+- Helm chart for deployment
+
 ## Next Milestones
 
-### v1.0.0
-- Complete core feature set
-- Comprehensive documentation
-- Production-ready performance
-- Full test coverage
+### v0.2.0
+- Complete remaining test cases implementation
+- Enhance performance monitoring
+- Improve error handling and recovery
+- Add advanced filtering options
 
-### v1.1.0
-- Enhanced monitoring
-- Advanced filtering
+### v0.5.0
+- Security enhancements
 - Performance optimizations
-- Security improvements
+- Extended documentation
+- Advanced monitoring capabilities
 
-### v1.2.0
-- Plugin system
-- Custom handlers
-- Cloud integrations
-- Community features
+### v1.0.0
+- Production-ready stability
+- Comprehensive test coverage
+- Enterprise-grade security features
+- Full documentation and examples
