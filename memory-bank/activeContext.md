@@ -244,7 +244,29 @@
 
 ## Recent Changes
 
-1. Build System Improvements
+1. Architecture Diagram Improvements
+   - Updated Controller System Architecture diagram to correctly show:
+     * Three-cluster design (Controller, Source, and DR clusters)
+     * Controller connecting to both Source and DR Kubernetes API servers
+     * Agents in Source cluster and Rsync pods in DR cluster
+     * Custom Resources renamed from "Replication" to "NamespaceMapping"
+     * Added ClusterMapping CRD to diagrams
+   - Updated Agent Architecture diagram to reflect:
+     * SSH server in Source cluster's agent
+     * Rsync pod in DR cluster initiating connection
+     * Direct authorized_keys command restrictions
+     * Controller in its own dedicated cluster
+   - Updated Data Flow Pattern diagram to show:
+     * DR cluster rsync pod initiating connection to source agent
+     * Controller cluster managing the process but not in data path
+     * Correct PVC mount relationships
+   - Updated Security Model description:
+     * Simplified single-layer authentication system
+     * Direct command restriction via authorized_keys template
+     * Elimination of intermediate script processing
+     * Improved security with OpenSSH built-in features
+
+2. Build System Improvements
    - Added DEBUG variable to Makefile to control log output verbosity
    - Updated kubeconfig settings to use files in the kubeconfig directory
    - Added conditional output based on DEBUG value for Docker, Helm, and kubectl commands

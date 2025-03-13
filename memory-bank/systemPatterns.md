@@ -139,18 +139,67 @@
 
 ## PVC Sync Pattern
 
-1. Agent Architecture
-   - DaemonSet-based deployment
-   - SSH proxy/bastion pattern
-   - No root filesystem access required
-   - Temporary PVC mount pods
-   - Node-specific routing
+1. Three-Cluster Architecture
+   ```mermaid
+   flowchart TD
+       subgraph Controller["Controller Cluster"]
+           C["DR-Syncer Controller"]
+           CR["Custom Resources<br/>(RemoteCluster, NamespaceMapping, ClusterMapping)"]
+           
+           C -- "Watches" --> CR
+       end
+       
+       subgraph Source["Source Cluster"]
+           SApi["Kubernetes API Server"]
+           SAgent["DR-Syncer Agent<br/>(DaemonSet)"]
+           SPVCs["Source PVCs"]
+           
+           SApi -- "Manages" --> SAgent
+           SAgent -- "Provides SSH/rsync service" --> SPVCs
+       end
+       
+       subgraph DR["DR Cluster"]
+           DRApi["Kubernetes API Server"]
+           RPod["Rsync Pod<br/>(PVC Mount)"]
+           DRPVCs["Destination PVCs"]
+           
+           DRApi -- "Manages" --> RPod
+           DRApi -- "Manages" --> DRPVCs
+           RPod -- "Mounts" --> DRPVCs
+       end
+       
+       C -- "Connects to API" --> SApi
+       C -- "Connects to API" --> DRApi
+       C -- "Creates/Manages" --> RPod
+       RPod -- "SSH Connection for<br/>Data Replication" --> SAgent
+       
+       classDef sourceCluster fill:#e6f7ff,stroke:#1890ff;
+       classDef controllerCluster fill:#f6ffed,stroke:#52c41a;
+       classDef drCluster fill:#fff7e6,stroke:#fa8c16;
+       
+       class Source sourceCluster;
+       class Controller controllerCluster;
+       class DR drCluster;
+   ```
 
-2. Security Pattern
-   - Two-layer SSH key management:
-     * DR→Agent: Cluster-level keys stored in secrets
-     * Agent→Temp: Operation-specific internal keys
-     * NamespaceMapping→Temp: NamespaceMapping-specific keys for isolation
+2. Agent Architecture
+   - DaemonSet-based deployment in source cluster
+   - SSH server running on port 2222
+   - Authorized_keys with command restrictions
+   - No root filesystem access required
+   - Direct access to PVC mount points
+
+3. Rsync Pod Architecture
+   - Created in DR cluster
+   - Mounts destination PVC
+   - Contains SSH client and rsync client
+   - Connects to source agent
+   - Managed by controller
+
+4. Security Pattern
+   - Single-layer SSH key management:
+     * Controller manages SSH keys stored in secrets
+     * Direct command restriction via authorized_keys template
    - Controller-managed key generation and rotation
    - Restricted RBAC permissions
    - Secure rsync over SSH
@@ -158,38 +207,52 @@
    - Key management implementation:
      * NamespaceMapping-level key generation and storage
      * Automatic key rotation
-     * Secure key distribution to temporary pods
      * Fingerprint tracking for key verification
      * Annotations for key metadata
 
-3. Deployment Pattern
+5. Deployment Pattern
    - Controller-managed agent lifecycle
    - Automated remote cluster setup
    - Resource management via RemoteCluster CRD
-   - On-demand temporary pod creation
+   - On-demand rsync pod creation in DR cluster
 
-4. Data Flow Pattern
-   ```
-   DR NamespaceMapping Pod → Agent SSH (port 2222) → Temp Pod rsync (internal port)
+6. Data Flow Pattern
+   ```mermaid
+   flowchart LR
+       subgraph Source["Source Cluster"]
+           SAgent["Source Agent<br/>(SSH Server port 2222)"]
+           SPVC["Source PVC Mount"]
+           
+           SAgent -- "Access" --> SPVC
+       end
+       
+       subgraph Controller["Controller Cluster"]
+           C["DR-Syncer Controller"]
+       end
+       
+       subgraph DR["DR Cluster"]
+           RPod["Rsync Pod"]
+           DPVC["Destination PVC Mount"]
+           
+           RPod -- "Mounts" --> DPVC
+       end
+       
+       C -- "1. Creates/Manages" --> RPod
+       RPod -- "2. Initiates SSH Connection" --> SAgent
+       RPod -- "3. Pulls/Pushes Data via rsync" --> SAgent
+       
+       classDef sourceCluster fill:#e6f7ff,stroke:#1890ff;
+       classDef controllerCluster fill:#f6ffed,stroke:#52c41a;
+       classDef drCluster fill:#fff7e6,stroke:#fa8c16;
+       
+       class Source sourceCluster;
+       class Controller controllerCluster;
+       class DR drCluster;
    ```
    - Direct node-to-node path
    - Minimal network overhead
    - Clean separation of concerns
-
-5. Temporary Pod Pattern
-   - Created on-demand for specific PVCs
-   - Node affinity to run on same node as PVC
-   - Direct PVC mount with minimal permissions
-   - Short-lived, purpose-specific pods
-   - Runs rsync server for data access
-   - Automatic cleanup after sync completion
-
-6. SSH Proxy Pattern
-   - Agent pod acts as SSH proxy/bastion
-   - SSH forwarding to temporary pods
-   - Restricted command execution
-   - Connection validation and logging
-   - Secure key management
+   - DR cluster rsync pod initiates connection to source agent
 
 ## Best Practices
 

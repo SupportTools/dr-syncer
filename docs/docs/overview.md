@@ -17,45 +17,75 @@ DR-Syncer is built on the Kubernetes operator pattern, using custom controllers 
 
 ```mermaid
 flowchart TD
-    subgraph "Source Cluster"
-        Controller["DR-Syncer Controller"]
-        CustomResources["Custom Resources<br/>(RemoteCluster, Replication)"]
-        SourceNS["Source Namespace<br/>(Applications, Configs, etc.)"]
+    subgraph Controller["Controller Cluster"]
+        C["DR-Syncer Controller"]
+        CR["Custom Resources<br/>(RemoteCluster, NamespaceMapping, ClusterMapping)"]
         
-        Controller -- "Watches" --> CustomResources
-        Controller -- "Monitors" --> SourceNS
+        C -- "Watches" --> CR
     end
     
-    subgraph "DR Cluster"
-        Agent["DR-Syncer Agent<br/>(DaemonSet)"]
-        DestNS["Destination Namespace<br/>(Replicated Resources)"]
-        PVCs["Persistent Volume Claims"]
+    subgraph Source["Source Cluster"]
+        SApi["Kubernetes API Server"]
+        SNS["Source Namespace<br/>(Applications, Configs, etc.)"]
+        SAgent["DR-Syncer Agent<br/>(DaemonSet)"]
+        SPVCs["Source PVCs"]
         
-        Agent -- "Provides SSH/rsync service" --> PVCs
+        SApi -- "Provides" --> SNS
+        SApi -- "Manages" --> SAgent
+        SAgent -- "Provides SSH/rsync service" --> SPVCs
     end
     
-    Controller -- "1. Synchronizes resources" --> DestNS
-    Controller -- "2. Replicates PVC data<br/>(SSH/rsync)" --> Agent
+    subgraph DR["DR Cluster"]
+        DRApi["Kubernetes API Server"]
+        DRNS["Destination Namespace<br/>(Replicated Resources)"]
+        RPod["Rsync Pod<br/>(PVC Mount)"]
+        DRPVCs["Destination PVCs"]
+        
+        DRApi -- "Manages" --> DRNS
+        DRApi -- "Manages" --> RPod
+        DRApi -- "Manages" --> DRPVCs
+        RPod -- "Mounts" --> DRPVCs
+    end
+    
+    C -- "Connects to API<br/>(Read Resources)" --> SApi
+    C -- "Connects to API<br/>(Apply Resources)" --> DRApi
+    C -- "Creates/Manages" --> RPod
+    RPod -- "SSH Connection for<br/>Data Replication" --> SAgent
+    
+    classDef sourceCluster fill:#e6f7ff,stroke:#1890ff;
+    classDef controllerCluster fill:#f6ffed,stroke:#52c41a;
+    classDef drCluster fill:#fff7e6,stroke:#fa8c16;
+    
+    class Source sourceCluster;
+    class Controller controllerCluster;
+    class DR drCluster;
 ```
 
 ### Component Relationships
 
-1. **Controller**: The core component running in the source cluster 
+1. **Controller**: The core component running in a dedicated controller cluster
    - Manages the overall synchronization process
    - Watches custom resources for configuration changes
-   - Monitors resources in source namespaces
+   - Connects to source and DR cluster APIs
    - Executes synchronization operations
    - Updates status and metrics
 
-2. **Agent**: A DaemonSet running in destination clusters
+2. **Agents**: DaemonSets running in both source and destination clusters
    - Provides SSH and rsync services for PVC data replication
-   - Runs on every node where PVCs might be mounted
+   - Runs on nodes where PVCs might be mounted
    - Provides direct PVC access without requiring root privileges
-   - Communicates securely with the controller
+   - Communicates securely with rsync pods
 
 3. **Custom Resources**:
    - `RemoteCluster`: Defines connection details for remote clusters
    - `NamespaceMapping`: Defines what and how to synchronize between namespaces
+   - `ClusterMapping`: Defines the relationship between clusters for multiple namespace mappings
+
+4. **Rsync Pod**: Temporary pod created in the DR cluster
+   - Mounts destination PVCs
+   - Initiates SSH connections to source agent
+   - Executes rsync commands to transfer data
+   - Reports completion back to controller
 
 ## CLI Architecture
 
@@ -236,39 +266,88 @@ One of DR-Syncer's key features is its ability to replicate data from Persistent
 
 ```mermaid
 flowchart TD
-    subgraph "DR Cluster Node"
-        Agent["Agent Pod<br/>(DaemonSet)"]
-        SSHD["SSH Daemon<br/>(Port 2222)"]
+    subgraph Source["Source Cluster"]
+        SAgent["Source Agent<br/>(SSH Server port 2222)"]
+        AuthKeys["authorized_keys<br/>(Command Restrictions)"]
         Rsync["rsync utility"]
-        PVCMounts["PVC Mount Points"]
+        SPVC["Source PVC Mount Points"]
         
-        Agent --> SSHD
-        SSHD --> Rsync
-        Rsync --> PVCMounts
+        SAgent --> AuthKeys
+        AuthKeys --> Rsync
+        Rsync --> SPVC
     end
     
-    subgraph "Source Cluster"
-        Controller["DR-Syncer Controller"]
+    subgraph Controller["Controller Cluster"]
+        C["DR-Syncer Controller"]
+    end
+    
+    subgraph DR["DR Cluster"]
+        RPod["Rsync Pod"]
         SSHClient["SSH Client"]
         RsyncClient["rsync Client"]
+        DPVC["Destination PVC Mount"]
         
-        Controller --> SSHClient
+        RPod --> SSHClient
         SSHClient --> RsyncClient
+        RPod -- "Mounts" --> DPVC
     end
     
-    SSHClient -- "Secure SSH Connection" --> SSHD
+    C -- "Creates/Manages" --> RPod
+    SSHClient -- "Secure SSH Connection" --> SAgent
     RsyncClient -- "Data Transfer" --> Rsync
+    
+    classDef sourceCluster fill:#e6f7ff,stroke:#1890ff;
+    classDef controllerCluster fill:#f6ffed,stroke:#52c41a;
+    classDef drCluster fill:#fff7e6,stroke:#fa8c16;
+    
+    class Source sourceCluster;
+    class Controller controllerCluster;
+    class DR drCluster;
 ```
 
 ### Data Flow Pattern
+
+```mermaid
+flowchart LR
+    subgraph Source["Source Cluster"]
+        SAgent["Source Agent<br/>(SSH Server port 2222)"]
+        SPVC["Source PVC Mount"]
+        
+        SAgent -- "Access" --> SPVC
+    end
+    
+    subgraph Controller["Controller Cluster"]
+        C["DR-Syncer Controller"]
+    end
+    
+    subgraph DR["DR Cluster"]
+        RPod["Rsync Pod"]
+        DPVC["Destination PVC Mount"]
+        
+        RPod -- "Mounts" --> DPVC
+    end
+    
+    C -- "1. Creates/Manages" --> RPod
+    RPod -- "2. Initiates SSH Connection" --> SAgent
+    RPod -- "3. Pulls/Pushes Data via rsync" --> SAgent
+    
+    classDef sourceCluster fill:#e6f7ff,stroke:#1890ff;
+    classDef controllerCluster fill:#f6ffed,stroke:#52c41a;
+    classDef drCluster fill:#fff7e6,stroke:#fa8c16;
+    
+    class Source sourceCluster;
+    class Controller controllerCluster;
+    class DR drCluster;
+```
 
 The PVC synchronization uses this flow:
 
 1. Controller identifies PVCs to synchronize in source cluster
 2. Controller ensures PVCs exist in destination cluster with correct attributes
-3. Controller establishes SSH connection to agent in destination cluster
-4. Controller uses rsync over SSH to transfer data between PVCs
-5. Status is updated with synchronization results
+3. Controller creates an rsync pod in the DR cluster that mounts the destination PVC
+4. Rsync pod initiates an SSH connection to the agent in the source cluster
+5. Rsync pod transfers data between source and destination PVCs using rsync over SSH
+6. Status is updated with synchronization results
 
 ### Security Model
 
@@ -278,7 +357,7 @@ DR-Syncer employs a robust security model for PVC data synchronization:
    - Secure key generation with proper permissions
    - Keys stored as Kubernetes secrets
    - Automated key rotation capabilities
-   - Isolation between different replication operations
+   - Single-layer authentication system
 
 2. **Direct Access Pattern**:
    - Agent runs with minimal privileges
@@ -287,9 +366,12 @@ DR-Syncer employs a robust security model for PVC data synchronization:
    - Clean separation of concerns
 
 3. **Command Restriction**:
+   - Direct command restriction via authorized_keys template
    - SSH authorized_keys restricts allowed commands
    - Only specific rsync operations permitted
    - No shell access
+   - Elimination of intermediate script processing
+   - Simplified security model with OpenSSH built-in features
    - Comprehensive logging of operations
 
 ## Namespace Mapping
