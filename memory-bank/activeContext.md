@@ -2,6 +2,16 @@
 
 ## Release Status
 
+### v0.1.1-rc1 - Release Candidate
+- Tag created: v0.1.1-rc1
+- Date: March 13, 2025
+- Status: Released - GitHub Actions workflow triggered
+- Release Type: Release candidate with workflow fixes
+- Key Changes:
+  * Fixed GitHub Actions workflow for releases
+  * Removed problematic changelog generation step
+  * Simplified release message format
+
 ### v0.1.0 - First Public Release
 - Tag created: v0.1.0 
 - Date: March 13, 2025

@@ -261,6 +261,13 @@
 
 ## Release History
 
+### v0.1.1-rc1 (March 13, 2025)
+- Release candidate with workflow fixes
+- Key changes:
+  * Fixed GitHub Actions workflow for releases
+  * Removed problematic changelog generation step
+  * Simplified release message format
+
 ### v0.1.0 (March 13, 2025)
 - First public release
 - Core controller with all primary functionality
