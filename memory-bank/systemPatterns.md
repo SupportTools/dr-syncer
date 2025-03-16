@@ -191,6 +191,306 @@
    - Connection validation and logging
    - Secure key management
 
+## Go Code Styling
+
+### Project Organization
+
+1. Project Structure
+   - `main.go` should be kept as small as possible, serving only as the application entrypoint
+   - All packages should be placed under the `./pkg/` directory
+   - CRD definitions remain in `./api/` following Kubernetes conventions
+   - Controllers remain in `./controllers/` following controller-runtime conventions
+   - Command-line tools should be in `./cmd/`
+
+2. File Organization
+   - Break up package files into multiple smaller files, keeping each under 300 lines
+   - Group small utility, helper, and setup functions in a `util.go` file within each package
+   - Name files according to their primary responsibility (e.g., `reconciler.go`, `sync.go`, `client.go`)
+   - Example package structure:
+     ```
+     pkg/syncer/
+     ├── client.go      // Client setup and operations
+     ├── reconciler.go  // Core reconciliation logic
+     ├── sync.go        // Resource synchronization functions 
+     ├── status.go      // Status management functions
+     └── util.go        // Small utility and helper functions
+     ```
+
+3. Function Organization
+   - Each exported function must have a detailed comment explaining what it does
+   - Example function documentation:
+     ```go
+     // SyncResources synchronizes Kubernetes resources from the source namespace to
+     // the destination namespace according to the provided configuration. It handles
+     // filtering resources by type, applying exclusions, and transforming references
+     // between namespaces.
+     //
+     // The function respects resource dependencies and handles special cases for
+     // Deployments, Services, and Ingresses automatically.
+     func SyncResources(ctx context.Context, sourceClient, destClient client.Client, 
+         mapping *v1alpha1.NamespaceMapping) error {
+         // Implementation
+     }
+     ```
+
+### Source Control Practices
+
+1. Git Commit Strategy
+   - Make frequent, small commits while coding to create recovery points
+   - Each commit should represent a logical unit of work
+   - Use descriptive commit messages with a clear structure:
+     ```
+     [Component] Brief description of change
+     
+     More detailed explanation if needed
+     ```
+   - Example commit messages:
+     ```
+     [NamespaceMapping] Add PVC filtering support
+     
+     Adds ability to filter PVCs by storage class or access mode
+     when synchronizing between namespaces.
+     ```
+     ```
+     [CLI] Fix error handling in cluster connection
+     
+     Improves error messages when kubeconfig is invalid and adds
+     retry logic for transient connection issues.
+     ```
+
+2. Code Recovery with Git
+   - Use git to recover accidentally deleted code:
+     ```bash
+     # Find the commit where code was deleted
+     git log -p -- path/to/file.go
+     
+     # Recover specific file from a previous commit without affecting other files
+     git checkout [commit-hash] -- path/to/file.go
+     
+     # For recovering just part of a file, use git blame to find the right commit
+     git blame path/to/file.go
+     
+     # Then checkout that specific file and manually extract the needed parts
+     git checkout [commit-hash] -- path/to/file.go
+     ```
+   - Consider using `git stash` to temporarily save changes when switching tasks:
+     ```bash
+     # Save current changes
+     git stash save "description of changes"
+     
+     # List saved stashes
+     git stash list
+     
+     # Apply a specific stash (keeping it in the stash list)
+     git stash apply stash@{0}
+     
+     # Remove stash after applying it
+     git stash pop
+     ```
+
+3. Branching Strategy
+   - Use feature branches for new features or significant changes
+   - Keep feature branches short-lived (1-5 days)
+   - Regularly rebase feature branches on the main branch
+   - Use pull requests for code review
+   - Clean up branches after merging
+
+### Formatting and Organization
+
+1. Code Formatting
+   - Use `go fmt` or `gofmt` for automatic formatting
+   - Maintain 80-100 character line length where reasonable
+   - Follow standard Go indentation (tabs, not spaces)
+   - Run formatting before committing: `go fmt ./...`
+
+2. Import Organization
+   - Group imports in three distinct blocks:
+     * Standard library
+     * External dependencies
+     * Internal project packages
+   ```go
+   import (
+       "context"
+       "fmt"
+       "time"
+
+       "k8s.io/apimachinery/pkg/apis/meta/v1"
+       "sigs.k8s.io/controller-runtime/pkg/client"
+       
+       "github.com/supporttools/dr-syncer/pkg/logging"
+   )
+   ```
+   - Use explicit import names when necessary to avoid collisions
+   - Avoid dot imports (e.g., `import . "fmt"`)
+
+3. Package Organization
+   - Organize packages by functional domain, not by type
+   - Keep package names short, clear, and descriptive
+   - Avoid package name collisions with common libraries
+   - Follow established package patterns:
+     * api/v1alpha1 - CRD type definitions
+     * controllers - Controller implementations
+     * pkg - Shared utilities and components
+
+### Naming Conventions
+
+1. General Naming
+   - Use camelCase for private identifiers
+   - Use PascalCase for exported identifiers
+   - Avoid abbreviations except for common ones (e.g., API, CRD, DR)
+   - Be explicit and descriptive in naming
+
+2. Package-Specific Naming
+   - CRD Types (api/v1alpha1):
+     * Types: `[Resource]Spec`, `[Resource]Status` (e.g., `NamespaceMappingSpec`)
+     * Fields: Descriptive, domain-specific names (e.g., `SourceNamespace`, `DestinationNamespace`)
+   - Controllers:
+     * Reconcilers: `[Resource]Reconciler` (e.g., `NamespaceMappingReconciler`)
+     * Methods: Follow controller-runtime patterns (e.g., `Reconcile`, `SetupWithManager`)
+
+3. Variable Naming
+   - Contextual variables: `ctx` for context.Context
+   - Loop indices: `i`, `j`, etc., or descriptive names for complex loops
+   - Error returns: `err`
+   - Controllers: `r` for reconciler instance
+   - Kubernetes clients: `client` or `k8sClient`
+
+### Error Handling Patterns
+
+1. Standard Error Handling
+   ```go
+   if err != nil {
+       // Record event
+       r.Recorder.Event(obj, corev1.EventTypeWarning, "SyncFailed", err.Error())
+       
+       // Update status with condition
+       meta.SetStatusCondition(&obj.Status.Conditions, metav1.Condition{
+           Type:    "Synchronized",
+           Status:  metav1.ConditionFalse,
+           Reason:  "SyncFailed",
+           Message: err.Error(),
+       })
+       
+       // Update object status
+       if updateErr := r.Status().Update(ctx, obj); updateErr != nil {
+           log.WithError(updateErr).Error("failed to update status")
+       }
+       
+       // Return with requeue to retry
+       return ctrl.Result{RequeueAfter: time.Minute}, err
+   }
+   ```
+
+2. Error Wrapping
+   - Wrap errors with context using `fmt.Errorf("context: %w", err)`
+   - Include relevant details when wrapping errors
+   - Use error wrapping for operation context, not just message
+
+3. Error Logging
+   - Use structured logging with error fields:
+     ```go
+     log.WithError(err).WithField("resource", req.NamespacedName).Error("failed to sync")
+     ```
+   - Include appropriate context in error logs
+   - Use consistent verbosity levels
+
+### Documentation Standards
+
+1. Package Documentation
+   - Add package documentation comments at the top of each package's primary file:
+     ```go
+     // Package controller implements the core reconciliation logic for DR Syncer
+     // resources, handling cluster connection management and resource synchronization.
+     package controller
+     ```
+
+2. Type and Function Documentation
+   - Document all exported types and functions with detailed comments
+   - Include usage examples for complex functions
+   - Document all parameters and return values
+   ```go
+   // SyncResources synchronizes resources from the source namespace to the
+   // destination namespace according to the provided configuration.
+   //
+   // It filters resources based on resourceTypes and exclusions, and applies
+   // transformations as needed for the destination cluster.
+   //
+   // Parameters:
+   //   - ctx: Context for the operation
+   //   - sourceClient: Client for the source cluster
+   //   - destClient: Client for the destination cluster
+   //   - mapping: NamespaceMapping configuration
+   //
+   // Returns:
+   //   - error: Any error encountered during synchronization
+   func SyncResources(ctx context.Context, sourceClient, destClient client.Client, 
+       mapping *v1alpha1.NamespaceMapping) error {
+       // Implementation
+   }
+   ```
+
+3. Implementation Comments
+   - Add comments for complex or non-obvious code sections
+   - Explain algorithm choices and design decisions
+   - Document known limitations or edge cases
+
+### Testing Patterns
+
+1. Test Organization
+   - Use table-driven tests for multiple test cases
+   - Group related test cases
+   - Name tests clearly: `TestFunctionName_Scenario`
+
+2. Test Helpers
+   - Create shared test fixtures and helpers
+   - Use testing.T helpers for common assertions
+   - Isolate test dependencies
+
+3. Test Coverage
+   - Aim for high test coverage on core business logic
+   - Test error cases and edge conditions
+   - Include integration tests for controller behavior
+
+### Kubernetes-Specific Patterns
+
+1. Controller Patterns
+   ```go
+   // Reconcile implements the reconciliation loop for NamespaceMapping resources
+   func (r *NamespaceMappingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+       log := r.Log.WithValues("namespacemapping", req.NamespacedName)
+       
+       // Fetch the NamespaceMapping resource
+       var mapping v1alpha1.NamespaceMapping
+       if err := r.Get(ctx, req.NamespacedName, &mapping); err != nil {
+           if k8serrors.IsNotFound(err) {
+               return ctrl.Result{}, nil // Object not found, no requeue
+           }
+           return ctrl.Result{}, err // Error reading, requeue
+       }
+       
+       // Implement reconciliation logic
+       
+       // Update status
+       mapping.Status.LastSyncTime = metav1.Now()
+       if err := r.Status().Update(ctx, &mapping); err != nil {
+           log.Error(err, "Failed to update status")
+           return ctrl.Result{}, err
+       }
+       
+       return ctrl.Result{RequeueAfter: time.Duration(mapping.Spec.IntervalSeconds) * time.Second}, nil
+   }
+   ```
+
+2. Client-go Patterns
+   - Prefer controller-runtime Client over direct clientsets
+   - Use List operations with LabelSelectors for filtering
+   - Follow API server pagination patterns for large resource lists
+
+3. CRD Type Patterns
+   - Use consistent type definitions across CRDs
+   - Include validation markers for OpenAPI schema generation
+   - Follow Kubernetes API conventions for status reporting
+
 ## Best Practices
 
 1. Resource Management

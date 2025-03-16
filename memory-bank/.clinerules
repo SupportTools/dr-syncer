@@ -9,6 +9,18 @@
   - Important Note: The "Replication" CRD was renamed to "NamespaceMapping" in 2025 to better reflect its purpose
   - Documentation, examples, and code references have been updated to use NamespaceMapping instead of Replication
 
+### Go Code Styling Rules
+- main.go should be minimal, serving only as entrypoint
+- All packages under ./pkg/ directory
+- Keep files under 300 lines by splitting into multiple files
+- Group small utility functions in util.go within each package
+- Each exported function requires detailed documentation comments
+- Run go fmt ./... before committing code
+- Make frequent, small git commits while coding to create recovery points
+- Use git checkout [commit-hash] -- path/to/file.go to recover accidentally deleted code
+- Group imports in three blocks: standard library, external deps, internal packages
+- Break up large packages into multiple files with clear responsibilities
+
 ### Command Line Tools
 - DR-Syncer provides two separate tools:
   1. Controller: Kubernetes operator that runs in-cluster
