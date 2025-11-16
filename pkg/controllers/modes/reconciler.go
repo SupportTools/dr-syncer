@@ -13,14 +13,17 @@ import (
 	syncerrors "github.com/supporttools/dr-syncer/pkg/controllers/syncer/errors"
 	"github.com/supporttools/dr-syncer/pkg/controllers/watch"
 	"github.com/supporttools/dr-syncer/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 const (
@@ -522,6 +525,10 @@ performSync:
 func (r *ModeReconciler) syncResources(ctx context.Context, mapping *drv1alpha1.NamespaceMapping) ([]drv1alpha1.DeploymentScale, error) {
 	startTime := time.Now()
 
+	if err := r.ensureClusterClients(ctx, mapping); err != nil {
+		return nil, err
+	}
+
 	log.Info(fmt.Sprintf("starting resource sync from cluster %s namespace %s to cluster %s namespace %s",
 		mapping.Spec.SourceCluster, mapping.Spec.SourceNamespace,
 		mapping.Spec.DestinationCluster, mapping.Spec.DestinationNamespace))
@@ -653,6 +660,10 @@ func (r *ModeReconciler) CleanupResources(ctx context.Context, mapping *drv1alph
 	// Determine source and destination namespaces using the same logic as syncResources
 	srcNamespace := mapping.Spec.SourceNamespace
 	dstNamespace := mapping.Spec.DestinationNamespace
+
+	if err := r.ensureClusterClients(ctx, mapping); err != nil {
+		return err
+	}
 
 	// If no destination namespace specified, use source namespace
 	if dstNamespace == "" {
@@ -1069,6 +1080,101 @@ func (r *ModeReconciler) resetRetryStatus(ctx context.Context, mapping *drv1alph
 		status.RetryStatus = nil
 		status.LastError = nil
 	})
+}
+
+// ensureClusterClients creates Kubernetes and dynamic clients for the source and destination clusters
+func (r *ModeReconciler) ensureClusterClients(ctx context.Context, mapping *drv1alpha1.NamespaceMapping) error {
+	if mapping == nil {
+		return fmt.Errorf("namespacemapping is nil")
+	}
+
+	var err error
+
+	if r.k8sSource == nil || r.sourceClient == nil || r.sourceConfig == nil {
+		r.sourceConfig, r.k8sSource, r.sourceClient, err = r.buildClusterClients(ctx, mapping.Namespace, mapping.Spec.SourceCluster, "source")
+		if err != nil {
+			return err
+		}
+	}
+
+	if r.k8sDest == nil || r.destClient == nil || r.destConfig == nil {
+		r.destConfig, r.k8sDest, r.destClient, err = r.buildClusterClients(ctx, mapping.Namespace, mapping.Spec.DestinationCluster, "destination")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Refresh watch manager with live clients
+	r.watchManager = watch.NewWatchManager(r.sourceClient, r.destClient)
+
+	return nil
+}
+
+func (r *ModeReconciler) buildClusterClients(ctx context.Context, mappingNamespace, clusterName, role string) (*rest.Config, kubernetes.Interface, dynamic.Interface, error) {
+	if clusterName == "" {
+		return nil, nil, nil, fmt.Errorf("%s cluster name is empty", role)
+	}
+
+	var (
+		cfg *rest.Config
+		err error
+	)
+
+	if strings.EqualFold(clusterName, "local") {
+		cfg, err = crconfig.GetConfig()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to get local cluster config: %w", err)
+		}
+	} else {
+		remoteCluster := &drv1alpha1.RemoteCluster{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: mappingNamespace, Name: clusterName}, remoteCluster); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to get RemoteCluster %s/%s: %w", mappingNamespace, clusterName, err)
+		}
+
+		secretNamespace := remoteCluster.Spec.KubeconfigSecretRef.Namespace
+		if secretNamespace == "" {
+			secretNamespace = mappingNamespace
+		}
+
+		secretName := remoteCluster.Spec.KubeconfigSecretRef.Name
+		if secretName == "" {
+			return nil, nil, nil, fmt.Errorf("kubeconfig secret name is empty for cluster %s", clusterName)
+		}
+
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: secretNamespace, Name: secretName}, secret); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to get kubeconfig secret %s/%s for cluster %s: %w", secretNamespace, secretName, clusterName, err)
+		}
+
+		key := remoteCluster.Spec.KubeconfigSecretRef.Key
+		if key == "" {
+			key = "kubeconfig"
+		}
+
+		kubeconfigData, ok := secret.Data[key]
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("kubeconfig key %s not found in secret %s/%s for cluster %s", key, secretNamespace, secretName, clusterName)
+		}
+
+		cfg, err = clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to build REST config for cluster %s: %w", clusterName, err)
+		}
+	}
+
+	k8sClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create kubernetes client for cluster %s: %w", clusterName, err)
+	}
+
+	dynClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create dynamic client for cluster %s: %w", clusterName, err)
+	}
+
+	log.Info(fmt.Sprintf("initialized %s cluster clients for %s", role, clusterName))
+
+	return cfg, k8sClient, dynClient, nil
 }
 
 // getResourceGVRs converts resource type strings to GroupVersionResource objects
