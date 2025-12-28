@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -13,7 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -193,14 +197,14 @@ func (r *ClusterMappingReconciler) handleConnectingPhase(ctx context.Context, cl
 	}
 
 	// Get source and target cluster clients
-	sourceClient, targetClient, err := r.getClusterClients(ctx, sourceCluster, targetCluster)
+	sourceClient, sourceConfig, targetClient, targetConfig, err := r.getClusterClients(ctx, sourceCluster, targetCluster)
 	if err != nil {
 		log.Errorf("Failed to get cluster clients: %v", err)
 		return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to get cluster clients: %v", err))
 	}
 
 	// Distribute SSH keys from target to source
-	err = r.distributeSSHKeys(ctx, clusterMapping, sourceClient, targetClient)
+	err = r.distributeSSHKeys(ctx, clusterMapping, sourceClient, sourceConfig, targetClient, targetConfig)
 	if err != nil {
 		log.Errorf("Failed to distribute SSH keys: %v", err)
 		return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to distribute SSH keys: %v", err))
@@ -213,7 +217,7 @@ func (r *ClusterMappingReconciler) handleConnectingPhase(ctx context.Context, cl
 	var requeueAfter time.Duration
 
 	if clusterMapping.Spec.VerifyConnectivity == nil || *clusterMapping.Spec.VerifyConnectivity {
-		connectionStatus, err = r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient)
+		connectionStatus, err = r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient, targetConfig)
 		if err != nil {
 			log.Errorf("Failed to verify connectivity: %v", err)
 			return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to verify connectivity: %v", err))
@@ -279,14 +283,14 @@ func (r *ClusterMappingReconciler) handleConnectedPhase(ctx context.Context, clu
 			}
 
 			// Get source and target cluster clients
-			sourceClient, targetClient, err := r.getClusterClients(ctx, sourceCluster, targetCluster)
+			sourceClient, _, targetClient, targetConfig, err := r.getClusterClients(ctx, sourceCluster, targetCluster)
 			if err != nil {
 				log.Errorf("Failed to get cluster clients: %v", err)
 				return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to get cluster clients: %v", err))
 			}
 
 			// Verify connectivity
-			connectionStatus, err := r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient)
+			connectionStatus, err := r.verifyConnectivity(ctx, clusterMapping, sourceClient, targetClient, targetConfig)
 			if err != nil {
 				log.Errorf("Failed to verify connectivity: %v", err)
 				return r.setFailedStatus(ctx, clusterMapping, fmt.Sprintf("Failed to verify connectivity: %v", err))
@@ -403,24 +407,24 @@ func (r *ClusterMappingReconciler) getClusters(ctx context.Context, clusterMappi
 }
 
 // getClusterClients gets Kubernetes clients for the source and target clusters
-func (r *ClusterMappingReconciler) getClusterClients(ctx context.Context, sourceCluster, targetCluster *drsyncerio.RemoteCluster) (kubernetes.Interface, kubernetes.Interface, error) {
+func (r *ClusterMappingReconciler) getClusterClients(ctx context.Context, sourceCluster, targetCluster *drsyncerio.RemoteCluster) (kubernetes.Interface, *rest.Config, kubernetes.Interface, *rest.Config, error) {
 	// Get source cluster client
-	sourceClient, err := r.getClusterClient(ctx, sourceCluster)
+	sourceClient, sourceConfig, err := r.getClusterClient(ctx, sourceCluster)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get source cluster client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to get source cluster client: %w", err)
 	}
 
 	// Get target cluster client
-	targetClient, err := r.getClusterClient(ctx, targetCluster)
+	targetClient, targetConfig, err := r.getClusterClient(ctx, targetCluster)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get target cluster client: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to get target cluster client: %w", err)
 	}
 
-	return sourceClient, targetClient, nil
+	return sourceClient, sourceConfig, targetClient, targetConfig, nil
 }
 
-// getClusterClient gets a Kubernetes client for the given cluster
-func (r *ClusterMappingReconciler) getClusterClient(ctx context.Context, cluster *drsyncerio.RemoteCluster) (kubernetes.Interface, error) {
+// getClusterClient gets a Kubernetes client and REST config for the given cluster
+func (r *ClusterMappingReconciler) getClusterClient(ctx context.Context, cluster *drsyncerio.RemoteCluster) (kubernetes.Interface, *rest.Config, error) {
 	// Get kubeconfig secret
 	secret := &corev1.Secret{}
 	err := r.Get(ctx, types.NamespacedName{
@@ -428,7 +432,7 @@ func (r *ClusterMappingReconciler) getClusterClient(ctx context.Context, cluster
 		Namespace: cluster.Spec.KubeconfigSecretRef.Namespace,
 	}, secret)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get kubeconfig secret: %w", err)
+		return nil, nil, fmt.Errorf("failed to get kubeconfig secret: %w", err)
 	}
 
 	// Get kubeconfig key
@@ -440,39 +444,39 @@ func (r *ClusterMappingReconciler) getClusterClient(ctx context.Context, cluster
 	// Get kubeconfig data
 	kubeconfigData, ok := secret.Data[key]
 	if !ok {
-		return nil, fmt.Errorf("kubeconfig key %s not found in secret", key)
+		return nil, nil, fmt.Errorf("kubeconfig key %s not found in secret", key)
 	}
 
 	// Create rest config
 	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create rest config: %w", err)
+		return nil, nil, fmt.Errorf("failed to create rest config: %w", err)
 	}
 
 	// Create client
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create client: %w", err)
 	}
 
-	return client, nil
+	return client, config, nil
 }
 
 // distributeSSHKeys distributes SSH keys from target to source
-func (r *ClusterMappingReconciler) distributeSSHKeys(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient, targetClient kubernetes.Interface) error {
+func (r *ClusterMappingReconciler) distributeSSHKeys(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient kubernetes.Interface, sourceConfig *rest.Config, targetClient kubernetes.Interface, targetConfig *rest.Config) error {
 	log.Info("Distributing SSH keys")
 
 	// Check if SSHKeySecretRef is provided
 	if clusterMapping.Spec.SSHKeySecretRef != nil {
-		return r.distributeSSHKeysFromSecret(ctx, clusterMapping, sourceClient, targetClient)
+		return r.distributeSSHKeysFromSecret(ctx, clusterMapping, sourceClient, sourceConfig)
 	}
 
 	// Fall back to extracting keys from agent pods
-	return r.distributeSSHKeysFromAgents(ctx, clusterMapping, sourceClient, targetClient)
+	return r.distributeSSHKeysFromAgents(ctx, clusterMapping, sourceClient, sourceConfig, targetClient, targetConfig)
 }
 
 // distributeSSHKeysFromSecret distributes SSH keys from a secret
-func (r *ClusterMappingReconciler) distributeSSHKeysFromSecret(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient, targetClient kubernetes.Interface) error {
+func (r *ClusterMappingReconciler) distributeSSHKeysFromSecret(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient kubernetes.Interface, sourceConfig *rest.Config) error {
 	// Get the secret reference
 	secretRef := clusterMapping.Spec.SSHKeySecretRef
 
@@ -516,7 +520,7 @@ func (r *ClusterMappingReconciler) distributeSSHKeysFromSecret(ctx context.Conte
 
 	// Add public key to all source agents
 	for _, sourcePod := range sourcePods {
-		err = r.addPublicKeyToAuthorizedKeys(ctx, sourceClient, sourcePod, publicKey)
+		err = r.addPublicKeyToAuthorizedKeys(ctx, sourceClient, sourceConfig, sourcePod, publicKey)
 		if err != nil {
 			log.Errorf("Failed to add public key to source agent %s/%s: %v",
 				sourcePod.Namespace, sourcePod.Name, err)
@@ -530,7 +534,7 @@ func (r *ClusterMappingReconciler) distributeSSHKeysFromSecret(ctx context.Conte
 }
 
 // distributeSSHKeysFromAgents extracts keys from agent pods and distributes them
-func (r *ClusterMappingReconciler) distributeSSHKeysFromAgents(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient, targetClient kubernetes.Interface) error {
+func (r *ClusterMappingReconciler) distributeSSHKeysFromAgents(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient kubernetes.Interface, sourceConfig *rest.Config, targetClient kubernetes.Interface, targetConfig *rest.Config) error {
 	// Get target agent pods
 	targetPods, err := r.getAgentPods(ctx, targetClient)
 	if err != nil {
@@ -548,7 +552,7 @@ func (r *ClusterMappingReconciler) distributeSSHKeysFromAgents(ctx context.Conte
 	// Extract public keys from target agents and add to source agents
 	for _, targetPod := range targetPods {
 		// Extract public key from target agent
-		publicKey, err := r.extractPublicKey(ctx, targetClient, targetPod)
+		publicKey, err := r.extractPublicKey(ctx, targetClient, targetConfig, targetPod)
 		if err != nil {
 			log.Errorf("Failed to extract public key from target agent %s/%s: %v",
 				targetPod.Namespace, targetPod.Name, err)
@@ -560,7 +564,7 @@ func (r *ClusterMappingReconciler) distributeSSHKeysFromAgents(ctx context.Conte
 
 		// Add public key to all source agents
 		for _, sourcePod := range sourcePods {
-			err = r.addPublicKeyToAuthorizedKeys(ctx, sourceClient, sourcePod, publicKey)
+			err = r.addPublicKeyToAuthorizedKeys(ctx, sourceClient, sourceConfig, sourcePod, publicKey)
 			if err != nil {
 				log.Errorf("Failed to add public key to source agent %s/%s: %v",
 					sourcePod.Namespace, sourcePod.Name, err)
@@ -575,7 +579,7 @@ func (r *ClusterMappingReconciler) distributeSSHKeysFromAgents(ctx context.Conte
 }
 
 // verifyConnectivity verifies SSH connectivity from target to source
-func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient, targetClient kubernetes.Interface) (*drsyncerio.ConnectionStatus, error) {
+func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clusterMapping *drsyncerio.ClusterMapping, sourceClient, targetClient kubernetes.Interface, targetConfig *rest.Config) (*drsyncerio.ConnectionStatus, error) {
 	log.Info("Verifying connectivity")
 
 	// Get target agent pods
@@ -637,7 +641,7 @@ func (r *ClusterMappingReconciler) verifyConnectivity(ctx context.Context, clust
 				}
 
 				// Test SSH connection
-				connected, errMsg, err := r.testSSHConnection(verifyCtx, targetClient, tpod, sourcePodIP)
+				connected, errMsg, err := r.testSSHConnection(verifyCtx, targetClient, targetConfig, tpod, sourcePodIP)
 
 				if err != nil {
 					log.Errorf("Failed to test SSH connection from %s to %s: %v",
@@ -702,9 +706,9 @@ func (r *ClusterMappingReconciler) getAgentPods(ctx context.Context, client kube
 }
 
 // extractPublicKey extracts the public key from the agent pod
-func (r *ClusterMappingReconciler) extractPublicKey(ctx context.Context, client kubernetes.Interface, pod corev1.Pod) (string, error) {
+func (r *ClusterMappingReconciler) extractPublicKey(ctx context.Context, client kubernetes.Interface, config *rest.Config, pod corev1.Pod) (string, error) {
 	// Execute command to get public key
-	stdout, stderr, err := r.execCommandInPod(ctx, client, pod, "cat /etc/ssh/keys/ssh_host_rsa_key.pub")
+	stdout, stderr, err := r.execCommandInPod(ctx, client, config, pod, "cat /etc/ssh/keys/ssh_host_rsa_key.pub")
 	if err != nil {
 		return "", fmt.Errorf("failed to execute command in pod %s/%s: %w, stderr: %s",
 			pod.Namespace, pod.Name, err, stderr)
@@ -720,12 +724,12 @@ func (r *ClusterMappingReconciler) extractPublicKey(ctx context.Context, client 
 }
 
 // addPublicKeyToAuthorizedKeys adds the public key to the authorized_keys file
-func (r *ClusterMappingReconciler) addPublicKeyToAuthorizedKeys(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, publicKey string) error {
+func (r *ClusterMappingReconciler) addPublicKeyToAuthorizedKeys(ctx context.Context, client kubernetes.Interface, config *rest.Config, pod corev1.Pod, publicKey string) error {
 	// Check if key already exists
 	checkCmd := fmt.Sprintf("grep -q '%s' %s && echo 'exists' || echo 'not exists'",
 		strings.ReplaceAll(publicKey, "'", "'\\''"), "/home/syncer/.ssh/authorized_keys")
 
-	stdout, stderr, err := r.execCommandInPod(ctx, client, pod, checkCmd)
+	stdout, stderr, err := r.execCommandInPod(ctx, client, config, pod, checkCmd)
 	if err != nil {
 		return fmt.Errorf("failed to check if key exists: %w, stderr: %s", err, stderr)
 	}
@@ -739,7 +743,7 @@ func (r *ClusterMappingReconciler) addPublicKeyToAuthorizedKeys(ctx context.Cont
 	appendCmd := fmt.Sprintf("echo '%s' >> %s",
 		strings.ReplaceAll(publicKey, "'", "'\\''"), "/home/syncer/.ssh/authorized_keys")
 
-	_, stderr, err = r.execCommandInPod(ctx, client, pod, appendCmd)
+	_, stderr, err = r.execCommandInPod(ctx, client, config, pod, appendCmd)
 	if err != nil {
 		return fmt.Errorf("failed to add key to authorized_keys: %w, stderr: %s", err, stderr)
 	}
@@ -748,10 +752,10 @@ func (r *ClusterMappingReconciler) addPublicKeyToAuthorizedKeys(ctx context.Cont
 }
 
 // testSSHConnection tests SSH connectivity from source to target
-func (r *ClusterMappingReconciler) testSSHConnection(ctx context.Context, client kubernetes.Interface, sourcePod corev1.Pod, targetPodIP string) (bool, string, error) {
+func (r *ClusterMappingReconciler) testSSHConnection(ctx context.Context, client kubernetes.Interface, config *rest.Config, sourcePod corev1.Pod, targetPodIP string) (bool, string, error) {
 	// Execute SSH command to test connection
 	cmd := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 2222 syncer@%s test-connection", targetPodIP)
-	stdout, stderr, err := r.execCommandInPod(ctx, client, sourcePod, cmd)
+	stdout, stderr, err := r.execCommandInPod(ctx, client, config, sourcePod, cmd)
 
 	if err != nil {
 		// Connection failed
@@ -766,28 +770,54 @@ func (r *ClusterMappingReconciler) testSSHConnection(ctx context.Context, client
 	return false, stdout, nil
 }
 
-// execCommandInPod executes a command in a pod
-func (r *ClusterMappingReconciler) execCommandInPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, command string) (string, string, error) {
-	// TODO: Implement proper pod exec functionality
-	// This is a placeholder implementation that will be replaced with actual pod exec code
-	// For now, we'll simulate success for testing purposes
-
-	// Log the command for debugging
+// execCommandInPod executes a command in a pod using the Kubernetes exec API
+func (r *ClusterMappingReconciler) execCommandInPod(ctx context.Context, client kubernetes.Interface, config *rest.Config, pod corev1.Pod, command string) (string, string, error) {
 	log.Info(fmt.Sprintf("Executing command in pod %s/%s: %s", pod.Namespace, pod.Name, command))
 
-	// Simulate different responses based on the command
-	if strings.Contains(command, "cat /etc/ssh/keys/ssh_host_rsa_key.pub") {
-		return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDLn+jLpnR1P1vLMjEMm6nXmHLyo+gqFJ7EnrpwFzWoiubi0YkGGJ5E7A8xdBzJH5CLXnWmtjnHs+gZ9vLrXK2aSZNGlXYiPpPd5qxZ5K1PwQWJYGGqfkhGNdFtNLUux7tCO2jYCnBTK4NVzLPvJGEsrGVRXLbLOxTp2nNFEhnvWlwuTsJZLJeLD4QHhxJXNxqhNNl0D9AuRwAhXKc6QraHAqsBrU+mJ0RJITJkFGPmR5GzXVYgLIELR/cxyYYMJL0fThjl7xjQQDNS7q+EeH7jR+XwrLqh4tYBH8BNnIgHJ/XaYKY9IcZ0InUlZ5j4KiKCeyZ9FB6EvwWZ9cRXZIqn8NQpRQYAHcfXD1eOYJKCMg6iRTbIV8YAwfBTnNs1YzQDWkXa8bRKfLnUZfJUkNSLXNXFUgbXJJQhHVYQHjXuXrVGUcJ1xmHRJbS9ywMxJlh6SZCxgULRQzCKILvE4zGmLxKIrQXEUwEGqoHHBTpSQoGGwxNNer5QxVmBRtLb9I0= root@agent-pod", "", nil
-	} else if strings.Contains(command, "grep -q") {
-		return "not exists", "", nil
-	} else if strings.Contains(command, "echo") && strings.Contains(command, ">>") {
-		return "", "", nil
-	} else if strings.Contains(command, "ssh -o StrictHostKeyChecking=no") {
-		return "SSH proxy connection successful", "", nil
+	// Determine the container name to exec into
+	containerName := ""
+	if len(pod.Spec.Containers) > 0 {
+		containerName = pod.Spec.Containers[0].Name
 	}
 
-	// Default response
-	return "", "", nil
+	// Build the exec request
+	execOpts := &corev1.PodExecOptions{
+		Container: containerName,
+		Command:   []string{"/bin/sh", "-c", command},
+		Stdin:     false,
+		Stdout:    true,
+		Stderr:    true,
+		TTY:       false,
+	}
+
+	req := client.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(pod.Name).
+		Namespace(pod.Namespace).
+		SubResource("exec").
+		VersionedParams(execOpts, scheme.ParameterCodec)
+
+	// Create SPDY executor
+	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create SPDY executor: %w", err)
+	}
+
+	// Prepare stdout and stderr buffers
+	var stdout, stderr bytes.Buffer
+
+	// Execute the command
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	if err != nil {
+		// Return the error along with any output that was captured
+		return stdout.String(), stderr.String(), fmt.Errorf("command execution failed: %w", err)
+	}
+
+	return stdout.String(), stderr.String(), nil
 }
 
 // SetupWithManager sets up the controller with the Manager
