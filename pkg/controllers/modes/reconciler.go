@@ -76,6 +76,17 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, mapping *drv1al
 		mapping.Spec.SourceCluster, mapping.Spec.SourceNamespace,
 		mapping.Spec.DestinationCluster, mapping.Spec.DestinationNamespace))
 
+	// Check if we should skip this reconciliation because we already synced and next sync time is in the future
+	// This prevents status update watch events from triggering unnecessary reconciliations
+	if mapping.Status.Phase == drv1alpha1.SyncPhaseCompleted && mapping.Status.NextSyncTime != nil {
+		timeUntilNextSync := time.Until(mapping.Status.NextSyncTime.Time)
+		if timeUntilNextSync > 0 {
+			log.Info(fmt.Sprintf("skipping reconciliation for mapping '%s': already synced, next sync in %s",
+				mapping.Name, timeUntilNextSync))
+			return ctrl.Result{RequeueAfter: timeUntilNextSync}, nil
+		}
+	}
+
 	// Update status to Running
 	if err := r.updateStatus(ctx, mapping, func(status *drv1alpha1.NamespaceMappingStatus) {
 		now := metav1.Now()
@@ -650,6 +661,13 @@ func (r *ModeReconciler) syncResources(ctx context.Context, mapping *drv1alpha1.
 
 // CleanupResources removes all resources that were synced to the destination cluster
 func (r *ModeReconciler) CleanupResources(ctx context.Context, mapping *drv1alpha1.NamespaceMapping) error {
+	// Check if destination client is available
+	if r.destClient == nil {
+		log.Info(fmt.Sprintf("skipping cleanup for cluster %s: destination client not initialized",
+			mapping.Spec.DestinationCluster))
+		return nil
+	}
+
 	// Determine source and destination namespaces using the same logic as syncResources
 	srcNamespace := mapping.Spec.SourceNamespace
 	dstNamespace := mapping.Spec.DestinationNamespace
