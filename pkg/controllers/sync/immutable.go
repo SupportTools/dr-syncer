@@ -12,6 +12,7 @@ import (
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -268,23 +269,76 @@ func (h *ImmutableResourceHandler) handleForceUpdate(ctx context.Context, obj ru
 	return nil
 }
 
-// getPodsForResource returns pods controlled by the given resource
+// getPodsForResource returns pods controlled by or related to the given resource
 func (h *ImmutableResourceHandler) getPodsForResource(ctx context.Context, obj runtime.Object) (*corev1.PodList, error) {
 	meta, ok := obj.(metav1.Object)
 	if !ok {
 		return nil, fmt.Errorf("object does not implement metav1.Object")
 	}
 
-	// List pods in the same namespace
-	pods, err := h.destClient.CoreV1().Pods(meta.GetNamespace()).List(ctx, metav1.ListOptions{
-		// TODO: Add label selectors based on resource type
-		// This requires implementing resource-specific pod selection logic
+	namespace := meta.GetNamespace()
+	var labelSelector string
+
+	switch resource := obj.(type) {
+	case *appsv1.Deployment:
+		// Use deployment's selector to find pods
+		if resource.Spec.Selector != nil && resource.Spec.Selector.MatchLabels != nil {
+			labelSelector = labels.SelectorFromSet(resource.Spec.Selector.MatchLabels).String()
+		}
+	case *corev1.Service:
+		// Use service's selector to find pods
+		if resource.Spec.Selector != nil && len(resource.Spec.Selector) > 0 {
+			labelSelector = labels.SelectorFromSet(resource.Spec.Selector).String()
+		}
+	case *corev1.PersistentVolumeClaim:
+		// For PVCs, we need to find pods mounting this PVC
+		return h.getPodsUsingPVC(ctx, namespace, meta.GetName())
+	case *corev1.ConfigMap, *corev1.Secret, *networkingv1.Ingress:
+		// These resources don't have direct pod ownership
+		// Return empty list - no pods to drain
+		return &corev1.PodList{}, nil
+	default:
+		// For unknown types, return empty list to be safe
+		log.Info(fmt.Sprintf("unknown resource type for pod selection: %T, returning empty list", obj))
+		return &corev1.PodList{}, nil
+	}
+
+	// If no selector found, return empty list
+	if labelSelector == "" {
+		return &corev1.PodList{}, nil
+	}
+
+	// List pods with the label selector
+	pods, err := h.destClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return pods, nil
+}
+
+// getPodsUsingPVC finds pods that mount a specific PVC
+func (h *ImmutableResourceHandler) getPodsUsingPVC(ctx context.Context, namespace, pvcName string) (*corev1.PodList, error) {
+	// List all pods in namespace
+	allPods, err := h.destClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter pods that use this PVC
+	var matchingPods []corev1.Pod
+	for _, pod := range allPods.Items {
+		for _, volume := range pod.Spec.Volumes {
+			if volume.PersistentVolumeClaim != nil && volume.PersistentVolumeClaim.ClaimName == pvcName {
+				matchingPods = append(matchingPods, pod)
+				break
+			}
+		}
+	}
+
+	return &corev1.PodList{Items: matchingPods}, nil
 }
 
 // applyMutableFieldUpdates copies mutable fields from source to destination based on resource type
