@@ -1,0 +1,106 @@
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: prod
+  namespace: dr-syncer
+spec:
+  kubeconfigSecretRef:
+    name: prod
+    namespace: dr-syncer
+  defaultSchedule: "*/1 * * * *"
+  defaultResourceTypes:
+    - configmaps
+    - secrets
+    - deployments
+    - services
+    - ingresses
+  pvcSync:
+    enabled: true
+    image:
+      repository: dr-syncer-agent
+      tag: e2e-test
+      pullPolicy: Never
+    ssh:
+      port: 2222
+    concurrency: 3
+    deployment:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+      privileged: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: RemoteCluster
+metadata:
+  name: dr
+  namespace: dr-syncer
+spec:
+  kubeconfigSecretRef:
+    name: dr
+    namespace: dr-syncer
+  defaultSchedule: "*/1 * * * *"
+  defaultResourceTypes:
+    - configmaps
+    - secrets
+    - deployments
+    - services
+    - ingresses
+  pvcSync:
+    enabled: true
+    image:
+      repository: dr-syncer-agent
+      tag: e2e-test
+      pullPolicy: Never
+    ssh:
+      port: 2222
+    concurrency: 3
+    deployment:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      resources:
+        limits:
+          cpu: "200m"
+          memory: "256Mi"
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+      privileged: true
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: prod-to-dr
+  namespace: dr-syncer
+spec:
+  sourceCluster: prod
+  targetCluster: dr
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
+---
+apiVersion: dr-syncer.io/v1alpha1
+kind: ClusterMapping
+metadata:
+  name: dr-to-prod
+  namespace: dr-syncer
+spec:
+  sourceCluster: dr
+  targetCluster: prod
+  verifyConnectivity: true
+  connectivityTimeoutSeconds: 60
