@@ -191,6 +191,9 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Put the PVCSyncer in the context for ExecuteCommandInPod using our exported context key
 	pvcSyncCtx := context.WithValue(rsyncCtx, SyncerKey, p)
 
+	// Variable to store rsync output for parsing after successful execution
+	var rsyncOutput string
+
 	// Execute with retry logic for transient failures
 	err := withRetry(ctx, 2, 10*time.Second, func() error {
 		entry := log.WithFields(logrus.Fields{
@@ -206,7 +209,7 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		execCtx, cancel := context.WithTimeout(pvcSyncCtx, 30*time.Second)
 		defer cancel()
 
-		_, stderr, execErr := rsyncpod.ExecuteCommandInPod(execCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
+		stdout, stderr, execErr := rsyncpod.ExecuteCommandInPod(execCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
 
 		if execErr != nil {
 			// Check if the error is retryable
@@ -223,6 +226,8 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 			return &RetryableError{Err: fmt.Errorf("transient connection error in rsync: %s", stderr)}
 		}
 
+		// Store stdout for parsing after successful execution
+		rsyncOutput = stdout
 		return nil
 	})
 
@@ -238,10 +243,13 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		return fmt.Errorf("rsync command failed: %v", err)
 	}
 
-	// Since we're not capturing rsync output anymore, we can't parse transfer stats
-	// Instead, we'll set reasonable placeholder values with correct types
-	bytesTransferred := int64(1000) // bytes as int64
-	filesTransferred := 10          // files as int
+	// Parse rsync output to get actual transfer statistics
+	bytesTransferred, filesTransferred, _, parseErr := ParseRsyncOutput(rsyncOutput)
+	if parseErr != nil {
+		log.WithField("error", parseErr).Warn(logging.LogTagWarn + " Failed to parse rsync output, using defaults")
+		bytesTransferred = 0
+		filesTransferred = 0
+	}
 
 	entry = log.WithFields(logrus.Fields{
 		"deployment": destDeployment.Name,
