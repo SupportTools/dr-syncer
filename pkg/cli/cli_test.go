@@ -315,12 +315,12 @@ func TestHandleServiceTransform(t *testing.T) {
 				"namespace": "source-ns",
 			},
 			"spec": map[string]interface{}{
-				"clusterIP":   "10.0.0.1",
-				"clusterIPs":  []interface{}{"10.0.0.1"},
-				"type":        "ClusterIP",
-				"ipFamilies":  []interface{}{"IPv4"},
-				"selector":    map[string]interface{}{"app": "test"},
-				"ports":       []interface{}{},
+				"clusterIP":      "10.0.0.1",
+				"clusterIPs":     []interface{}{"10.0.0.1"},
+				"type":           "ClusterIP",
+				"ipFamilies":     []interface{}{"IPv4"},
+				"selector":       map[string]interface{}{"app": "test"},
+				"ports":          []interface{}{},
 				"loadBalancerIP": "1.2.3.4",
 			},
 		},
@@ -570,10 +570,10 @@ func TestTransformResource_Deployment(t *testing.T) {
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]interface{}{
-				"name":            "nginx",
-				"namespace":       "source",
-				"resourceVersion": "12345",
-				"uid":             "abc123",
+				"name":              "nginx",
+				"namespace":         "source",
+				"resourceVersion":   "12345",
+				"uid":               "abc123",
 				"creationTimestamp": "2023-01-01T00:00:00Z",
 				"managedFields": []interface{}{
 					map[string]interface{}{"manager": "kubectl"},
@@ -618,9 +618,9 @@ func TestTransformResource_Service(t *testing.T) {
 				"namespace": "source",
 			},
 			"spec": map[string]interface{}{
-				"clusterIP":   "10.0.0.100",
-				"clusterIPs":  []interface{}{"10.0.0.100"},
-				"type":        "LoadBalancer",
+				"clusterIP":      "10.0.0.100",
+				"clusterIPs":     []interface{}{"10.0.0.100"},
+				"type":           "LoadBalancer",
 				"loadBalancerIP": "1.2.3.4",
 				"ports": []interface{}{
 					map[string]interface{}{
