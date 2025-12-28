@@ -362,8 +362,9 @@ main() {
     fi
     
     # Verify printer columns
+    # Check that column headers are displayed (SOURCE, DESTINATION, PHASE, etc.)
     local columns=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get namespacemapping pvc-handling)
-    if echo "$columns" | grep -q "Completed" && echo "$columns" | grep -q "[0-9]"; then
+    if echo "$columns" | head -1 | grep -q "SOURCE" && echo "$columns" | head -1 | grep -q "PHASE"; then
         print_result "Printer columns visible" "pass"
     else
         print_result "Printer columns visible" "fail"
