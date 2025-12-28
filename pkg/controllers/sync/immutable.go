@@ -110,12 +110,41 @@ func (h *ImmutableResourceHandler) handleNoChange(ctx context.Context, obj runti
 		return fmt.Errorf("object does not implement client.Object")
 	}
 
+	gvk := obj.GetObjectKind().GroupVersionKind()
+
 	log.Info(fmt.Sprintf("skipping update of immutable resource %s/%s of type %s",
 		clientObj.GetNamespace(),
 		clientObj.GetName(),
-		obj.GetObjectKind().GroupVersionKind().Kind))
+		gvk.Kind))
 
-	// TODO: Record warning event
+	// Record warning event to notify users via kubectl get events
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s.%s", clientObj.GetName(), time.Now().Format("20060102150405")),
+			Namespace: clientObj.GetNamespace(),
+		},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: gvk.GroupVersion().String(),
+			Kind:       gvk.Kind,
+			Name:       clientObj.GetName(),
+			Namespace:  clientObj.GetNamespace(),
+			UID:        clientObj.GetUID(),
+		},
+		Reason:         "ImmutableUpdateSkipped",
+		Message:        fmt.Sprintf("Skipped update of immutable resource %s/%s: resource has immutable fields that cannot be updated in place", clientObj.GetNamespace(), clientObj.GetName()),
+		Type:           corev1.EventTypeWarning,
+		Source:         corev1.EventSource{Component: "dr-syncer"},
+		FirstTimestamp: metav1.Now(),
+		LastTimestamp:  metav1.Now(),
+		Count:          1,
+	}
+
+	if _, err := h.destClient.CoreV1().Events(clientObj.GetNamespace()).Create(ctx, event, metav1.CreateOptions{}); err != nil {
+		// Log but don't fail - event recording is informational
+		log.Error(fmt.Sprintf("failed to record warning event for %s/%s: %v",
+			clientObj.GetNamespace(), clientObj.GetName(), err))
+	}
+
 	return nil
 }
 
