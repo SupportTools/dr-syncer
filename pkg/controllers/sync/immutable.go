@@ -6,7 +6,9 @@ import (
 	"time"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -195,7 +197,7 @@ func (h *ImmutableResourceHandler) handlePartialUpdate(ctx context.Context, obj 
 		return fmt.Errorf("object does not implement client.Object")
 	}
 
-	// Get current resource
+	// Get current resource from destination
 	current := obj.DeepCopyObject().(client.Object)
 	key := types.NamespacedName{
 		Name:      clientObj.GetName(),
@@ -205,8 +207,19 @@ func (h *ImmutableResourceHandler) handlePartialUpdate(ctx context.Context, obj 
 		return fmt.Errorf("failed to get current resource: %w", err)
 	}
 
-	// TODO: Implement field-specific update logic based on resource type
-	// This requires knowledge of which fields are mutable for each resource type
+	// Apply mutable field updates based on resource type
+	updated, err := h.applyMutableFieldUpdates(current, obj)
+	if err != nil {
+		return fmt.Errorf("failed to apply mutable updates: %w", err)
+	}
+
+	// Update the resource
+	if err := h.ctrlClient.Update(ctx, updated); err != nil {
+		return fmt.Errorf("failed to update resource: %w", err)
+	}
+
+	log.Info(fmt.Sprintf("successfully applied partial update to %s/%s",
+		clientObj.GetNamespace(), clientObj.GetName()))
 
 	return nil
 }
@@ -272,4 +285,207 @@ func (h *ImmutableResourceHandler) getPodsForResource(ctx context.Context, obj r
 	}
 
 	return pods, nil
+}
+
+// applyMutableFieldUpdates copies mutable fields from source to destination based on resource type
+func (h *ImmutableResourceHandler) applyMutableFieldUpdates(current, source runtime.Object) (client.Object, error) {
+	switch src := source.(type) {
+	case *corev1.ConfigMap:
+		curr, ok := current.(*corev1.ConfigMap)
+		if !ok {
+			return nil, fmt.Errorf("current object is not a ConfigMap")
+		}
+		return h.updateConfigMapFields(curr, src)
+	case *corev1.Secret:
+		curr, ok := current.(*corev1.Secret)
+		if !ok {
+			return nil, fmt.Errorf("current object is not a Secret")
+		}
+		return h.updateSecretFields(curr, src)
+	case *corev1.Service:
+		curr, ok := current.(*corev1.Service)
+		if !ok {
+			return nil, fmt.Errorf("current object is not a Service")
+		}
+		return h.updateServiceFields(curr, src)
+	case *corev1.PersistentVolumeClaim:
+		curr, ok := current.(*corev1.PersistentVolumeClaim)
+		if !ok {
+			return nil, fmt.Errorf("current object is not a PersistentVolumeClaim")
+		}
+		return h.updatePVCFields(curr, src)
+	case *appsv1.Deployment:
+		curr, ok := current.(*appsv1.Deployment)
+		if !ok {
+			return nil, fmt.Errorf("current object is not a Deployment")
+		}
+		return h.updateDeploymentFields(curr, src)
+	case *networkingv1.Ingress:
+		curr, ok := current.(*networkingv1.Ingress)
+		if !ok {
+			return nil, fmt.Errorf("current object is not an Ingress")
+		}
+		return h.updateIngressFields(curr, src)
+	default:
+		// For unknown types, update labels and annotations only
+		currClient, ok := current.(client.Object)
+		if !ok {
+			return nil, fmt.Errorf("current object does not implement client.Object")
+		}
+		srcClient, ok := source.(client.Object)
+		if !ok {
+			return nil, fmt.Errorf("source object does not implement client.Object")
+		}
+		return h.updateMetadataOnly(currClient, srcClient)
+	}
+}
+
+// updateConfigMapFields updates mutable fields for ConfigMap
+func (h *ImmutableResourceHandler) updateConfigMapFields(current, source *corev1.ConfigMap) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Update mutable fields
+	updated.Data = source.Data
+	updated.BinaryData = source.BinaryData
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updateSecretFields updates mutable fields for Secret
+// Note: Secret.Type is immutable, so we only update data fields
+func (h *ImmutableResourceHandler) updateSecretFields(current, source *corev1.Secret) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Update mutable fields (data only, type is immutable)
+	updated.Data = source.Data
+	updated.StringData = source.StringData
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updateServiceFields updates mutable fields for Service
+// Note: clusterIP and clusterIPs are immutable and must be preserved
+func (h *ImmutableResourceHandler) updateServiceFields(current, source *corev1.Service) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Preserve immutable fields from current
+	preservedClusterIP := current.Spec.ClusterIP
+	preservedClusterIPs := current.Spec.ClusterIPs
+
+	// Update mutable spec fields
+	updated.Spec.Ports = source.Spec.Ports
+	updated.Spec.Selector = source.Spec.Selector
+	updated.Spec.ExternalIPs = source.Spec.ExternalIPs
+	updated.Spec.LoadBalancerIP = source.Spec.LoadBalancerIP
+	updated.Spec.LoadBalancerSourceRanges = source.Spec.LoadBalancerSourceRanges
+	updated.Spec.ExternalName = source.Spec.ExternalName
+	updated.Spec.ExternalTrafficPolicy = source.Spec.ExternalTrafficPolicy
+	updated.Spec.SessionAffinity = source.Spec.SessionAffinity
+	updated.Spec.SessionAffinityConfig = source.Spec.SessionAffinityConfig
+
+	// Restore immutable fields
+	updated.Spec.ClusterIP = preservedClusterIP
+	updated.Spec.ClusterIPs = preservedClusterIPs
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updatePVCFields updates mutable fields for PersistentVolumeClaim
+// Note: storageClassName, volumeName, and accessModes are immutable
+// Only resources.requests.storage can be expanded (not contracted)
+func (h *ImmutableResourceHandler) updatePVCFields(current, source *corev1.PersistentVolumeClaim) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Only update resources.requests if source requests more storage
+	// PVC can only be expanded, not contracted
+	if source.Spec.Resources.Requests != nil {
+		if sourceStorage, ok := source.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+			if currentStorage, ok := current.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+				// Only update if source requests more storage
+				if sourceStorage.Cmp(currentStorage) > 0 {
+					if updated.Spec.Resources.Requests == nil {
+						updated.Spec.Resources.Requests = make(corev1.ResourceList)
+					}
+					updated.Spec.Resources.Requests[corev1.ResourceStorage] = sourceStorage
+				}
+			}
+		}
+	}
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updateDeploymentFields updates mutable fields for Deployment
+// Note: spec.selector is immutable and must be preserved
+func (h *ImmutableResourceHandler) updateDeploymentFields(current, source *appsv1.Deployment) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Preserve immutable selector from current
+	preservedSelector := current.Spec.Selector
+
+	// Update mutable spec fields
+	updated.Spec.Replicas = source.Spec.Replicas
+	updated.Spec.Template = source.Spec.Template
+	updated.Spec.Strategy = source.Spec.Strategy
+	updated.Spec.MinReadySeconds = source.Spec.MinReadySeconds
+	updated.Spec.RevisionHistoryLimit = source.Spec.RevisionHistoryLimit
+	updated.Spec.Paused = source.Spec.Paused
+	updated.Spec.ProgressDeadlineSeconds = source.Spec.ProgressDeadlineSeconds
+
+	// Restore immutable selector
+	updated.Spec.Selector = preservedSelector
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updateIngressFields updates mutable fields for Ingress
+func (h *ImmutableResourceHandler) updateIngressFields(current, source *networkingv1.Ingress) (client.Object, error) {
+	updated := current.DeepCopy()
+
+	// Update mutable spec fields
+	updated.Spec.IngressClassName = source.Spec.IngressClassName
+	updated.Spec.DefaultBackend = source.Spec.DefaultBackend
+	updated.Spec.TLS = source.Spec.TLS
+	updated.Spec.Rules = source.Spec.Rules
+
+	// Update metadata (labels and annotations)
+	updated.Labels = source.Labels
+	updated.Annotations = source.Annotations
+
+	return updated, nil
+}
+
+// updateMetadataOnly updates only labels and annotations for unknown resource types
+func (h *ImmutableResourceHandler) updateMetadataOnly(current, source client.Object) (client.Object, error) {
+	// Get a deep copy to avoid modifying the original
+	updated := current.DeepCopyObject().(client.Object)
+
+	// Update metadata only
+	updated.SetLabels(source.GetLabels())
+	updated.SetAnnotations(source.GetAnnotations())
+
+	log.Info(fmt.Sprintf("updating metadata only for unknown resource type %s/%s",
+		current.GetNamespace(), current.GetName()))
+
+	return updated, nil
 }
