@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -143,4 +144,156 @@ func TestPVCClusterKey_Type(t *testing.T) {
 	var key PVCClusterContextKey = PVCClusterKey
 
 	assert.Equal(t, PVCClusterContextKey("pvcCluster"), key)
+}
+
+// Mount Path Cache Tests
+
+func TestMountPathCache_Struct(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	cache := &MountPathCache{
+		Path:        "/var/lib/kubelet/pods/abc123/volumes/kubernetes.io~csi/pvc-xyz/mount",
+		NodeName:    "worker-node-01",
+		AgentPodUID: "pod-uid-12345",
+		Timestamp:   now,
+	}
+
+	assert.Equal(t, "/var/lib/kubelet/pods/abc123/volumes/kubernetes.io~csi/pvc-xyz/mount", cache.Path)
+	assert.Equal(t, "worker-node-01", cache.NodeName)
+	assert.Equal(t, "pod-uid-12345", cache.AgentPodUID)
+	assert.Equal(t, now, cache.Timestamp)
+}
+
+func TestMountPathCache_EmptyFields(t *testing.T) {
+	cache := &MountPathCache{}
+
+	assert.Equal(t, "", cache.Path)
+	assert.Equal(t, "", cache.NodeName)
+	assert.Equal(t, "", cache.AgentPodUID)
+	assert.Equal(t, "", cache.Timestamp)
+}
+
+func TestMountPathCache_JSONMarshal(t *testing.T) {
+	cache := MountPathCache{
+		Path:        "/data/mount",
+		NodeName:    "node-1",
+		AgentPodUID: "uid-123",
+		Timestamp:   "2025-12-29T10:00:00Z",
+	}
+
+	// Test JSON marshaling
+	data, err := json.Marshal(cache)
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), `"path":"/data/mount"`)
+	assert.Contains(t, string(data), `"nodeName":"node-1"`)
+	assert.Contains(t, string(data), `"agentPodUID":"uid-123"`)
+	assert.Contains(t, string(data), `"timestamp":"2025-12-29T10:00:00Z"`)
+}
+
+func TestMountPathCache_JSONUnmarshal(t *testing.T) {
+	jsonData := `{"path":"/data/mount","nodeName":"node-1","agentPodUID":"uid-123","timestamp":"2025-12-29T10:00:00Z"}`
+
+	var cache MountPathCache
+	err := json.Unmarshal([]byte(jsonData), &cache)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "/data/mount", cache.Path)
+	assert.Equal(t, "node-1", cache.NodeName)
+	assert.Equal(t, "uid-123", cache.AgentPodUID)
+	assert.Equal(t, "2025-12-29T10:00:00Z", cache.Timestamp)
+}
+
+func TestMountPathCache_JSONUnmarshal_InvalidJSON(t *testing.T) {
+	invalidJSON := `{"path": "missing closing brace"`
+
+	var cache MountPathCache
+	err := json.Unmarshal([]byte(invalidJSON), &cache)
+
+	assert.Error(t, err)
+}
+
+func TestMountPathCache_Constants(t *testing.T) {
+	// Test that the constants are defined correctly
+	assert.Equal(t, "dr-syncer.io/mount-path-cache", MountPathCacheAnnotation)
+	assert.Equal(t, 1*time.Hour, MountPathCacheTTL)
+}
+
+func TestMountPathCache_TimestampValidation(t *testing.T) {
+	// Valid timestamp
+	validTimestamp := "2025-12-29T10:00:00Z"
+	_, err := time.Parse(time.RFC3339, validTimestamp)
+	assert.NoError(t, err, "Valid RFC3339 timestamp should parse")
+
+	// Invalid timestamp
+	invalidTimestamp := "2025-12-29 10:00:00"
+	_, err = time.Parse(time.RFC3339, invalidTimestamp)
+	assert.Error(t, err, "Invalid RFC3339 timestamp should fail to parse")
+}
+
+func TestMountPathCache_TTLExpiration(t *testing.T) {
+	// Create a timestamp that is 30 minutes old (not expired)
+	recentTime := time.Now().Add(-30 * time.Minute)
+	recentCache := MountPathCache{
+		Path:        "/data/mount",
+		NodeName:    "node-1",
+		AgentPodUID: "uid-123",
+		Timestamp:   recentTime.Format(time.RFC3339),
+	}
+
+	cacheTime, err := time.Parse(time.RFC3339, recentCache.Timestamp)
+	assert.NoError(t, err)
+	assert.False(t, time.Since(cacheTime) > MountPathCacheTTL, "30-minute-old cache should not be expired")
+
+	// Create a timestamp that is 2 hours old (expired)
+	expiredTime := time.Now().Add(-2 * time.Hour)
+	expiredCache := MountPathCache{
+		Path:        "/data/mount",
+		NodeName:    "node-1",
+		AgentPodUID: "uid-123",
+		Timestamp:   expiredTime.Format(time.RFC3339),
+	}
+
+	expiredCacheTime, err := time.Parse(time.RFC3339, expiredCache.Timestamp)
+	assert.NoError(t, err)
+	assert.True(t, time.Since(expiredCacheTime) > MountPathCacheTTL, "2-hour-old cache should be expired")
+}
+
+func TestMountPathCache_RealisticPaths(t *testing.T) {
+	// Test with realistic Kubernetes mount paths
+	testPaths := []string{
+		"/var/lib/kubelet/pods/abc123-def456/volumes/kubernetes.io~csi/pvc-xyz789/mount",
+		"/var/lib/kubelet/pods/12345678-1234-1234-1234-123456789abc/volumes/kubernetes.io~nfs/my-nfs-pvc/mount",
+		"/var/lib/kubelet/plugins/kubernetes.io/local-volume/mounts/pvc-local-123",
+	}
+
+	for _, path := range testPaths {
+		cache := MountPathCache{
+			Path:        path,
+			NodeName:    "worker-1",
+			AgentPodUID: "uid-test",
+			Timestamp:   time.Now().Format(time.RFC3339),
+		}
+		assert.Equal(t, path, cache.Path, "Path should be stored correctly: %s", path)
+	}
+}
+
+func TestMountPathCache_NodeNameVariations(t *testing.T) {
+	// Test with various Kubernetes node name formats
+	nodeNames := []string{
+		"worker-node-01",
+		"ip-10-0-1-100.us-west-2.compute.internal",
+		"gke-cluster-default-pool-abc123-xyz",
+		"aks-nodepool1-12345678-vmss000000",
+		"k3s-agent-1",
+	}
+
+	for _, nodeName := range nodeNames {
+		cache := MountPathCache{
+			Path:        "/data/mount",
+			NodeName:    nodeName,
+			AgentPodUID: "uid-test",
+			Timestamp:   time.Now().Format(time.RFC3339),
+		}
+		assert.Equal(t, nodeName, cache.NodeName, "Node name should be stored correctly: %s", nodeName)
+	}
 }

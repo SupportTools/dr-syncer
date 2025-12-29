@@ -3,6 +3,7 @@ package replication
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -26,6 +27,21 @@ type PVCLockInfo struct {
 	ControllerPodName string
 	Timestamp         string
 }
+
+// MountPathCache represents cached mount path information for PVC sync optimization
+type MountPathCache struct {
+	Path        string `json:"path"`
+	NodeName    string `json:"nodeName"`
+	AgentPodUID string `json:"agentPodUID"`
+	Timestamp   string `json:"timestamp"`
+}
+
+const (
+	// MountPathCacheAnnotation is the annotation key for cached mount path info
+	MountPathCacheAnnotation = "dr-syncer.io/mount-path-cache"
+	// MountPathCacheTTL is how long a cached mount path is considered valid
+	MountPathCacheTTL = 1 * time.Hour
+)
 
 // contains checks if a string is in a slice
 func contains(slice []string, s string) bool {
@@ -492,6 +508,116 @@ func (p *PVCSyncer) FindAgentPod(ctx context.Context, nodeName string) (*corev1.
 	return agentPod, nodeIP, nil
 }
 
+// getMountPathFromCache attempts to retrieve a valid cached mount path from PVC annotations.
+// Returns the cached path and true if valid, or empty string and false if cache miss/invalid.
+func (p *PVCSyncer) getMountPathFromCache(ctx context.Context, pvc *corev1.PersistentVolumeClaim, agentPod *corev1.Pod) (string, bool) {
+	if pvc.Annotations == nil {
+		return "", false
+	}
+
+	cacheJSON, exists := pvc.Annotations[MountPathCacheAnnotation]
+	if !exists || cacheJSON == "" {
+		return "", false
+	}
+
+	var cache MountPathCache
+	if err := json.Unmarshal([]byte(cacheJSON), &cache); err != nil {
+		log.WithFields(logrus.Fields{
+			"pvc_name": pvc.Name,
+			"error":    err,
+		}).Debug(logging.LogTagDetail + " Failed to parse mount path cache annotation")
+		return "", false
+	}
+
+	// Validate cache: check agent pod UID matches
+	if cache.AgentPodUID != string(agentPod.UID) {
+		log.WithFields(logrus.Fields{
+			"pvc_name":        pvc.Name,
+			"cached_pod_uid":  cache.AgentPodUID,
+			"current_pod_uid": string(agentPod.UID),
+		}).Debug(logging.LogTagDetail + " Cache invalidated: agent pod UID mismatch")
+		return "", false
+	}
+
+	// Validate cache: check node name matches
+	if cache.NodeName != agentPod.Spec.NodeName {
+		log.WithFields(logrus.Fields{
+			"pvc_name":     pvc.Name,
+			"cached_node":  cache.NodeName,
+			"current_node": agentPod.Spec.NodeName,
+		}).Debug(logging.LogTagDetail + " Cache invalidated: node name mismatch")
+		return "", false
+	}
+
+	// Validate cache: check TTL
+	cacheTime, err := time.Parse(time.RFC3339, cache.Timestamp)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"pvc_name":  pvc.Name,
+			"timestamp": cache.Timestamp,
+			"error":     err,
+		}).Debug(logging.LogTagDetail + " Cache invalidated: invalid timestamp")
+		return "", false
+	}
+
+	if time.Since(cacheTime) > MountPathCacheTTL {
+		log.WithFields(logrus.Fields{
+			"pvc_name":  pvc.Name,
+			"cache_age": time.Since(cacheTime).String(),
+			"cache_ttl": MountPathCacheTTL.String(),
+		}).Debug(logging.LogTagDetail + " Cache invalidated: TTL expired")
+		return "", false
+	}
+
+	log.WithFields(logrus.Fields{
+		"pvc_name":   pvc.Name,
+		"mount_path": cache.Path,
+		"cache_age":  time.Since(cacheTime).String(),
+	}).Info(logging.LogTagInfo + " Using cached mount path")
+
+	return cache.Path, true
+}
+
+// saveMountPathToCache stores the discovered mount path in PVC annotations for future reuse.
+func (p *PVCSyncer) saveMountPathToCache(ctx context.Context, namespace, pvcName, mountPath string, agentPod *corev1.Pod) error {
+	// Get fresh PVC to avoid conflicts
+	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get PVC for cache update: %v", err)
+	}
+
+	cache := MountPathCache{
+		Path:        mountPath,
+		NodeName:    agentPod.Spec.NodeName,
+		AgentPodUID: string(agentPod.UID),
+		Timestamp:   time.Now().Format(time.RFC3339),
+	}
+
+	cacheJSON, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("failed to marshal mount path cache: %v", err)
+	}
+
+	if pvc.Annotations == nil {
+		pvc.Annotations = make(map[string]string)
+	}
+	pvc.Annotations[MountPathCacheAnnotation] = string(cacheJSON)
+
+	_, err = p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update PVC with mount path cache: %v", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"pvc_name":   pvcName,
+		"namespace":  namespace,
+		"mount_path": mountPath,
+		"node_name":  agentPod.Spec.NodeName,
+	}).Info(logging.LogTagInfo + " Saved mount path to cache")
+
+	return nil
+}
+
 // FindPVCMountPath finds the mount path for a PVC on the given agent pod's node
 func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName string, agentPod *corev1.Pod) (string, error) {
 	log.WithFields(logrus.Fields{
@@ -511,6 +637,16 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 			"error":     err,
 		}).Error(logging.LogTagError + " Failed to get PVC")
 		return "", fmt.Errorf("failed to get PVC: %v", err)
+	}
+
+	// Try to get mount path from cache first (avoids expensive df/mount/find cascade)
+	if cachedPath, valid := p.getMountPathFromCache(ctx, pvc, agentPod); valid {
+		log.WithFields(logrus.Fields{
+			"pvc_name":   pvcName,
+			"mount_path": cachedPath,
+			"cache_hit":  true,
+		}).Info(logging.LogTagInfo + " Using cached mount path, skipping discovery")
+		return cachedPath, nil
 	}
 
 	// If no PV is bound yet, we can't find a mount path
@@ -574,6 +710,10 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 			"mount_path": mountPath,
 			"approach":   "df-grep",
 		}).Info(logging.LogTagDetail + " Found mount path using df approach")
+		// Cache the discovered mount path for future syncs
+		if err := p.saveMountPathToCache(ctx, namespace, pvcName, mountPath, agentPod); err != nil {
+			log.WithField("error", err).Warn(logging.LogTagWarn + " Failed to cache mount path, continuing anyway")
+		}
 		return mountPath, nil
 	}
 
@@ -605,6 +745,10 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 			"mount_path": mountPath,
 			"approach":   "mount-grep",
 		}).Info(logging.LogTagDetail + " Found mount path using mount approach")
+		// Cache the discovered mount path for future syncs
+		if err := p.saveMountPathToCache(ctx, namespace, pvcName, mountPath, agentPod); err != nil {
+			log.WithField("error", err).Warn(logging.LogTagWarn + " Failed to cache mount path, continuing anyway")
+		}
 		return mountPath, nil
 	}
 
@@ -654,7 +798,13 @@ func (p *PVCSyncer) FindPVCMountPath(ctx context.Context, namespace, pvcName str
 		"pv_name":    pvc.Spec.VolumeName,
 		"agent_pod":  agentPod.Name,
 		"mount_path": mountPath,
+		"approach":   "find-command",
 	}).Info(logging.LogTagDetail + " Found mount path for PVC")
+
+	// Cache the discovered mount path for future syncs
+	if err := p.saveMountPathToCache(ctx, namespace, pvcName, mountPath, agentPod); err != nil {
+		log.WithField("error", err).Warn(logging.LogTagWarn + " Failed to cache mount path, continuing anyway")
+	}
 
 	return mountPath, nil
 }
