@@ -524,6 +524,10 @@ func (r *ResourceSyncer) getPVCSyncer(ctx context.Context) (*controller.PVCSynce
 	syncer.SourceK8sClient = r.sourceClient
 	syncer.DestinationK8sClient = r.destClient
 
+	// Initialize the Lease-based PVC lock manager for distributed locking.
+	// Uses destination cluster for Leases to prevent concurrent syncs to the same destination PVC.
+	syncer.InitLockManager(r.destClient, "dr-syncer-system")
+
 	// Create a new context with the REST configs stored using multiple key formats
 	// to ensure compatibility with different parts of the codebase
 

@@ -30,6 +30,10 @@ func NewRsyncReplicationController(sourceClient, destClient client.Client, sourc
 		return nil, fmt.Errorf("failed to initialize PVC syncer: %v", err)
 	}
 
+	// Initialize the Lease-based PVC lock manager for distributed locking.
+	// Uses destination cluster for Leases to prevent concurrent syncs to the same destination PVC.
+	syncer.InitLockManager(syncer.DestinationK8sClient, "dr-syncer-system")
+
 	// Initialize the rsync controller
 	rsyncController := NewRsyncController(syncer)
 

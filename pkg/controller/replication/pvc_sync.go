@@ -119,6 +119,14 @@ type PVCSyncer struct {
 
 	// RsyncDaemonSetConfig is the configuration for the rsync DaemonSet pool
 	RsyncDaemonSetConfig *drv1alpha1.RsyncDaemonSetConfig
+
+	// LockManager handles Lease-based distributed locking for PVC sync operations.
+	// Replaces the legacy annotation-based locking for proper distributed coordination.
+	LockManager *PVCLockManager
+
+	// activeLock holds the currently acquired lock for the active sync operation.
+	// This allows ReleasePVCLock to release the correct lock with heartbeat support.
+	activeLock *PVCLock
 }
 
 // CreateEventRecorderForCluster creates an EventRecorder for emitting events to a Kubernetes cluster
@@ -901,6 +909,27 @@ func (p *PVCSyncer) UseRsyncDaemonSet() bool {
 		return false
 	}
 	return p.RsyncDaemonSetConfig.IsEnabled()
+}
+
+// InitLockManager initializes the Lease-based PVC lock manager.
+// The client should be for the controller cluster (where dr-syncer operator runs).
+// The namespace is typically "dr-syncer-system" where the Lease resources will be created.
+func (p *PVCSyncer) InitLockManager(client kubernetes.Interface, namespace string) {
+	if client == nil {
+		log.Warn("InitLockManager called with nil client, using destination cluster client as fallback")
+		client = p.DestinationK8sClient
+	}
+	if namespace == "" {
+		namespace = "dr-syncer-system"
+	}
+
+	p.LockManager = NewPVCLockManager(client, namespace)
+	log.WithFields(logrus.Fields{
+		"namespace":          namespace,
+		"holder_identity":    p.LockManager.HolderIdentity,
+		"lease_duration":     p.LockManager.LeaseDuration,
+		"heartbeat_interval": p.LockManager.HeartbeatInterval,
+	}).Info("Initialized PVC lock manager with Lease-based locking")
 }
 
 // InitRsyncDaemonSet initializes the RsyncDaemonSet manager if configuration is provided

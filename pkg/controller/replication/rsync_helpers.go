@@ -1018,14 +1018,69 @@ func (p *PVCSyncer) HasVolumeAttachments(ctx context.Context, namespace, pvcName
 	return false, nil
 }
 
-// AcquirePVCLock tries to acquire a lock on the source PVC
+// AcquirePVCLock tries to acquire a lock on the source PVC using Kubernetes Leases.
+// This provides proper distributed locking with heartbeat renewal for long operations.
 func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName string) (bool, *PVCLockInfo, error) {
 	log.WithFields(logrus.Fields{
 		"namespace":          namespace,
 		"pvc_name":           pvcName,
 		"source_cluster_url": p.SourceConfig.Host,
-	}).Info(logging.LogTagDetail + " Attempting to acquire lock on PVC using source cluster")
+	}).Info(logging.LogTagDetail + " Attempting to acquire lock on PVC")
 
+	// Use Lease-based locking if LockManager is initialized
+	if p.LockManager != nil {
+		return p.acquirePVCLockWithLease(ctx, namespace, pvcName)
+	}
+
+	// Fall back to legacy annotation-based locking (for backward compatibility during migration)
+	log.Warn(logging.LogTagWarn + " LockManager not initialized, using legacy annotation-based locking")
+	return p.acquirePVCLockLegacy(ctx, namespace, pvcName)
+}
+
+// acquirePVCLockWithLease uses the new Lease-based locking system
+func (p *PVCSyncer) acquirePVCLockWithLease(ctx context.Context, namespace, pvcName string) (bool, *PVCLockInfo, error) {
+	lock, err := p.LockManager.AcquireLock(ctx, namespace, pvcName)
+	if err != nil {
+		// Check if it's a "lock held by another" error vs a real error
+		if strings.Contains(err.Error(), "is locked by") {
+			// Get lock info for the existing holder
+			info, infoErr := p.LockManager.GetLockInfo(ctx, namespace, pvcName)
+			if infoErr == nil && info != nil {
+				return false, &PVCLockInfo{
+					ControllerPodName: info.HolderIdentity,
+					Timestamp:         info.AcquireTime.Format(time.RFC3339),
+				}, nil
+			}
+			return false, nil, nil
+		}
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"error":     err,
+		}).Error(logging.LogTagError + " Failed to acquire PVC lock via Lease")
+		return false, nil, fmt.Errorf("failed to acquire PVC lock: %v", err)
+	}
+
+	// Store the active lock and start heartbeat
+	p.activeLock = lock
+	lock.StartHeartbeat(ctx)
+
+	log.WithFields(logrus.Fields{
+		"namespace":   namespace,
+		"pvc_name":    pvcName,
+		"holder":      p.LockManager.HolderIdentity,
+		"lease_name":  lock.LeaseName,
+		"acquired_at": lock.AcquiredAt.Format(time.RFC3339),
+	}).Info(logging.LogTagInfo + " Successfully acquired PVC lock via Lease with heartbeat")
+
+	return true, &PVCLockInfo{
+		ControllerPodName: p.LockManager.HolderIdentity,
+		Timestamp:         lock.AcquiredAt.Format(time.RFC3339),
+	}, nil
+}
+
+// acquirePVCLockLegacy is the legacy annotation-based locking (deprecated)
+func (p *PVCSyncer) acquirePVCLockLegacy(ctx context.Context, namespace, pvcName string) (bool, *PVCLockInfo, error) {
 	// Get the source PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 	if err != nil {
@@ -1051,7 +1106,7 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 				"namespace": namespace,
 				"pvc_name":  pvcName,
 				"pod_name":  podName,
-			}).Info(logging.LogTagDetail + " We already own the lock on PVC")
+			}).Info(logging.LogTagDetail + " We already own the lock on PVC (legacy)")
 
 			return true, &PVCLockInfo{
 				ControllerPodName: podName,
@@ -1070,7 +1125,7 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 						"lock_owner":   pvc.Annotations["dr-syncer.io/lock-owner"],
 						"lock_time":    lockTime,
 						"current_time": time.Now(),
-					}).Info(logging.LogTagDetail + " Lock is stale, taking over")
+					}).Info(logging.LogTagDetail + " Lock is stale, taking over (legacy)")
 				} else {
 					// Lock is not stale, return the lock info
 					return false, &PVCLockInfo{
@@ -1110,7 +1165,7 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 			"namespace": namespace,
 			"pvc_name":  pvcName,
 			"error":     err,
-		}).Error(logging.LogTagError + " Failed to update source PVC to acquire lock")
+		}).Error(logging.LogTagError + " Failed to update source PVC to acquire lock (legacy)")
 		return false, nil, fmt.Errorf("failed to update source PVC to acquire lock: %v", err)
 	}
 
@@ -1118,7 +1173,7 @@ func (p *PVCSyncer) AcquirePVCLock(ctx context.Context, namespace, pvcName strin
 		"namespace": namespace,
 		"pvc_name":  pvcName,
 		"pod_name":  podName,
-	}).Info(logging.LogTagDetail + " Lock acquired on PVC")
+	}).Info(logging.LogTagDetail + " Lock acquired on PVC (legacy)")
 
 	return true, &PVCLockInfo{
 		ControllerPodName: podName,
@@ -1269,14 +1324,69 @@ func (p *PVCSyncer) findPVCNodesWithClient(ctx context.Context, c client.Client,
 	return nodes, nil
 }
 
-// ReleasePVCLock releases a lock on the source PVC
+// ReleasePVCLock releases a lock on the source PVC.
+// If using Lease-based locking, this releases the active lock and stops the heartbeat.
 func (p *PVCSyncer) ReleasePVCLock(ctx context.Context, namespace, pvcName string) error {
 	log.WithFields(logrus.Fields{
 		"namespace":          namespace,
 		"pvc_name":           pvcName,
 		"source_cluster_url": p.SourceConfig.Host,
-	}).Info(logging.LogTagDetail + " Releasing lock on PVC using source cluster")
+	}).Info(logging.LogTagDetail + " Releasing lock on PVC")
 
+	// Use Lease-based release if we have an active lock
+	if p.activeLock != nil {
+		return p.releasePVCLockWithLease(ctx, namespace, pvcName)
+	}
+
+	// Fall back to legacy annotation-based release
+	return p.releasePVCLockLegacy(ctx, namespace, pvcName)
+}
+
+// releasePVCLockWithLease releases the Lease-based lock
+func (p *PVCSyncer) releasePVCLockWithLease(ctx context.Context, namespace, pvcName string) error {
+	lock := p.activeLock
+	if lock == nil {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+		}).Debug(logging.LogTagDetail + " No active lock to release")
+		return nil
+	}
+
+	// Verify this lock matches the PVC being released
+	if lock.PVCNamespace != namespace || lock.PVCName != pvcName {
+		log.WithFields(logrus.Fields{
+			"requested_namespace": namespace,
+			"requested_pvc":       pvcName,
+			"lock_namespace":      lock.PVCNamespace,
+			"lock_pvc":            lock.PVCName,
+		}).Warn(logging.LogTagWarn + " Requested release doesn't match active lock, releasing anyway")
+	}
+
+	// Release the lock (this stops the heartbeat and deletes the Lease)
+	err := lock.Release(ctx)
+	p.activeLock = nil
+
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"error":     err,
+		}).Error(logging.LogTagError + " Failed to release PVC lock via Lease")
+		return fmt.Errorf("failed to release PVC lock: %v", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"namespace":     namespace,
+		"pvc_name":      pvcName,
+		"hold_duration": lock.HoldDuration().String(),
+	}).Info(logging.LogTagInfo + " Successfully released PVC lock via Lease")
+
+	return nil
+}
+
+// releasePVCLockLegacy releases the legacy annotation-based lock (deprecated)
+func (p *PVCSyncer) releasePVCLockLegacy(ctx context.Context, namespace, pvcName string) error {
 	// Get the source PVC
 	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 	if err != nil {
@@ -1293,7 +1403,7 @@ func (p *PVCSyncer) ReleasePVCLock(ctx context.Context, namespace, pvcName strin
 		log.WithFields(logrus.Fields{
 			"namespace": namespace,
 			"pvc_name":  pvcName,
-		}).Info(logging.LogTagDetail + " PVC is not locked")
+		}).Info(logging.LogTagDetail + " PVC is not locked (legacy)")
 		return nil
 	}
 
@@ -1310,7 +1420,7 @@ func (p *PVCSyncer) ReleasePVCLock(ctx context.Context, namespace, pvcName strin
 			"pvc_name":   pvcName,
 			"lock_owner": pvc.Annotations["dr-syncer.io/lock-owner"],
 			"our_pod":    podName,
-		}).Warn(logging.LogTagWarn + " PVC is locked by another controller, not releasing")
+		}).Warn(logging.LogTagWarn + " PVC is locked by another controller, not releasing (legacy)")
 		return fmt.Errorf("PVC is locked by another controller: %s", pvc.Annotations["dr-syncer.io/lock-owner"])
 	}
 
@@ -1325,14 +1435,14 @@ func (p *PVCSyncer) ReleasePVCLock(ctx context.Context, namespace, pvcName strin
 			"namespace": namespace,
 			"pvc_name":  pvcName,
 			"error":     err,
-		}).Error(logging.LogTagError + " Failed to update source PVC to release lock")
+		}).Error(logging.LogTagError + " Failed to update source PVC to release lock (legacy)")
 		return fmt.Errorf("failed to update source PVC to release lock: %v", err)
 	}
 
 	log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc_name":  pvcName,
-	}).Info(logging.LogTagDetail + " Lock released on PVC")
+	}).Info(logging.LogTagDetail + " Lock released on PVC (legacy)")
 
 	return nil
 }
