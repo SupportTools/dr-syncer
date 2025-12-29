@@ -112,6 +112,13 @@ type PVCSyncer struct {
 	// SourceRemoteClusterName is the name of the RemoteCluster for the source cluster
 	// Used to look up cached SSH keys for rsync operations
 	SourceRemoteClusterName string
+
+	// RsyncDaemonSet is the DaemonSet manager for the destination cluster rsync pod pool.
+	// When set, the syncer will use DaemonSet pods instead of creating per-sync Deployments.
+	RsyncDaemonSet *rsyncpod.RsyncDaemonSet
+
+	// RsyncDaemonSetConfig is the configuration for the rsync DaemonSet pool
+	RsyncDaemonSetConfig *drv1alpha1.RsyncDaemonSetConfig
 }
 
 // CreateEventRecorderForCluster creates an EventRecorder for emitting events to a Kubernetes cluster
@@ -882,4 +889,50 @@ func (p *PVCSyncer) LogSyncProgress(ctx context.Context, sourcePVCName, sourceNa
 		"phase":            phase,
 		"message":          message,
 	}).Info("PVC sync progress update")
+}
+
+// UseRsyncDaemonSet returns true if the syncer should use DaemonSet-based rsync pod pool
+// instead of creating per-sync Deployments. This eliminates the 1-5 minute startup overhead.
+func (p *PVCSyncer) UseRsyncDaemonSet() bool {
+	// DaemonSet is enabled if:
+	// 1. RsyncDaemonSet manager is set, AND
+	// 2. RsyncDaemonSetConfig is either nil (defaults to enabled) or explicitly enabled
+	if p.RsyncDaemonSet == nil {
+		return false
+	}
+	return p.RsyncDaemonSetConfig.IsEnabled()
+}
+
+// InitRsyncDaemonSet initializes the RsyncDaemonSet manager if configuration is provided
+func (p *PVCSyncer) InitRsyncDaemonSet(ctx context.Context, config *drv1alpha1.RsyncDaemonSetConfig) error {
+	if config == nil || !config.IsEnabled() {
+		log.Info("RsyncDaemonSet is disabled or not configured, using per-sync Deployment approach")
+		return nil
+	}
+
+	p.RsyncDaemonSetConfig = config
+
+	// Create the DaemonSet manager
+	namespace := config.GetNamespace()
+	ds := rsyncpod.NewRsyncDaemonSet(p.DestinationK8sClient, namespace)
+
+	// Configure the image if specified
+	if config.Image != "" {
+		ds = ds.WithImage(config.Image)
+	}
+
+	// Configure SSH secret if specified
+	if config.SSHSecretName != "" {
+		ds = ds.WithSSHSecret(config.SSHSecretName)
+	}
+
+	p.RsyncDaemonSet = ds
+
+	log.WithFields(logrus.Fields{
+		"namespace":  namespace,
+		"image":      ds.Image,
+		"ssh_secret": ds.SSHSecretName,
+	}).Info("Initialized RsyncDaemonSet manager")
+
+	return nil
 }

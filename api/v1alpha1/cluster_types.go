@@ -109,6 +109,12 @@ type PVCSyncSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	DefaultSamplePercent *int32 `json:"defaultSamplePercent,omitempty"`
+
+	// RsyncDaemonSet configures the destination rsync DaemonSet pool.
+	// This eliminates per-sync pod startup overhead by maintaining a pool
+	// of rsync pods on each destination cluster node.
+	// +optional
+	RsyncDaemonSet *RsyncDaemonSetConfig `json:"rsyncDaemonSet,omitempty"`
 }
 
 // GetGlobalConcurrencyLimit returns the global concurrency limit with default value of 4
@@ -117,6 +123,55 @@ func (p *PVCSyncSpec) GetGlobalConcurrencyLimit() int32 {
 		return 4
 	}
 	return *p.GlobalConcurrencyLimit
+}
+
+// RsyncDaemonSetConfig configures the destination rsync DaemonSet pool
+type RsyncDaemonSetConfig struct {
+	// Enabled controls whether to use the DaemonSet pool approach.
+	// When enabled, a DaemonSet with rsync pods runs on each destination cluster node,
+	// eliminating the 1-5 minute pod startup overhead per sync.
+	// +optional
+	// +kubebuilder:default=true
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Image is the rsync container image to use.
+	// +optional
+	// +kubebuilder:default="supporttools/dr-syncer-rsync:latest"
+	Image string `json:"image,omitempty"`
+
+	// Namespace is the namespace where the DaemonSet runs.
+	// Defaults to dr-syncer-system if not specified.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// SSHSecretName is the name of the secret containing SSH keys for rsync.
+	// The DaemonSet pods mount this secret to authenticate with source agents.
+	// +optional
+	SSHSecretName string `json:"sshSecretName,omitempty"`
+}
+
+// IsEnabled returns true if the RsyncDaemonSet is enabled
+func (r *RsyncDaemonSetConfig) IsEnabled() bool {
+	if r == nil || r.Enabled == nil {
+		return true // Default to enabled
+	}
+	return *r.Enabled
+}
+
+// GetImage returns the rsync image, falling back to the default
+func (r *RsyncDaemonSetConfig) GetImage() string {
+	if r == nil || r.Image == "" {
+		return "supporttools/dr-syncer-rsync:latest"
+	}
+	return r.Image
+}
+
+// GetNamespace returns the namespace, falling back to the default
+func (r *RsyncDaemonSetConfig) GetNamespace() string {
+	if r == nil || r.Namespace == "" {
+		return "dr-syncer-system"
+	}
+	return r.Namespace
 }
 
 // PVCSyncDeployment defines deployment configuration for the PVC sync agent

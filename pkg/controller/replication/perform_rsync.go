@@ -105,8 +105,14 @@ func (p *PVCSyncer) performSampleVerification(ctx context.Context, destDeploymen
 		VerifiedAt:    time.Now(),
 	}
 
+	// Determine destination path - either /data/ (Deployment mode) or kubelet CSI path (DaemonSet mode)
+	destBasePath := "/data"
+	if dsPath, ok := GetDaemonSetDestPath(ctx); ok && dsPath != "" {
+		destBasePath = strings.TrimSuffix(dsPath, "/")
+	}
+
 	// Get list of files in destination
-	listCmd := []string{"sh", "-c", "find /data -type f 2>/dev/null | head -1000"}
+	listCmd := []string{"sh", "-c", fmt.Sprintf("find %s -type f 2>/dev/null | head -1000", destBasePath)}
 	pvcCtx := context.WithValue(ctx, SyncerKey, p)
 	stdout, _, err := rsyncpod.ExecuteCommandInPod(pvcCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, listCmd, p.DestinationConfig)
 	if err != nil {
@@ -154,7 +160,7 @@ func (p *PVCSyncer) performSampleVerification(ctx context.Context, destDeploymen
 		}
 
 		// Convert destination path to source path
-		relPath := strings.TrimPrefix(file, "/data")
+		relPath := strings.TrimPrefix(file, destBasePath)
 		if relPath == "" {
 			relPath = "/"
 		}
@@ -267,7 +273,17 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	// Source and destination info for logs
 	sourceInfo := fmt.Sprintf("root@%s:%s/", nodeIP, mountPath)
+
+	// Check if we're running in DaemonSet mode (destination path provided via context)
+	// In DaemonSet mode, we use the kubelet CSI path instead of /data/
 	destInfo := "/data/"
+	if dsPath, ok := GetDaemonSetDestPath(ctx); ok && dsPath != "" {
+		destInfo = dsPath
+		if !strings.HasSuffix(destInfo, "/") {
+			destInfo += "/"
+		}
+		log.WithField("daemonset_dest_path", destInfo).Info(logging.LogTagInfo + " Using DaemonSet kubelet path for destination")
+	}
 
 	entry := log.WithFields(logrus.Fields{
 		"deployment": destDeployment.Name,
@@ -610,7 +626,8 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	entry.Info(logging.LogTagInfo + " Rsync command executed successfully. See pod logs for details.")
 
 	// Verify the transfer by checking if files were actually transferred
-	verifyCmd := []string{"sh", "-c", "if [ $(ls -la /data/ | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi"}
+	// Use destInfo which may be /data/ (Deployment mode) or a kubelet CSI path (DaemonSet mode)
+	verifyCmd := []string{"sh", "-c", fmt.Sprintf("if [ $(ls -la %s | wc -l) -gt 3 ]; then echo 'SUCCESS'; else echo 'FAILED'; fi", destInfo)}
 
 	// Use the context with PVCSyncer for verification
 	pvcVerifyCtx := context.WithValue(ctx, SyncerKey, p)
