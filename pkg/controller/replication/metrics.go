@@ -60,6 +60,31 @@ var (
 		},
 		[]string{"namespace", "pvc_name", "destination_namespace"},
 	)
+
+	// PVCSyncQueueDepth tracks number of PVC syncs waiting for a concurrency slot
+	PVCSyncQueueDepth = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "dr_syncer_pvc_sync_queue_depth",
+			Help: "Number of PVC sync operations waiting for a concurrency slot",
+		},
+	)
+
+	// PVCSyncConcurrentCount tracks number of currently active PVC syncs
+	PVCSyncConcurrentCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "dr_syncer_pvc_sync_concurrent_count",
+			Help: "Number of currently active PVC sync operations",
+		},
+	)
+
+	// PVCSyncQueueWaitDuration tracks how long syncs wait for a concurrency slot
+	PVCSyncQueueWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "dr_syncer_pvc_sync_queue_wait_seconds",
+			Help:    "Time spent waiting for a concurrency slot in seconds",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 12), // 0.1s to ~7 minutes
+		},
+	)
 )
 
 func init() {
@@ -71,6 +96,9 @@ func init() {
 		PVCSyncDuration,
 		PVCSyncOperations,
 		PVCSyncSpeed,
+		PVCSyncQueueDepth,
+		PVCSyncConcurrentCount,
+		PVCSyncQueueWaitDuration,
 	)
 }
 

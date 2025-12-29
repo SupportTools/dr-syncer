@@ -71,9 +71,17 @@ type PVCSyncSpec struct {
 	// +optional
 	SSH *PVCSyncSSH `json:"ssh,omitempty"`
 
-	// Concurrency is the maximum number of concurrent PVC syncs
+	// Concurrency is the maximum number of concurrent PVC syncs per NamespaceMapping
 	// +optional
 	Concurrency *int32 `json:"concurrency,omitempty"`
+
+	// GlobalConcurrencyLimit sets the maximum number of concurrent PVC sync operations
+	// across all NamespaceMappings for this cluster. Defaults to 4.
+	// +optional
+	// +kubebuilder:default=4
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=256
+	GlobalConcurrencyLimit *int32 `json:"globalConcurrencyLimit,omitempty"`
 
 	// RetryConfig configures retry behavior for failed syncs
 	// +optional
@@ -101,6 +109,14 @@ type PVCSyncSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	DefaultSamplePercent *int32 `json:"defaultSamplePercent,omitempty"`
+}
+
+// GetGlobalConcurrencyLimit returns the global concurrency limit with default value of 4
+func (p *PVCSyncSpec) GetGlobalConcurrencyLimit() int32 {
+	if p == nil || p.GlobalConcurrencyLimit == nil {
+		return 4
+	}
+	return *p.GlobalConcurrencyLimit
 }
 
 // PVCSyncDeployment defines deployment configuration for the PVC sync agent

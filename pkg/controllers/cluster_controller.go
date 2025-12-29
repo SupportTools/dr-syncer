@@ -23,6 +23,7 @@ import (
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controller/remotecluster"
+	"github.com/supporttools/dr-syncer/pkg/controller/replication"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -227,6 +228,11 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		log.Errorf("[Reconcile][PVCSync] failed to reconcile PVC sync for cluster %s: %v", cluster.Name, err)
 		setRemoteClusterCondition(&latest, "PVCSyncReady", metav1.ConditionFalse, "ReconciliationFailed", err.Error())
 	} else {
+		// Initialize global PVC sync concurrency manager with cluster settings
+		if latest.Spec.PVCSync != nil {
+			limit := latest.Spec.PVCSync.GetGlobalConcurrencyLimit()
+			replication.InitGlobalConcurrencyManager(int64(limit))
+		}
 		// Check if any nodes are not ready
 		if latest.Status.PVCSync != nil && latest.Status.PVCSync.AgentStatus != nil {
 			readyNodes := latest.Status.PVCSync.AgentStatus.ReadyNodes

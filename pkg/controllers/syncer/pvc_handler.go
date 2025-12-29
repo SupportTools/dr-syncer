@@ -250,9 +250,25 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 				},
 			}
 
+			// Acquire global concurrency slot before syncing
+			gcm := controller.GetGlobalConcurrencyManager()
+			if gcm != nil {
+				if err := gcm.Acquire(ctx, srcNamespace, sourcePVC.Name); err != nil {
+					log.Errorf("Failed to acquire concurrency slot for PVC %s/%s: %v", srcNamespace, sourcePVC.Name, err)
+					continue
+				}
+			}
+
 			// Perform the actual data synchronization using rsync deployment
-			if err := pvcSyncer.SyncPVCWithNamespaceMapping(ctx, dummyMapping, syncOpts); err != nil {
-				log.Errorf("Failed to sync data for PVC %s: %v", destPVC.Name, err)
+			syncErr := pvcSyncer.SyncPVCWithNamespaceMapping(ctx, dummyMapping, syncOpts)
+
+			// Release concurrency slot after sync completes
+			if gcm != nil {
+				gcm.Release(srcNamespace, sourcePVC.Name)
+			}
+
+			if syncErr != nil {
+				log.Errorf("Failed to sync data for PVC %s: %v", destPVC.Name, syncErr)
 			} else {
 				log.Info(fmt.Sprintf("Successfully synced data for PVC %s", destPVC.Name))
 			}

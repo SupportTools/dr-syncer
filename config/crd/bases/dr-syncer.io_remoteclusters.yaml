@@ -92,7 +92,7 @@ spec:
                 properties:
                   concurrency:
                     description: Concurrency is the maximum number of concurrent PVC
-                      syncs
+                      syncs per NamespaceMapping
                     format: int32
                     type: integer
                   defaultSamplePercent:
@@ -208,6 +208,15 @@ spec:
                     description: Enabled indicates whether PVC synchronization is
                       enabled
                     type: boolean
+                  globalConcurrencyLimit:
+                    default: 4
+                    description: |-
+                      GlobalConcurrencyLimit sets the maximum number of concurrent PVC sync operations
+                      across all NamespaceMappings for this cluster. Defaults to 4.
+                    format: int32
+                    maximum: 256
+                    minimum: 1
+                    type: integer
                   healthCheck:
                     description: HealthCheck configures health checking behavior
                     properties:
