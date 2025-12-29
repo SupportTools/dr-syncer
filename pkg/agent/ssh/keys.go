@@ -32,6 +32,9 @@ const (
 	hostEcdsaKeyPub   = "ssh_host_ecdsa_key.pub"
 	hostEd25519Key    = "ssh_host_ed25519_key"
 	hostEd25519KeyPub = "ssh_host_ed25519_key.pub"
+
+	// Rsync key secret prefix - used for caching SSH keys per RemoteCluster
+	RsyncKeySecretPrefix = "dr-syncer-rsync-keys-"
 )
 
 // KeyManager handles SSH key generation and management
@@ -455,6 +458,158 @@ func (k *KeyManager) EnsureKeysInControllerCluster(ctx context.Context, rc *drv1
 
 	log.Infof("EnsureKeysInControllerCluster: Successfully created secret %s/%s in controller cluster",
 		secretNamespace, secretName)
+	return nil
+}
+
+// GetRsyncKeySecretName returns the secret name for rsync keys for a given RemoteCluster
+func GetRsyncKeySecretName(remoteClusterName string) string {
+	return RsyncKeySecretPrefix + remoteClusterName
+}
+
+// EnsureRsyncKeys ensures rsync SSH keys exist for the remote cluster.
+// These keys are separate from agent host keys and are used by rsync pods
+// to authenticate to the agent SSH server. The keys are cached per RemoteCluster
+// to avoid regenerating on every sync operation.
+// Returns the secret containing id_rsa, id_rsa.pub, and authorized_keys.
+func (k *KeyManager) EnsureRsyncKeys(ctx context.Context, rc *drv1alpha1.RemoteCluster, namespace string) (*corev1.Secret, error) {
+	secretName := GetRsyncKeySecretName(rc.Name)
+
+	// Check if secret already exists
+	existingSecret := &corev1.Secret{}
+	err := k.client.Get(ctx, client.ObjectKey{
+		Name:      secretName,
+		Namespace: namespace,
+	}, existingSecret)
+
+	// If secret exists, return it
+	if err == nil {
+		log.Infof("Rsync SSH key secret %s/%s already exists for cluster %s",
+			namespace, secretName, rc.Name)
+		return existingSecret, nil
+	}
+
+	// If error is not "not found", return the error
+	if client.IgnoreNotFound(err) != nil {
+		return nil, fmt.Errorf("failed to check if rsync key secret exists: %v", err)
+	}
+
+	// Generate key pair for rsync authentication
+	privateKey, publicKey, err := k.generateKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate rsync key pair: %v", err)
+	}
+
+	// Create secret data with both private and public keys
+	// Store keys under multiple naming conventions for compatibility
+	secretData := map[string][]byte{
+		privateKeyKey:  privateKey,
+		"id_rsa":       privateKey,
+		publicKeyKey:   publicKey,
+		"id_rsa.pub":   publicKey,
+		authorizedKeys: publicKey, // The public key in authorized_keys format
+	}
+
+	// Create secret
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       "dr-syncer-rsync",
+				"app.kubernetes.io/part-of":    "dr-syncer",
+				"app.kubernetes.io/managed-by": "dr-syncer-controller",
+				"dr-syncer.io/remote-cluster":  rc.Name,
+				"dr-syncer.io/key-type":        "rsync", // Distinguish from agent keys
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: secretData,
+	}
+
+	log.Infof("Creating rsync SSH key secret %s/%s for cluster %s",
+		namespace, secretName, rc.Name)
+
+	err = k.client.Create(ctx, secret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create rsync SSH key secret: %v", err)
+	}
+
+	// Get the created secret to ensure we have the latest version
+	createdSecret := &corev1.Secret{}
+	err = k.client.Get(ctx, client.ObjectKey{
+		Name:      secretName,
+		Namespace: namespace,
+	}, createdSecret)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get created rsync SSH key secret: %v", err)
+	}
+
+	return createdSecret, nil
+}
+
+// PushRsyncKeysToCluster pushes the rsync SSH key secret to a target cluster
+func (k *KeyManager) PushRsyncKeysToCluster(ctx context.Context, rc *drv1alpha1.RemoteCluster, targetClient client.Client, secret *corev1.Secret, targetNamespace string) error {
+	secretName := secret.Name
+
+	// Check if secret already exists in target cluster
+	remoteSecret := &corev1.Secret{}
+	err := targetClient.Get(ctx, client.ObjectKey{
+		Name:      secretName,
+		Namespace: targetNamespace,
+	}, remoteSecret)
+
+	// Create a new secret for the target cluster
+	newSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: targetNamespace,
+			Labels:    secret.Labels,
+		},
+		Type: secret.Type,
+		Data: secret.Data,
+	}
+
+	// If secret exists, update it
+	if err == nil {
+		log.Infof("Updating rsync SSH key secret %s/%s in target cluster for %s",
+			targetNamespace, secretName, rc.Name)
+
+		// Update the existing secret
+		remoteSecret.Data = newSecret.Data
+		remoteSecret.Labels = newSecret.Labels
+		return targetClient.Update(ctx, remoteSecret)
+	}
+
+	// If error is not "not found", return the error
+	if client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("failed to check if rsync key secret exists in target cluster: %v", err)
+	}
+
+	// Secret doesn't exist, create it
+	log.Infof("Creating rsync SSH key secret %s/%s in target cluster for %s",
+		targetNamespace, secretName, rc.Name)
+	return targetClient.Create(ctx, newSecret)
+}
+
+// DeleteRsyncKeys deletes rsync SSH keys for the remote cluster from a namespace
+func (k *KeyManager) DeleteRsyncKeys(ctx context.Context, rc *drv1alpha1.RemoteCluster, namespace string) error {
+	secretName := GetRsyncKeySecretName(rc.Name)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: namespace,
+		},
+	}
+
+	err := k.client.Delete(ctx, secret)
+	if err != nil && client.IgnoreNotFound(err) != nil {
+		log.Errorf("Failed to delete rsync SSH key secret %s/%s: %v", namespace, secretName, err)
+		return fmt.Errorf("failed to delete rsync SSH key secret: %v", err)
+	}
+
+	log.Infof("Deleted rsync SSH key secret %s/%s for cluster %s", namespace, secretName, rc.Name)
 	return nil
 }
 

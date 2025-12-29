@@ -107,6 +107,20 @@ func (p *PVCSyncManager) ForceSync(ctx context.Context, rc *drv1alpha1.RemoteClu
 		return err
 	}
 
+	// Ensure rsync SSH keys exist (cached per RemoteCluster for performance)
+	rsyncSecret, err := p.keyManager.EnsureRsyncKeys(ctx, rc, "dr-syncer")
+	if err != nil {
+		log.Warnf("Failed to ensure rsync SSH keys for cluster %s: %v (will use per-sync key generation)", rc.Name, err)
+		// Don't fail - rsync workflow will fall back to per-sync key generation
+	} else {
+		// Push rsync keys to destination cluster (for rsync pods to mount)
+		if err := p.keyManager.PushRsyncKeysToCluster(ctx, rc, p.remoteClient, rsyncSecret, "dr-syncer"); err != nil {
+			log.Warnf("Failed to push rsync SSH keys to remote cluster %s: %v (will use per-sync key generation)", rc.Name, err)
+		} else {
+			log.Infof("Rsync SSH keys cached for cluster %s", rc.Name)
+		}
+	}
+
 	// Wait for the SSH key secrets to be fully available in both clusters
 	if err := p.waitForKeySecret(ctx, rc); err != nil {
 		rc.Status.PVCSync.Phase = "Failed"
@@ -246,6 +260,20 @@ func (p *PVCSyncManager) Reconcile(ctx context.Context, rc *drv1alpha1.RemoteClu
 		return err
 	}
 
+	// Ensure rsync SSH keys exist (cached per RemoteCluster for performance)
+	rsyncSecret, err := p.keyManager.EnsureRsyncKeys(ctx, rc, "dr-syncer")
+	if err != nil {
+		log.Warnf("Failed to ensure rsync SSH keys for cluster %s: %v (will use per-sync key generation)", rc.Name, err)
+		// Don't fail - rsync workflow will fall back to per-sync key generation
+	} else {
+		// Push rsync keys to destination cluster (for rsync pods to mount)
+		if err := p.keyManager.PushRsyncKeysToCluster(ctx, rc, p.remoteClient, rsyncSecret, "dr-syncer"); err != nil {
+			log.Warnf("Failed to push rsync SSH keys to remote cluster %s: %v (will use per-sync key generation)", rc.Name, err)
+		} else {
+			log.Infof("Rsync SSH keys cached for cluster %s", rc.Name)
+		}
+	}
+
 	// Wait for the SSH key secrets to be fully available in both clusters
 	if err := p.waitForKeySecret(ctx, rc); err != nil {
 		rc.Status.PVCSync.Phase = "Failed"
@@ -301,9 +329,24 @@ func (p *PVCSyncManager) Reconcile(ctx context.Context, rc *drv1alpha1.RemoteClu
 
 // cleanupPVCSync removes PVC sync components
 func (p *PVCSyncManager) cleanupPVCSync(ctx context.Context, rc *drv1alpha1.RemoteCluster) error {
-	// Delete SSH keys
+	// Delete SSH keys (agent host keys)
 	if err := p.keyManager.DeleteKeys(ctx, rc); err != nil {
 		return fmt.Errorf("failed to delete SSH keys: %v", err)
+	}
+
+	// Delete rsync SSH keys from controller cluster
+	if err := p.keyManager.DeleteRsyncKeys(ctx, rc, "dr-syncer"); err != nil {
+		log.Warnf("Failed to delete rsync SSH keys from controller cluster for %s: %v", rc.Name, err)
+		// Continue cleanup even if this fails
+	}
+
+	// Delete rsync SSH keys from remote cluster
+	rsyncSecretName := ssh.GetRsyncKeySecretName(rc.Name)
+	rsyncSecret := &corev1.Secret{}
+	if err := p.remoteClient.Get(ctx, client.ObjectKey{Name: rsyncSecretName, Namespace: "dr-syncer"}, rsyncSecret); err == nil {
+		if err := p.remoteClient.Delete(ctx, rsyncSecret); err != nil && !k8serrors.IsNotFound(err) {
+			log.Warnf("Failed to delete rsync SSH keys from remote cluster for %s: %v", rc.Name, err)
+		}
 	}
 
 	// Clean up agent components

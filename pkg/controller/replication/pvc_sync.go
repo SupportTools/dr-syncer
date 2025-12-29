@@ -108,6 +108,10 @@ type PVCSyncer struct {
 
 	// SourceEventRecorder records events on source PVCs for observability
 	SourceEventRecorder record.EventRecorder
+
+	// SourceRemoteClusterName is the name of the RemoteCluster for the source cluster
+	// Used to look up cached SSH keys for rsync operations
+	SourceRemoteClusterName string
 }
 
 // CreateEventRecorderForCluster creates an EventRecorder for emitting events to a Kubernetes cluster

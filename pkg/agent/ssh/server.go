@@ -35,10 +35,15 @@ func NewServer(port int) (*Server, error) {
 		}
 	}
 
-	// Verify authorized_keys exists
+	// Verify at least one authorized_keys file exists
+	// Check both the primary authorized_keys and the rsync_authorized_keys
 	authKeysPath := filepath.Join(keyPath, "authorized_keys")
-	if _, err := os.Stat(authKeysPath); err != nil {
-		return nil, fmt.Errorf("authorized_keys not found: %s", authKeysPath)
+	rsyncAuthKeysPath := filepath.Join(keyPath, "rsync_authorized_keys")
+	_, authKeysErr := os.Stat(authKeysPath)
+	_, rsyncAuthKeysErr := os.Stat(rsyncAuthKeysPath)
+
+	if authKeysErr != nil && rsyncAuthKeysErr != nil {
+		return nil, fmt.Errorf("no authorized_keys found: checked %s and %s", authKeysPath, rsyncAuthKeysPath)
 	}
 
 	return &Server{
@@ -74,14 +79,18 @@ func (s *Server) verifySetup() error {
 		}
 	}
 
-	// Check authorized_keys
+	// Check at least one authorized_keys file exists and is non-empty
 	authKeysPath := filepath.Join(s.keyPath, "authorized_keys")
-	content, err := ioutil.ReadFile(authKeysPath)
-	if err != nil {
-		return fmt.Errorf("failed to read authorized_keys: %v", err)
-	}
-	if len(content) == 0 {
-		return fmt.Errorf("authorized_keys is empty")
+	rsyncAuthKeysPath := filepath.Join(s.keyPath, "rsync_authorized_keys")
+
+	authKeysContent, authKeysErr := ioutil.ReadFile(authKeysPath)
+	rsyncAuthKeysContent, rsyncAuthKeysErr := ioutil.ReadFile(rsyncAuthKeysPath)
+
+	hasValidAuthKeys := authKeysErr == nil && len(authKeysContent) > 0
+	hasValidRsyncAuthKeys := rsyncAuthKeysErr == nil && len(rsyncAuthKeysContent) > 0
+
+	if !hasValidAuthKeys && !hasValidRsyncAuthKeys {
+		return fmt.Errorf("no valid authorized_keys found: checked %s and %s", authKeysPath, rsyncAuthKeysPath)
 	}
 
 	// Check sshd_config

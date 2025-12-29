@@ -349,6 +349,28 @@ func (d *Deployer) createOrUpdateDaemonSet(ctx context.Context, rc *drv1alpha1.R
 		log.Infof("Authorized-keys secret not found, using direct file updates for backward compatibility")
 	}
 
+	// Add rsync-keys secret volume for pre-provisioned SSH keys (performance optimization)
+	// This secret contains the authorized_keys that allow rsync pods to connect
+	rsyncKeysSecretName := "dr-syncer-rsync-keys-" + rc.Name
+	rsyncKeysSecret := &corev1.Secret{}
+	rsyncKeysErr := d.client.Get(ctx, client.ObjectKey{Name: rsyncKeysSecretName, Namespace: agentNamespace}, rsyncKeysSecret)
+	if rsyncKeysErr == nil {
+		// Secret exists, add it as a volume
+		volumes = append(volumes, corev1.Volume{
+			Name: "rsync-authorized-keys",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  rsyncKeysSecretName,
+					Optional:    &[]bool{true}[0], // Optional for backward compatibility
+					DefaultMode: &defaultMode,
+				},
+			},
+		})
+		log.Infof("Found rsync-keys secret %s, mounting authorized_keys to agent pods", rsyncKeysSecretName)
+	} else {
+		log.Infof("Rsync-keys secret %s not found, will use per-sync key generation", rsyncKeysSecretName)
+	}
+
 	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      "kubelet",
@@ -366,6 +388,17 @@ func (d *Deployer) createOrUpdateDaemonSet(ctx context.Context, rc *drv1alpha1.R
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      "authorized-keys",
 			MountPath: "/etc/ssh/keys/authorized_keys",
+			SubPath:   "authorized_keys",
+			ReadOnly:  true,
+		})
+	}
+
+	// Add rsync-authorized-keys volume mount if the secret exists
+	// This provides the pre-provisioned authorized_keys for rsync pod connections
+	if rsyncKeysErr == nil {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "rsync-authorized-keys",
+			MountPath: "/etc/ssh/keys/rsync_authorized_keys",
 			SubPath:   "authorized_keys",
 			ReadOnly:  true,
 		})

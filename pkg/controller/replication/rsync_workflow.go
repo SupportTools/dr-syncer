@@ -6,10 +6,13 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/supporttools/dr-syncer/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/supporttools/dr-syncer/pkg/agent/rsyncpod"
+	"github.com/supporttools/dr-syncer/pkg/agent/ssh"
+	"github.com/supporttools/dr-syncer/pkg/logging"
 )
 
 // RsyncWorkflow orchestrates the rsync process between source and destination PVCs
@@ -171,62 +174,73 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonRsyncPodDeployed,
 		"Rsync pod deployed in destination cluster")
 
-	// Step 2: Generate SSH keys in the rsync pod
-	log.WithFields(logrus.Fields{
-		"pod_name": destRsyncPod.Name,
-	}).Info(logging.LogTagStep2 + " Generating SSH keys in rsync pod")
-
-	if err := p.generateSSHKeys(ctx, destRsyncPod); err != nil {
+	// Steps 2-3: Generate SSH keys and get public key (skip if using cached keys)
+	var publicKey string
+	if destRsyncPod.HasCachedKeys {
 		log.WithFields(logrus.Fields{
 			"pod_name": destRsyncPod.Name,
-			"error":    err,
-		}).Error(logging.LogTagError + " Failed to generate SSH keys")
-
-		// Clean up resources
-		p.cleanupResources(ctx, destRsyncPod)
-
-		// Release the lock
-		if lockAcquired {
-			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
-				log.WithFields(logrus.Fields{
-					"source_namespace": sourceNamespace,
-					"source_pvc":       sourcePVCName,
-					"error":            relErr,
-				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
-			}
-		}
-		return fmt.Errorf("failed to generate SSH keys: %v", err)
-	}
-	log.Info(logging.LogTagStep2Complete + " SSH keys generated successfully")
-
-	// Step 3: Get the public key from the rsync pod
-	log.WithFields(logrus.Fields{
-		"pod_name": destRsyncPod.Name,
-	}).Info(logging.LogTagStep3 + " Getting public key from rsync pod")
-
-	publicKey, err := p.getPublicKey(ctx, destRsyncPod)
-	if err != nil {
+		}).Info(logging.LogTagStep2 + " Skipping SSH key generation - using pre-provisioned cached keys")
+		log.Info(logging.LogTagStep2Complete + " SSH keys already mounted from cache")
+		log.Info(logging.LogTagStep3 + " Skipping public key retrieval - using cached keys")
+		log.Info(logging.LogTagStep3Complete + " Public key already provisioned on agent")
+	} else {
+		// Step 2: Generate SSH keys in the rsync pod
 		log.WithFields(logrus.Fields{
 			"pod_name": destRsyncPod.Name,
-			"error":    err,
-		}).Error(logging.LogTagError + " Failed to get public key")
+		}).Info(logging.LogTagStep2 + " Generating SSH keys in rsync pod")
 
-		// Clean up resources
-		p.cleanupResources(ctx, destRsyncPod)
+		if err := p.generateSSHKeys(ctx, destRsyncPod); err != nil {
+			log.WithFields(logrus.Fields{
+				"pod_name": destRsyncPod.Name,
+				"error":    err,
+			}).Error(logging.LogTagError + " Failed to generate SSH keys")
 
-		// Release the lock
-		if lockAcquired {
-			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
-				log.WithFields(logrus.Fields{
-					"source_namespace": sourceNamespace,
-					"source_pvc":       sourcePVCName,
-					"error":            relErr,
-				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+			// Clean up resources
+			p.cleanupResources(ctx, destRsyncPod)
+
+			// Release the lock
+			if lockAcquired {
+				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
+					log.WithFields(logrus.Fields{
+						"source_namespace": sourceNamespace,
+						"source_pvc":       sourcePVCName,
+						"error":            relErr,
+					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+				}
 			}
+			return fmt.Errorf("failed to generate SSH keys: %v", err)
 		}
-		return fmt.Errorf("failed to get public key: %v", err)
+		log.Info(logging.LogTagStep2Complete + " SSH keys generated successfully")
+
+		// Step 3: Get the public key from the rsync pod
+		log.WithFields(logrus.Fields{
+			"pod_name": destRsyncPod.Name,
+		}).Info(logging.LogTagStep3 + " Getting public key from rsync pod")
+
+		publicKey, err = p.getPublicKey(ctx, destRsyncPod)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"pod_name": destRsyncPod.Name,
+				"error":    err,
+			}).Error(logging.LogTagError + " Failed to get public key")
+
+			// Clean up resources
+			p.cleanupResources(ctx, destRsyncPod)
+
+			// Release the lock
+			if lockAcquired {
+				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
+					log.WithFields(logrus.Fields{
+						"source_namespace": sourceNamespace,
+						"source_pvc":       sourcePVCName,
+						"error":            relErr,
+					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+				}
+			}
+			return fmt.Errorf("failed to get public key: %v", err)
+		}
+		log.Info(logging.LogTagStep3Complete + " Public key retrieved successfully")
 	}
-	log.Info(logging.LogTagStep3Complete + " Public key retrieved successfully")
 
 	// Step 4: Check if source PVC is mounted
 	log.WithFields(logrus.Fields{
@@ -388,34 +402,41 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"mount_path": mountPath,
 	}).Info(logging.LogTagStep7Complete + " Found mount path for PVC")
 
-	// Step 8: Push the public key to the agent pod
-	log.WithFields(logrus.Fields{
-		"agent_pod": agentPod.Name,
-	}).Info(logging.LogTagStep8 + " Pushing public key to agent pod")
-
-	trackingInfo := fmt.Sprintf("dr-syncer-rsync-%s-%s", destNamespace, rand.String(8))
-	if err := p.PushPublicKeyToAgent(ctx, agentPod, publicKey, trackingInfo); err != nil {
+	// Step 8: Push the public key to the agent pod (skip if using cached keys)
+	if destRsyncPod.HasCachedKeys {
 		log.WithFields(logrus.Fields{
 			"agent_pod": agentPod.Name,
-			"error":     err,
-		}).Error(logging.LogTagError + " Failed to push public key to agent pod")
+		}).Info(logging.LogTagStep8 + " Skipping public key push - agent already has authorized_keys from cached secret")
+		log.Info(logging.LogTagStep8Complete + " Public key already provisioned on agent via cached secret")
+	} else {
+		log.WithFields(logrus.Fields{
+			"agent_pod": agentPod.Name,
+		}).Info(logging.LogTagStep8 + " Pushing public key to agent pod")
 
-		// Clean up resources
-		p.cleanupResources(ctx, destRsyncPod)
+		trackingInfo := fmt.Sprintf("dr-syncer-rsync-%s-%s", destNamespace, rand.String(8))
+		if err := p.PushPublicKeyToAgent(ctx, agentPod, publicKey, trackingInfo); err != nil {
+			log.WithFields(logrus.Fields{
+				"agent_pod": agentPod.Name,
+				"error":     err,
+			}).Error(logging.LogTagError + " Failed to push public key to agent pod")
 
-		// Release the lock
-		if lockAcquired {
-			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
-				log.WithFields(logrus.Fields{
-					"source_namespace": sourceNamespace,
-					"source_pvc":       sourcePVCName,
-					"error":            relErr,
-				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+			// Clean up resources
+			p.cleanupResources(ctx, destRsyncPod)
+
+			// Release the lock
+			if lockAcquired {
+				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
+					log.WithFields(logrus.Fields{
+						"source_namespace": sourceNamespace,
+						"source_pvc":       sourcePVCName,
+						"error":            relErr,
+					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+				}
 			}
+			return fmt.Errorf("failed to push public key to agent pod: %v", err)
 		}
-		return fmt.Errorf("failed to push public key to agent pod: %v", err)
+		log.Info(logging.LogTagStep8Complete + " Public key pushed to agent pod")
 	}
-	log.Info(logging.LogTagStep8Complete + " Public key pushed to agent pod")
 
 	// Step 9: Test SSH connectivity
 	log.WithFields(logrus.Fields{
@@ -579,14 +600,50 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 	// Generate a unique ID for this sync operation
 	syncID := rand.String(8)
 
+	// Check for cached rsync SSH keys if we know the source RemoteCluster
+	var cachedKeySecretName string
+	if p.SourceRemoteClusterName != "" {
+		// Check if the cached rsync key secret exists in the destination namespace
+		rsyncKeySecretName := ssh.GetRsyncKeySecretName(p.SourceRemoteClusterName)
+		secret := &corev1.Secret{}
+		err := p.DestinationClient.Get(ctx, client.ObjectKey{
+			Name:      rsyncKeySecretName,
+			Namespace: namespace,
+		}, secret)
+		if err == nil {
+			// Cached keys exist, use them
+			cachedKeySecretName = rsyncKeySecretName
+			log.WithFields(logrus.Fields{
+				"namespace":      namespace,
+				"pvc_name":       pvcName,
+				"remote_cluster": p.SourceRemoteClusterName,
+				"secret_name":    rsyncKeySecretName,
+			}).Info(logging.LogTagDetail + " Using cached rsync SSH keys from secret")
+		} else {
+			log.WithFields(logrus.Fields{
+				"namespace":      namespace,
+				"pvc_name":       pvcName,
+				"remote_cluster": p.SourceRemoteClusterName,
+				"secret_name":    rsyncKeySecretName,
+				"error":          err,
+			}).Info(logging.LogTagDetail + " Cached rsync SSH keys not found, will generate new keys")
+		}
+	} else {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+		}).Debug(logging.LogTagDetail + " SourceRemoteClusterName not set, will generate new SSH keys")
+	}
+
 	// Create rsync pod options
 	opts := rsyncpod.RsyncPodOptions{
-		Namespace:       namespace,
-		PVCName:         pvcName,
-		Type:            rsyncpod.DestinationPodType,
-		SyncID:          syncID,
-		ReplicationName: fmt.Sprintf("pvc-sync-%s-%s", namespace, pvcName),
-		DestinationInfo: fmt.Sprintf("destination-%s-%s", namespace, pvcName),
+		Namespace:           namespace,
+		PVCName:             pvcName,
+		Type:                rsyncpod.DestinationPodType,
+		SyncID:              syncID,
+		ReplicationName:     fmt.Sprintf("pvc-sync-%s-%s", namespace, pvcName),
+		DestinationInfo:     fmt.Sprintf("destination-%s-%s", namespace, pvcName),
+		CachedKeySecretName: cachedKeySecretName, // Will be empty if no cached keys
 	}
 
 	// Create the rsync deployment
@@ -602,10 +659,11 @@ func (p *PVCSyncer) deployRsyncPod(ctx context.Context, namespace, pvcName strin
 	}
 
 	log.WithFields(logrus.Fields{
-		"namespace":  namespace,
-		"pvc_name":   pvcName,
-		"deployment": rsyncDeployment.Name,
-		"pod_name":   rsyncDeployment.PodName,
+		"namespace":       namespace,
+		"pvc_name":        pvcName,
+		"deployment":      rsyncDeployment.Name,
+		"pod_name":        rsyncDeployment.PodName,
+		"has_cached_keys": rsyncDeployment.HasCachedKeys,
 	}).Info(logging.LogTagDetail + " Rsync deployment is ready with running pod")
 
 	return rsyncDeployment, nil

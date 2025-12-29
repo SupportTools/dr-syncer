@@ -11,6 +11,9 @@ PasswordAuthentication no
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
 
+# Authorized keys - check both agent keys and pre-provisioned rsync keys
+AuthorizedKeysFile /etc/ssh/keys/authorized_keys /etc/ssh/keys/rsync_authorized_keys
+
 # Security
 PermitRootLogin yes
 X11Forwarding no
@@ -24,7 +27,7 @@ SyslogFacility AUTH
 LogLevel INFO
 
 # SSH proxy configuration
-AllowUsers root
+AllowUsers root syncer
 GatewayPorts yes
 StreamLocalBindUnlink yes
 

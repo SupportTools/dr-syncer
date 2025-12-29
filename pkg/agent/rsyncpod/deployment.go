@@ -59,6 +59,11 @@ type RsyncPodOptions struct {
 
 	// DestinationInfo is additional information about the destination
 	DestinationInfo string
+
+	// CachedKeySecretName is the name of a secret containing pre-provisioned SSH keys
+	// If set, the pod will mount the private key from this secret instead of generating new keys
+	// The secret is expected to have an "id_rsa" key containing the private key
+	CachedKeySecretName string
 }
 
 // Manager manages rsync operations
@@ -98,6 +103,9 @@ type RsyncDeployment struct {
 
 	// SyncID is a unique identifier for this sync operation
 	SyncID string
+
+	// HasCachedKeys indicates whether the deployment has pre-provisioned SSH keys mounted
+	HasCachedKeys bool
 }
 
 // CreateRsyncDeployment creates a new rsync deployment
@@ -167,12 +175,23 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 								"-c",
 								"sleep infinity", // Initial command is to wait
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "data",
-									MountPath: "/data",
-								},
-							},
+							VolumeMounts: func() []corev1.VolumeMount {
+								mounts := []corev1.VolumeMount{
+									{
+										Name:      "data",
+										MountPath: "/data",
+									},
+								}
+								// Add cached SSH key mount if specified
+								if opts.CachedKeySecretName != "" {
+									mounts = append(mounts, corev1.VolumeMount{
+										Name:      "ssh-keys",
+										MountPath: "/root/.ssh",
+										ReadOnly:  true,
+									})
+								}
+								return mounts
+							}(),
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse("2"),
@@ -202,16 +221,38 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "data",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: opts.PVCName,
+					Volumes: func() []corev1.Volume {
+						vols := []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: opts.PVCName,
+									},
 								},
 							},
-						},
-					},
+						}
+						// Add cached SSH key secret volume if specified
+						if opts.CachedKeySecretName != "" {
+							defaultMode := int32(0600) // Secure permissions for private key
+							vols = append(vols, corev1.Volume{
+								Name: "ssh-keys",
+								VolumeSource: corev1.VolumeSource{
+									Secret: &corev1.SecretVolumeSource{
+										SecretName:  opts.CachedKeySecretName,
+										DefaultMode: &defaultMode,
+										Items: []corev1.KeyToPath{
+											{
+												Key:  "id_rsa",
+												Path: "id_rsa",
+											},
+										},
+									},
+								},
+							})
+						}
+						return vols
+					}(),
 					RestartPolicy: corev1.RestartPolicyAlways,
 				},
 			},
@@ -265,11 +306,12 @@ func (m *Manager) CreateRsyncDeployment(ctx context.Context, opts RsyncPodOption
 
 	// Create the RsyncDeployment object
 	rsyncDeployment := &RsyncDeployment{
-		Name:      createdDeployment.Name,
-		Namespace: createdDeployment.Namespace,
-		client:    m.client,
-		PVCName:   opts.PVCName,
-		SyncID:    opts.SyncID,
+		Name:          createdDeployment.Name,
+		Namespace:     createdDeployment.Namespace,
+		client:        m.client,
+		PVCName:       opts.PVCName,
+		SyncID:        opts.SyncID,
+		HasCachedKeys: opts.CachedKeySecretName != "",
 	}
 
 	return rsyncDeployment, nil
@@ -738,9 +780,20 @@ func ExecuteCommandInPod(ctx context.Context, client kubernetes.Interface, names
 }
 
 // GenerateSSHKeys generates SSH keys in the deployment's pod
+// If the deployment has cached keys mounted (HasCachedKeys=true), this is a no-op
 func (d *RsyncDeployment) GenerateSSHKeys(ctx context.Context, explicitConfig ...*rest.Config) error {
 	if d.PodName == "" {
 		return fmt.Errorf("no pod found for deployment, ensure WaitForPodReady was called")
+	}
+
+	// Skip key generation if cached keys are mounted
+	if d.HasCachedKeys {
+		log.WithFields(logrus.Fields{
+			"deployment": d.Name,
+			"namespace":  d.Namespace,
+			"pod":        d.PodName,
+		}).Info("[DR-SYNC-DETAIL] Skipping SSH key generation - using pre-provisioned cached keys")
+		return nil
 	}
 
 	log.WithFields(logrus.Fields{
