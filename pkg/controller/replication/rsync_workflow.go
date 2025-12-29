@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -36,14 +37,36 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	p.SourceNamespace = sourceNamespace
 	p.DestinationNamespace = destNamespace
 
+	// Initialize PVCSyncOperation CRD for tracking (best-effort, non-blocking)
+	var pvcSyncOp *drv1alpha1.PVCSyncOperation
+	if p.DestinationClient != nil {
+		var initErr error
+		pvcSyncOp, initErr = p.InitPVCSyncOperation(ctx, sourceNamespace, sourcePVCName, destNamespace, destPVCName, nil)
+		if initErr != nil {
+			log.WithFields(logrus.Fields{
+				"error": initErr,
+			}).Warn(logging.LogTagWarn + " Failed to initialize PVCSyncOperation CRD, continuing without CRD tracking")
+		}
+	}
+
 	// Track resources for cleanup
 	var (
-		lockAcquired bool
-		destRsyncPod *rsyncpod.RsyncDeployment
+		lockAcquired  bool
+		destRsyncPod  *rsyncpod.RsyncDeployment
+		workflowError error // Track workflow error for deferred PVCSyncOperation failure update
 	)
 
-	// Deferred function to release lock on error returns
+	// Deferred function to release lock on error returns and update PVCSyncOperation on failure
 	defer func() {
+		// Update PVCSyncOperation to failed state if there was an error
+		if workflowError != nil && pvcSyncOp != nil && p.DestinationClient != nil {
+			if failErr := p.FailPVCSyncOperation(ctx, pvcSyncOp, workflowError); failErr != nil {
+				log.WithFields(logrus.Fields{
+					"error": failErr,
+				}).Warn(logging.LogTagWarn + " Failed to update PVCSyncOperation CRD to failed state")
+			}
+		}
+
 		// We only handle panic recovery here, error returns are handled inline
 		if r := recover(); r != nil {
 			// Handle panics
@@ -52,6 +75,16 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				"source_pvc":       sourcePVCName,
 				"panic":            r,
 			}).Error(logging.LogTagError + " Panic during rsync workflow")
+
+			// Update PVCSyncOperation to failed state on panic
+			if pvcSyncOp != nil && p.DestinationClient != nil {
+				panicErr := fmt.Errorf("panic during rsync workflow: %v", r)
+				if failErr := p.FailPVCSyncOperation(ctx, pvcSyncOp, panicErr); failErr != nil {
+					log.WithFields(logrus.Fields{
+						"error": failErr,
+					}).Warn(logging.LogTagWarn + " Failed to update PVCSyncOperation CRD to failed state after panic")
+				}
+			}
 
 			// Clean up the deployment if it exists
 			if destRsyncPod != nil {
@@ -84,7 +117,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"source_pvc":       sourcePVCName,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to check lock on source PVC")
-		return fmt.Errorf("failed to check lock on source PVC: %v", err)
+		workflowError = fmt.Errorf("failed to check lock on source PVC: %v", err)
+		return workflowError
 	}
 
 	if !acquired {
@@ -121,7 +155,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to create rsync manager: %v", err)
+		workflowError = fmt.Errorf("failed to create rsync manager: %v", err)
+		return workflowError
 	}
 
 	if err := rsyncMgr.CleanupExistingDeployments(ctx, destNamespace, destPVCName); err != nil {
@@ -167,7 +202,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to deploy rsync pod in destination cluster: %v", err)
+		workflowError = fmt.Errorf("failed to deploy rsync pod in destination cluster: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep1Complete + " Rsync pod deployed successfully")
 
@@ -209,7 +245,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 				}
 			}
-			return fmt.Errorf("failed to generate SSH keys: %v", err)
+			workflowError = fmt.Errorf("failed to generate SSH keys: %v", err)
+			return workflowError
 		}
 		log.Info(logging.LogTagStep2Complete + " SSH keys generated successfully")
 
@@ -238,7 +275,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 				}
 			}
-			return fmt.Errorf("failed to get public key: %v", err)
+			workflowError = fmt.Errorf("failed to get public key: %v", err)
+			return workflowError
 		}
 		log.Info(logging.LogTagStep3Complete + " Public key retrieved successfully")
 	}
@@ -270,7 +308,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to check if source PVC is mounted: %v", err)
+		workflowError = fmt.Errorf("failed to check if source PVC is mounted: %v", err)
+		return workflowError
 	}
 
 	if !mounted {
@@ -328,7 +367,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find node where source PVC is mounted: %v", err)
+		workflowError = fmt.Errorf("failed to find node where source PVC is mounted: %v", err)
+		return workflowError
 	}
 
 	log.WithFields(logrus.Fields{
@@ -360,7 +400,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find DR-Syncer-Agent on node %s: %v", sourceNode, err)
+		workflowError = fmt.Errorf("failed to find DR-Syncer-Agent on node %s: %v", sourceNode, err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"node":      sourceNode,
@@ -397,7 +438,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find mount path for PVC: %v", err)
+		workflowError = fmt.Errorf("failed to find mount path for PVC: %v", err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"mount_path": mountPath,
@@ -434,7 +476,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 				}
 			}
-			return fmt.Errorf("failed to push public key to agent pod: %v", err)
+			workflowError = fmt.Errorf("failed to push public key to agent pod: %v", err)
+			return workflowError
 		}
 		log.Info(logging.LogTagStep8Complete + " Public key pushed to agent pod")
 	}
@@ -467,7 +510,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to test SSH connectivity: %v", err)
+		workflowError = fmt.Errorf("failed to test SSH connectivity: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep9Complete + " SSH connectivity test successful")
 
@@ -507,7 +551,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to perform rsync: %v", err)
+		workflowError = fmt.Errorf("failed to perform rsync: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep10Complete + " Rsync completed successfully")
 
@@ -537,7 +582,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to update source PVC annotations: %v", err)
+		workflowError = fmt.Errorf("failed to update source PVC annotations: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep11Complete + " Source PVC annotations updated successfully")
 
@@ -573,6 +619,16 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	duration := time.Since(startTime)
 	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncCompleted,
 		"PVC data sync completed successfully (duration: %s)", duration.Round(time.Second))
+
+	// Complete PVCSyncOperation CRD (best-effort, non-blocking)
+	if pvcSyncOp != nil && p.DestinationClient != nil {
+		// TODO: Get actual bytes/files transferred from rsync output when available
+		if completeErr := p.CompletePVCSyncOperation(ctx, pvcSyncOp, 0, 0, nil); completeErr != nil {
+			log.WithFields(logrus.Fields{
+				"error": completeErr,
+			}).Warn(logging.LogTagWarn + " Failed to complete PVCSyncOperation CRD")
+		}
+	}
 
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
@@ -907,20 +963,52 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 	p.SourceNamespace = sourceNamespace
 	p.DestinationNamespace = destNamespace
 
+	// Initialize PVCSyncOperation CRD for tracking (best-effort, non-blocking)
+	var pvcSyncOp *drv1alpha1.PVCSyncOperation
+	if p.DestinationClient != nil {
+		var initErr error
+		pvcSyncOp, initErr = p.InitPVCSyncOperation(ctx, sourceNamespace, sourcePVCName, destNamespace, destPVCName, nil)
+		if initErr != nil {
+			log.WithFields(logrus.Fields{
+				"error": initErr,
+			}).Warn(logging.LogTagWarn + " Failed to initialize PVCSyncOperation CRD, continuing without CRD tracking")
+		}
+	}
+
 	// Track resources for cleanup
 	var (
-		lockAcquired bool
-		dsPod        *rsyncpod.RsyncDaemonSetPod
+		lockAcquired  bool
+		dsPod         *rsyncpod.RsyncDaemonSetPod
+		workflowError error // Track workflow error for deferred PVCSyncOperation failure update
 	)
 
-	// Deferred function for panic recovery
+	// Deferred function for panic recovery and PVCSyncOperation failure update
 	defer func() {
+		// Update PVCSyncOperation to failed state if there was an error
+		if workflowError != nil && pvcSyncOp != nil && p.DestinationClient != nil {
+			if failErr := p.FailPVCSyncOperation(ctx, pvcSyncOp, workflowError); failErr != nil {
+				log.WithFields(logrus.Fields{
+					"error": failErr,
+				}).Warn(logging.LogTagWarn + " Failed to update PVCSyncOperation CRD to failed state")
+			}
+		}
+
 		if r := recover(); r != nil {
 			log.WithFields(logrus.Fields{
 				"source_namespace": sourceNamespace,
 				"source_pvc":       sourcePVCName,
 				"panic":            r,
 			}).Error(logging.LogTagError + " Panic during DaemonSet rsync workflow")
+
+			// Update PVCSyncOperation to failed state on panic
+			if pvcSyncOp != nil && p.DestinationClient != nil {
+				panicErr := fmt.Errorf("panic during DaemonSet rsync workflow: %v", r)
+				if failErr := p.FailPVCSyncOperation(ctx, pvcSyncOp, panicErr); failErr != nil {
+					log.WithFields(logrus.Fields{
+						"error": failErr,
+					}).Warn(logging.LogTagWarn + " Failed to update PVCSyncOperation CRD to failed state after panic")
+				}
+			}
 
 			// Clean up resources if any
 			if dsPod != nil {
@@ -953,7 +1041,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 			"source_pvc":       sourcePVCName,
 			"error":            err,
 		}).Error(logging.LogTagError + " Failed to check lock on source PVC")
-		return fmt.Errorf("failed to check lock on source PVC: %v", err)
+		workflowError = fmt.Errorf("failed to check lock on source PVC: %v", err)
+		return workflowError
 	}
 
 	if !acquired {
@@ -988,7 +1077,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock after DaemonSet init error")
 			}
 		}
-		return fmt.Errorf("RsyncDaemonSet is not initialized, cannot use DaemonSet mode")
+		workflowError = fmt.Errorf("RsyncDaemonSet is not initialized, cannot use DaemonSet mode")
+		return workflowError
 	}
 
 	if err := p.RsyncDaemonSet.Deploy(ctx); err != nil {
@@ -1008,7 +1098,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock after DaemonSet deployment error")
 			}
 		}
-		return fmt.Errorf("failed to deploy rsync DaemonSet: %v", err)
+		workflowError = fmt.Errorf("failed to deploy rsync DaemonSet: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagInfo + " Rsync DaemonSet deployed/verified successfully")
 
@@ -1038,7 +1129,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find DaemonSet pod: %v", err)
+		workflowError = fmt.Errorf("failed to find DaemonSet pod: %v", err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"pod_name":  dsPod.PodName,
@@ -1076,7 +1168,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to check if source PVC is mounted: %v", err)
+		workflowError = fmt.Errorf("failed to check if source PVC is mounted: %v", err)
+		return workflowError
 	}
 
 	if !mounted {
@@ -1126,7 +1219,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find node where source PVC is mounted: %v", err)
+		workflowError = fmt.Errorf("failed to find node where source PVC is mounted: %v", err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"source_node": sourceNode,
@@ -1154,7 +1248,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find DR-Syncer-Agent on node %s: %v", sourceNode, err)
+		workflowError = fmt.Errorf("failed to find DR-Syncer-Agent on node %s: %v", sourceNode, err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"node":      sourceNode,
@@ -1188,7 +1283,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to find mount path for PVC: %v", err)
+		workflowError = fmt.Errorf("failed to find mount path for PVC: %v", err)
+		return workflowError
 	}
 	log.WithFields(logrus.Fields{
 		"mount_path": mountPath,
@@ -1234,7 +1330,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to test SSH connectivity: %v", err)
+		workflowError = fmt.Errorf("failed to test SSH connectivity: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep9Complete + " SSH connectivity test successful")
 
@@ -1271,7 +1368,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to perform rsync: %v", err)
+		workflowError = fmt.Errorf("failed to perform rsync: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep10Complete + " Rsync completed successfully")
 
@@ -1298,7 +1396,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 				}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
 			}
 		}
-		return fmt.Errorf("failed to update source PVC annotations: %v", err)
+		workflowError = fmt.Errorf("failed to update source PVC annotations: %v", err)
+		return workflowError
 	}
 	log.Info(logging.LogTagStep11Complete + " Source PVC annotations updated successfully")
 
@@ -1332,6 +1431,16 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 	duration := time.Since(startTime)
 	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncCompleted,
 		"PVC data sync completed successfully via DaemonSet pool (duration: %s)", duration.Round(time.Second))
+
+	// Complete PVCSyncOperation CRD (best-effort, non-blocking)
+	if pvcSyncOp != nil && p.DestinationClient != nil {
+		// TODO: Get actual bytes/files transferred from rsync output when available
+		if completeErr := p.CompletePVCSyncOperation(ctx, pvcSyncOp, 0, 0, nil); completeErr != nil {
+			log.WithFields(logrus.Fields{
+				"error": completeErr,
+			}).Warn(logging.LogTagWarn + " Failed to complete PVCSyncOperation CRD")
+		}
+	}
 
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,

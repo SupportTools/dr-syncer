@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -13,7 +14,9 @@ import (
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Event reason constants for PVC sync workflow observability
@@ -476,4 +479,359 @@ func (p *PVCSyncer) FailedSyncStatus(ctx context.Context, namespace, pvcName str
 	}
 
 	return p.UpdateSyncStatus(ctx, namespace, pvcName, status)
+}
+
+// =============================================================================
+// PVCSyncOperation CRD Management
+// =============================================================================
+
+const (
+	// MaxPVCSyncHistoryEntries is the maximum number of history entries to keep
+	MaxPVCSyncHistoryEntries = 5
+)
+
+// generatePVCSyncOperationName generates a deterministic name for a PVCSyncOperation resource
+// Format: {sourceNS}-{pvcName}-{destNS} truncated to 63 chars max with hash suffix if needed
+func generatePVCSyncOperationName(sourceNS, pvcName, destNS string) string {
+	baseName := fmt.Sprintf("%s-%s-%s", sourceNS, pvcName, destNS)
+
+	// Kubernetes names must be <= 63 characters
+	if len(baseName) <= 63 {
+		return baseName
+	}
+
+	// Use SHA256 hash to create a unique suffix
+	hash := sha256.Sum256([]byte(baseName))
+	hashSuffix := fmt.Sprintf("%x", hash)[:8]
+
+	// Truncate base name to fit with hash suffix (63 - 1 dash - 8 hash = 54)
+	maxBaseLen := 63 - 1 - 8
+	if len(baseName) > maxBaseLen {
+		baseName = baseName[:maxBaseLen]
+	}
+
+	return fmt.Sprintf("%s-%s", baseName, hashSuffix)
+}
+
+// CreateOrGetPVCSyncOperation creates or retrieves an existing PVCSyncOperation resource
+// for tracking the current PVC sync operation
+func (p *PVCSyncer) CreateOrGetPVCSyncOperation(ctx context.Context,
+	sourceNS, pvcName, destNS, destPVCName string,
+	namespaceMappingRef *drv1alpha1.PVCSyncNamespaceMappingRef) (*drv1alpha1.PVCSyncOperation, error) {
+
+	if p.DestinationClient == nil {
+		log.Warn("[PVCSyncOperation] DestinationClient is nil, skipping CRD management")
+		return nil, nil
+	}
+
+	name := generatePVCSyncOperationName(sourceNS, pvcName, destNS)
+
+	// Try to get existing PVCSyncOperation
+	existing := &drv1alpha1.PVCSyncOperation{}
+	err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: destNS,
+		Name:      name,
+	}, existing)
+
+	if err == nil {
+		// Found existing resource
+		log.WithFields(logrus.Fields{
+			"name":      name,
+			"namespace": destNS,
+		}).Debug("[PVCSyncOperation] Found existing PVCSyncOperation resource")
+		return existing, nil
+	}
+
+	if !k8serrors.IsNotFound(err) {
+		return nil, fmt.Errorf("failed to get PVCSyncOperation: %w", err)
+	}
+
+	// Create new PVCSyncOperation
+	pvcSync := &drv1alpha1.PVCSyncOperation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: destNS,
+			Labels: map[string]string{
+				"dr-syncer.io/source-namespace": sourceNS,
+				"dr-syncer.io/pvc-name":         pvcName,
+				"dr-syncer.io/dest-namespace":   destNS,
+			},
+		},
+		Spec: drv1alpha1.PVCSyncOperationSpec{
+			SourceNamespace:      sourceNS,
+			PVCName:              pvcName,
+			DestinationNamespace: destNS,
+			DestinationPVCName:   destPVCName,
+			NamespaceMappingRef:  namespaceMappingRef,
+		},
+	}
+
+	if err := p.DestinationClient.Create(ctx, pvcSync); err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			// Race condition - another sync created it, fetch and return
+			if getErr := p.DestinationClient.Get(ctx, client.ObjectKey{
+				Namespace: destNS,
+				Name:      name,
+			}, existing); getErr == nil {
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to create PVCSyncOperation: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"name":      name,
+		"namespace": destNS,
+	}).Info("[PVCSyncOperation] Created new PVCSyncOperation resource")
+
+	return pvcSync, nil
+}
+
+// InitPVCSyncOperation initializes a PVCSyncOperation at the start of a sync
+func (p *PVCSyncer) InitPVCSyncOperation(ctx context.Context,
+	sourceNS, pvcName, destNS, destPVCName string,
+	namespaceMappingRef *drv1alpha1.PVCSyncNamespaceMappingRef) (*drv1alpha1.PVCSyncOperation, error) {
+
+	pvcSync, err := p.CreateOrGetPVCSyncOperation(ctx, sourceNS, pvcName, destNS, destPVCName, namespaceMappingRef)
+	if err != nil {
+		return nil, err
+	}
+	if pvcSync == nil {
+		return nil, nil // CRD management disabled
+	}
+
+	// Archive current status to history if we're starting a new sync on an existing resource
+	if pvcSync.Status.Phase != "" && pvcSync.Status.Phase != drv1alpha1.PVCSyncOperationPhasePending {
+		p.archiveToHistory(pvcSync)
+	}
+
+	// Reset status for new sync
+	now := metav1.Now()
+	pvcSync.Status = drv1alpha1.PVCSyncOperationStatus{
+		Phase:     drv1alpha1.PVCSyncOperationPhaseInitializing,
+		Progress:  "0%",
+		StartTime: &now,
+		History:   pvcSync.Status.History, // Preserve history
+	}
+
+	if err := p.DestinationClient.Status().Update(ctx, pvcSync); err != nil {
+		return nil, fmt.Errorf("failed to initialize PVCSyncOperation status: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"name":      pvcSync.Name,
+		"namespace": pvcSync.Namespace,
+		"phase":     pvcSync.Status.Phase,
+	}).Info("[PVCSyncOperation] Initialized sync operation")
+
+	return pvcSync, nil
+}
+
+// UpdatePVCSyncOperationProgress updates the PVCSyncOperation with current progress
+func (p *PVCSyncer) UpdatePVCSyncOperationProgress(ctx context.Context, pvcSync *drv1alpha1.PVCSyncOperation,
+	progress int, bytesTransferred, totalBytes int64, filesTransferred, totalFiles int,
+	speedBytesPerSec float64, etaSeconds int) error {
+
+	if pvcSync == nil || p.DestinationClient == nil {
+		return nil
+	}
+
+	// Fetch latest version to avoid conflicts
+	latest := &drv1alpha1.PVCSyncOperation{}
+	if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: pvcSync.Namespace,
+		Name:      pvcSync.Name,
+	}, latest); err != nil {
+		return fmt.Errorf("failed to get latest PVCSyncOperation: %w", err)
+	}
+
+	// Update progress fields
+	latest.Status.Phase = drv1alpha1.PVCSyncOperationPhaseSyncing
+	latest.Status.Progress = fmt.Sprintf("%d%%", progress)
+	latest.Status.BytesTransferred = bytesTransferred
+	latest.Status.TotalBytes = totalBytes
+	latest.Status.FilesTransferred = filesTransferred
+	latest.Status.TotalFiles = totalFiles
+	latest.Status.Speed = FormatSpeed(speedBytesPerSec)
+	latest.Status.EstimatedRemaining = FormatDuration(etaSeconds)
+
+	// Calculate duration since start
+	if latest.Status.StartTime != nil {
+		duration := time.Since(latest.Status.StartTime.Time)
+		latest.Status.Duration = formatDurationShort(duration)
+	}
+
+	if err := p.DestinationClient.Status().Update(ctx, latest); err != nil {
+		log.WithFields(logrus.Fields{
+			"name":      latest.Name,
+			"namespace": latest.Namespace,
+			"error":     err,
+		}).Warn("[PVCSyncOperation] Failed to update progress (will retry)")
+		return err
+	}
+
+	return nil
+}
+
+// CompletePVCSyncOperation marks the PVCSyncOperation as completed
+func (p *PVCSyncer) CompletePVCSyncOperation(ctx context.Context, pvcSync *drv1alpha1.PVCSyncOperation,
+	bytesTransferred int64, filesTransferred int, verification *drv1alpha1.PVCSyncVerificationResult) error {
+
+	if pvcSync == nil || p.DestinationClient == nil {
+		return nil
+	}
+
+	// Fetch latest version
+	latest := &drv1alpha1.PVCSyncOperation{}
+	if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: pvcSync.Namespace,
+		Name:      pvcSync.Name,
+	}, latest); err != nil {
+		return fmt.Errorf("failed to get latest PVCSyncOperation: %w", err)
+	}
+
+	now := metav1.Now()
+	latest.Status.Phase = drv1alpha1.PVCSyncOperationPhaseCompleted
+	latest.Status.Progress = "100%"
+	latest.Status.CompletionTime = &now
+	latest.Status.BytesTransferred = bytesTransferred
+	latest.Status.FilesTransferred = filesTransferred
+	latest.Status.Verification = verification
+	latest.Status.Error = ""
+
+	// Calculate final duration
+	if latest.Status.StartTime != nil {
+		duration := now.Time.Sub(latest.Status.StartTime.Time)
+		latest.Status.Duration = formatDurationShort(duration)
+	}
+
+	if err := p.DestinationClient.Status().Update(ctx, latest); err != nil {
+		return fmt.Errorf("failed to complete PVCSyncOperation: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"name":              latest.Name,
+		"namespace":         latest.Namespace,
+		"bytes_transferred": bytesTransferred,
+		"files_transferred": filesTransferred,
+		"duration":          latest.Status.Duration,
+		"has_verification":  verification != nil,
+	}).Info("[PVCSyncOperation] Sync operation completed")
+
+	return nil
+}
+
+// FailPVCSyncOperation marks the PVCSyncOperation as failed
+func (p *PVCSyncer) FailPVCSyncOperation(ctx context.Context, pvcSync *drv1alpha1.PVCSyncOperation, syncErr error) error {
+	if pvcSync == nil || p.DestinationClient == nil {
+		return nil
+	}
+
+	// Fetch latest version
+	latest := &drv1alpha1.PVCSyncOperation{}
+	if err := p.DestinationClient.Get(ctx, client.ObjectKey{
+		Namespace: pvcSync.Namespace,
+		Name:      pvcSync.Name,
+	}, latest); err != nil {
+		return fmt.Errorf("failed to get latest PVCSyncOperation: %w", err)
+	}
+
+	now := metav1.Now()
+	latest.Status.Phase = drv1alpha1.PVCSyncOperationPhaseFailed
+	latest.Status.CompletionTime = &now
+
+	if syncErr != nil {
+		latest.Status.Error = syncErr.Error()
+	}
+
+	// Calculate duration
+	if latest.Status.StartTime != nil {
+		duration := now.Time.Sub(latest.Status.StartTime.Time)
+		latest.Status.Duration = formatDurationShort(duration)
+	}
+
+	if err := p.DestinationClient.Status().Update(ctx, latest); err != nil {
+		return fmt.Errorf("failed to update PVCSyncOperation as failed: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"name":      latest.Name,
+		"namespace": latest.Namespace,
+		"error":     latest.Status.Error,
+		"duration":  latest.Status.Duration,
+	}).Warn("[PVCSyncOperation] Sync operation failed")
+
+	return nil
+}
+
+// archiveToHistory archives the current status to history and trims to max entries
+func (p *PVCSyncer) archiveToHistory(pvcSync *drv1alpha1.PVCSyncOperation) {
+	if pvcSync.Status.StartTime == nil {
+		return // No valid sync to archive
+	}
+
+	entry := drv1alpha1.PVCSyncHistoryEntry{
+		StartTime:        *pvcSync.Status.StartTime,
+		CompletionTime:   pvcSync.Status.CompletionTime,
+		Phase:            pvcSync.Status.Phase,
+		BytesTransferred: pvcSync.Status.BytesTransferred,
+		FilesTransferred: pvcSync.Status.FilesTransferred,
+		Duration:         pvcSync.Status.Duration,
+		Error:            pvcSync.Status.Error,
+	}
+
+	// Prepend to history (newest first)
+	pvcSync.Status.History = append([]drv1alpha1.PVCSyncHistoryEntry{entry}, pvcSync.Status.History...)
+
+	// Trim to max entries
+	if len(pvcSync.Status.History) > MaxPVCSyncHistoryEntries {
+		pvcSync.Status.History = pvcSync.Status.History[:MaxPVCSyncHistoryEntries]
+	}
+}
+
+// formatDurationShort formats a duration into a short human-readable string
+func formatDurationShort(d time.Duration) string {
+	if d < time.Second {
+		return "0s"
+	}
+
+	d = d.Round(time.Second)
+
+	if d >= time.Hour {
+		hours := int(d.Hours())
+		mins := int(d.Minutes()) % 60
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	}
+
+	if d >= time.Minute {
+		mins := int(d.Minutes())
+		secs := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", mins, secs)
+	}
+
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+// FormatSpeed formats bytes per second into a human-readable string (e.g., "1.5 MB/s")
+func FormatSpeed(bytesPerSec float64) string {
+	if bytesPerSec <= 0 {
+		return ""
+	}
+
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+
+	switch {
+	case bytesPerSec >= GB:
+		return fmt.Sprintf("%.2f GB/s", bytesPerSec/GB)
+	case bytesPerSec >= MB:
+		return fmt.Sprintf("%.2f MB/s", bytesPerSec/MB)
+	case bytesPerSec >= KB:
+		return fmt.Sprintf("%.2f KB/s", bytesPerSec/KB)
+	default:
+		return fmt.Sprintf("%.0f B/s", bytesPerSec)
+	}
 }
