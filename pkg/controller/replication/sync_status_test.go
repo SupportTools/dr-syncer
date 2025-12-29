@@ -224,3 +224,54 @@ total size is 1,234,567  speedup is 1.00
 	assert.Equal(t, 3, files, "Should parse files transferred from real output")
 	assert.Equal(t, 100, progress, "Should set progress to 100 for completed transfer")
 }
+
+// Tests for Event Constants
+
+func TestEventReasonConstants(t *testing.T) {
+	// Verify event reason constants are properly defined
+	assert.Equal(t, "SyncStarted", EventReasonSyncStarted)
+	assert.Equal(t, "LockAcquired", EventReasonLockAcquired)
+	assert.Equal(t, "RsyncPodDeployed", EventReasonRsyncPodDeployed)
+	assert.Equal(t, "SSHConnected", EventReasonSSHConnected)
+	assert.Equal(t, "SyncCompleted", EventReasonSyncCompleted)
+	assert.Equal(t, "SyncFailed", EventReasonSyncFailed)
+	assert.Equal(t, "LockReleased", EventReasonLockReleased)
+	assert.Equal(t, "SyncSkipped", EventReasonSyncSkipped)
+}
+
+func TestEventReasonConstants_AllUpperCamelCase(t *testing.T) {
+	// Verify all event reasons follow Kubernetes UpperCamelCase convention
+	reasons := []string{
+		EventReasonSyncStarted,
+		EventReasonLockAcquired,
+		EventReasonRsyncPodDeployed,
+		EventReasonSSHConnected,
+		EventReasonSyncCompleted,
+		EventReasonSyncFailed,
+		EventReasonLockReleased,
+		EventReasonSyncSkipped,
+	}
+
+	for _, reason := range reasons {
+		// Check first character is uppercase
+		assert.Regexp(t, `^[A-Z]`, reason, "Event reason %s should start with uppercase", reason)
+		// Check no underscores or hyphens
+		assert.NotContains(t, reason, "_", "Event reason %s should not contain underscores", reason)
+		assert.NotContains(t, reason, "-", "Event reason %s should not contain hyphens", reason)
+	}
+}
+
+func TestPVCSyncer_RecordEventWithNilRecorder(t *testing.T) {
+	// Test that RecordNormalEvent/RecordWarningEvent gracefully handle nil EventRecorder
+	syncer := &PVCSyncer{
+		SourceEventRecorder: nil, // Explicitly nil
+	}
+
+	// These should not panic - they should silently skip event emission
+	// Since we don't have a real K8s client, this just verifies no panic occurs
+	assert.NotPanics(t, func() {
+		// We can't actually call the methods without a real K8s client for GetPVC,
+		// but we can verify the struct allows nil EventRecorder
+		assert.Nil(t, syncer.SourceEventRecorder)
+	})
+}

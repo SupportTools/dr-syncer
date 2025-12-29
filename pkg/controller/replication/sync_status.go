@@ -11,7 +11,35 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/supporttools/dr-syncer/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// Event reason constants for PVC sync workflow observability
+const (
+	// EventReasonSyncStarted indicates the sync workflow has begun
+	EventReasonSyncStarted = "SyncStarted"
+
+	// EventReasonLockAcquired indicates the PVC lock was successfully acquired
+	EventReasonLockAcquired = "LockAcquired"
+
+	// EventReasonRsyncPodDeployed indicates the rsync pod was deployed in the destination cluster
+	EventReasonRsyncPodDeployed = "RsyncPodDeployed"
+
+	// EventReasonSSHConnected indicates SSH connectivity was established
+	EventReasonSSHConnected = "SSHConnected"
+
+	// EventReasonSyncCompleted indicates the sync completed successfully
+	EventReasonSyncCompleted = "SyncCompleted"
+
+	// EventReasonSyncFailed indicates the sync operation failed
+	EventReasonSyncFailed = "SyncFailed"
+
+	// EventReasonLockReleased indicates the PVC lock was released
+	EventReasonLockReleased = "LockReleased"
+
+	// EventReasonSyncSkipped indicates the sync was skipped (e.g., locked by another, PVC not mounted)
+	EventReasonSyncSkipped = "SyncSkipped"
 )
 
 // SyncStatus represents the status of a sync operation
@@ -166,7 +194,7 @@ func min(a, b int) int {
 	return b
 }
 
-// recordSyncEvent records a Kubernetes event for a sync operation
+// recordSyncEvent records a Kubernetes event for a sync operation (legacy stub - kept for compatibility)
 func (p *PVCSyncer) recordSyncEvent(namespace, pvcName, phase, errorMsg string) {
 	fields := logrus.Fields{
 		"namespace": namespace,
@@ -180,6 +208,52 @@ func (p *PVCSyncer) recordSyncEvent(namespace, pvcName, phase, errorMsg string) 
 	} else {
 		log.WithFields(fields).Info(logging.LogTagInfo + " Sync operation status update")
 	}
+}
+
+// recordEvent emits a Kubernetes event on the source PVC for observability
+// This enables users to view sync progress via `kubectl describe pvc <name>`
+func (p *PVCSyncer) recordEvent(ctx context.Context, namespace, pvcName string,
+	eventType, reason, messageFmt string, args ...interface{}) {
+
+	message := fmt.Sprintf(messageFmt, args...)
+
+	// Always log the event for debugging
+	log.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"pvc_name":  pvcName,
+		"reason":    reason,
+		"message":   message,
+	}).Info(logging.LogTagInfo + " [EVENT] " + message)
+
+	// If no event recorder is available, gracefully skip event emission
+	if p.SourceEventRecorder == nil {
+		return
+	}
+
+	// Get the PVC object to attach the event to
+	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(namespace).Get(
+		ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"namespace": namespace,
+			"pvc_name":  pvcName,
+			"error":     err,
+		}).Warn(logging.LogTagWarn + " Failed to get PVC for event emission")
+		return
+	}
+
+	// Emit the Kubernetes event on the PVC
+	p.SourceEventRecorder.Eventf(pvc, eventType, reason, messageFmt, args...)
+}
+
+// RecordNormalEvent emits a Normal-type Kubernetes event on the source PVC
+func (p *PVCSyncer) RecordNormalEvent(ctx context.Context, namespace, pvcName, reason string, messageFmt string, args ...interface{}) {
+	p.recordEvent(ctx, namespace, pvcName, corev1.EventTypeNormal, reason, messageFmt, args...)
+}
+
+// RecordWarningEvent emits a Warning-type Kubernetes event on the source PVC
+func (p *PVCSyncer) RecordWarningEvent(ctx context.Context, namespace, pvcName, reason string, messageFmt string, args ...interface{}) {
+	p.recordEvent(ctx, namespace, pvcName, corev1.EventTypeWarning, reason, messageFmt, args...)
 }
 
 // InitSyncStatus initializes a new sync status

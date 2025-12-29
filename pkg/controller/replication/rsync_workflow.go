@@ -14,12 +14,19 @@ import (
 
 // RsyncWorkflow orchestrates the rsync process between source and destination PVCs
 func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePVCName, destNamespace, destPVCName string) error {
+	// Track start time for duration calculation
+	startTime := time.Now()
+
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 		"dest_namespace":   destNamespace,
 		"dest_pvc":         destPVCName,
 	}).Info(logging.LogTagInfo + " Starting rsync workflow")
+
+	// Emit SyncStarted event
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncStarted,
+		"Starting PVC data sync to %s/%s", destNamespace, destPVCName)
 
 	// Set the namespaces in the PVCSyncer
 	p.SourceNamespace = sourceNamespace
@@ -83,6 +90,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"lock_owner":       lockInfo.ControllerPodName,
 			"lock_timestamp":   lockInfo.Timestamp,
 		}).Info(logging.LogTagSkip + " Source PVC is locked by another controller, skipping rsync")
+
+		// Emit SyncSkipped event
+		p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncSkipped,
+			"PVC is locked by %s, skipping sync", lockInfo.ControllerPodName)
 		return nil
 	}
 
@@ -119,6 +130,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 
 	log.Info(logging.LogTagStep0Complete + " Lock acquired on source PVC")
 
+	// Emit LockAcquired event
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonLockAcquired,
+		"Acquired sync lock for PVC")
+
 	// Step 1: Deploy rsync deployment in destination cluster and wait for it to be ready
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
@@ -134,6 +149,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"error": err,
 		}).Error(logging.LogTagError + " Failed to deploy rsync pod in destination cluster")
 
+		// Emit SyncFailed event
+		p.RecordWarningEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncFailed,
+			"Failed to deploy rsync pod: %v", err)
+
 		// Release the lock since we're failing
 		if lockAcquired {
 			if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
@@ -147,6 +166,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		return fmt.Errorf("failed to deploy rsync pod in destination cluster: %v", err)
 	}
 	log.Info(logging.LogTagStep1Complete + " Rsync pod deployed successfully")
+
+	// Emit RsyncPodDeployed event
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonRsyncPodDeployed,
+		"Rsync pod deployed in destination cluster")
 
 	// Step 2: Generate SSH keys in the rsync pod
 	log.WithFields(logrus.Fields{
@@ -240,6 +263,11 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"source_namespace": sourceNamespace,
 			"source_pvc":       sourcePVCName,
 		}).Info(logging.LogTagSkip + " Source PVC is not mounted, skipping rsync")
+
+		// Emit SyncSkipped event
+		p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncSkipped,
+			"Source PVC is not mounted by any pod, skipping sync")
+
 		// Clean up resources before returning
 		p.cleanupResources(ctx, destRsyncPod)
 
@@ -421,6 +449,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	}
 	log.Info(logging.LogTagStep9Complete + " SSH connectivity test successful")
 
+	// Emit SSHConnected event
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSSHConnected,
+		"SSH connectivity established to source agent on node %s", sourceNode)
+
 	// Step 10: Run rsync command using the node's external IP
 	log.WithFields(logrus.Fields{
 		"dest_pod":   destRsyncPod.Name,
@@ -435,6 +467,10 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			"mount_path": mountPath,
 			"error":      err,
 		}).Error(logging.LogTagError + " Failed to perform rsync")
+
+		// Emit SyncFailed event
+		p.RecordWarningEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncFailed,
+			"Rsync operation failed: %v", err)
 
 		// Clean up resources
 		p.cleanupResources(ctx, destRsyncPod)
@@ -507,11 +543,21 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	}
 	log.Info(logging.LogTagStep13Complete + " Lock released on source PVC")
 
+	// Emit LockReleased event
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonLockReleased,
+		"Released sync lock for PVC")
+
+	// Calculate duration and emit SyncCompleted event
+	duration := time.Since(startTime)
+	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonSyncCompleted,
+		"PVC data sync completed successfully (duration: %s)", duration.Round(time.Second))
+
 	log.WithFields(logrus.Fields{
 		"source_namespace": sourceNamespace,
 		"source_pvc":       sourcePVCName,
 		"dest_namespace":   destNamespace,
 		"dest_pvc":         destPVCName,
+		"duration":         duration.Round(time.Second),
 	}).Info(logging.LogTagComplete + " Rsync workflow completed successfully")
 
 	return nil

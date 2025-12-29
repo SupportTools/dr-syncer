@@ -15,8 +15,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/agent/rsyncpod"
@@ -102,6 +105,27 @@ type PVCSyncer struct {
 
 	// DestinationNamespace is the namespace in the destination cluster
 	DestinationNamespace string
+
+	// SourceEventRecorder records events on source PVCs for observability
+	SourceEventRecorder record.EventRecorder
+}
+
+// CreateEventRecorderForCluster creates an EventRecorder for emitting events to a Kubernetes cluster
+func CreateEventRecorderForCluster(config *rest.Config, componentName string) (record.EventRecorder, error) {
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clientset for event recorder: %w", err)
+	}
+
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{
+		Interface: clientset.CoreV1().Events(""),
+	})
+
+	return eventBroadcaster.NewRecorder(
+		scheme.Scheme,
+		corev1.EventSource{Component: componentName},
+	), nil
 }
 
 // NewPVCSyncer creates a new PVC syncer
@@ -117,6 +141,19 @@ func NewPVCSyncer(sourceClient client.Client, destinationClient client.Client, s
 		return nil, fmt.Errorf("failed to create destination Kubernetes client: %v", err)
 	}
 
+	// Create event recorder for source cluster (events appear on source PVCs)
+	var sourceEventRecorder record.EventRecorder
+	if sourceConfig != nil {
+		recorder, err := CreateEventRecorderForCluster(sourceConfig, "dr-syncer-pvc-sync")
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"error": err,
+			}).Warn("Failed to create event recorder for source cluster, events will not be emitted")
+		} else {
+			sourceEventRecorder = recorder
+		}
+	}
+
 	return &PVCSyncer{
 		SourceClient:         sourceClient,
 		DestinationClient:    destinationClient,
@@ -124,6 +161,7 @@ func NewPVCSyncer(sourceClient client.Client, destinationClient client.Client, s
 		DestinationConfig:    destinationConfig,
 		SourceK8sClient:      sourceK8sClient,
 		DestinationK8sClient: destinationK8sClient,
+		SourceEventRecorder:  sourceEventRecorder,
 		// Namespaces will be set when syncing PVCs
 		SourceNamespace:      "",
 		DestinationNamespace: "",

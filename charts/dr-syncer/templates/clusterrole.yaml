@@ -59,6 +59,14 @@ rules:
   - get
   - list
   - watch
+# Events permission for PVC sync workflow observability
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - nonResourceURLs:
   - "/api"
   - "/api/*"
