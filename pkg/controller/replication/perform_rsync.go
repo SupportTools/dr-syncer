@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -14,6 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// ProgressUpdateInterval defines how often to update PVC annotations during sync
+const ProgressUpdateInterval = 30 * time.Second
 
 // VerificationConfig holds the resolved verification configuration
 type VerificationConfig struct {
@@ -282,11 +286,17 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		}).Warn(logging.LogTagWarn + " Failed to initialize sync status, continuing anyway")
 	}
 
-	// Simple default rsync options
+	// Record start time for metrics and duration tracking
+	syncStartTime := time.Now()
+
+	// Record sync start in Prometheus metrics
+	RecordSyncStart(p.SourceNamespace, destDeployment.PVCName, p.DestinationNamespace)
+
+	// Simple default rsync options with streaming progress
 	rsyncOptions := []string{
-		"-avz",       // Archive mode, verbose, compress
-		"--progress", // Show progress during transfer
-		"--delete",   // Delete files on destination that don't exist on source
+		"-avz",             // Archive mode, verbose, compress
+		"--info=progress2", // Show overall progress (streaming format)
+		"--delete",         // Delete files on destination that don't exist on source
 	}
 
 	// By default we won't use checksums for faster performance
@@ -444,6 +454,84 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Variable to store rsync output for parsing after successful execution
 	var rsyncOutput string
 
+	// Mutex to protect shared state during progress updates
+	var progressMu sync.Mutex
+	var latestProgress *Progress2Info
+	var accumulatedOutput strings.Builder
+
+	// Create a context for the progress update goroutine
+	progressCtx, progressCancel := context.WithCancel(ctx)
+	defer progressCancel()
+
+	// Start background goroutine for periodic progress updates
+	progressDone := make(chan struct{})
+	go func() {
+		defer close(progressDone)
+		ticker := time.NewTicker(ProgressUpdateInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-progressCtx.Done():
+				return
+			case <-ticker.C:
+				progressMu.Lock()
+				currentOutput := accumulatedOutput.String()
+				progressMu.Unlock()
+
+				// Parse the current output for progress info
+				if currentOutput != "" {
+					progress := ParseProgress2Output(currentOutput)
+					if progress != nil && progress.Progress > 0 {
+						progressMu.Lock()
+						latestProgress = progress
+						progressMu.Unlock()
+
+						// Update PVC annotations with current progress
+						status := SyncStatus{
+							Phase:              "Syncing",
+							StartTime:          syncStartTime,
+							BytesTransferred:   progress.BytesTransferred,
+							FilesTransferred:   progress.FilesTransferred,
+							TotalBytes:         progress.TotalBytes,
+							TotalFiles:         progress.TotalFiles,
+							Progress:           progress.Progress,
+							SpeedBytesPerSec:   progress.SpeedBytesPerSec,
+							EstimatedRemaining: FormatDuration(progress.ETASeconds),
+						}
+
+						if updateErr := p.UpdateSyncStatus(ctx, p.SourceNamespace, destDeployment.PVCName, status); updateErr != nil {
+							log.WithFields(logrus.Fields{
+								"error":    updateErr,
+								"progress": progress.Progress,
+							}).Debug(logging.LogTagDetail + " Failed to update progress status during sync")
+						}
+
+						// Update Prometheus metrics
+						RecordSyncProgress(
+							p.SourceNamespace,
+							destDeployment.PVCName,
+							p.DestinationNamespace,
+							progress.BytesTransferred,
+							progress.FilesTransferred,
+							progress.Progress,
+							progress.SpeedBytesPerSec,
+						)
+
+						log.WithFields(logrus.Fields{
+							"pvc":               destDeployment.PVCName,
+							"progress":          progress.Progress,
+							"bytes_transferred": progress.BytesTransferred,
+							"files_transferred": progress.FilesTransferred,
+							"speed_bytes_sec":   progress.SpeedBytesPerSec,
+							"eta":               FormatDuration(progress.ETASeconds),
+						}).Info(logging.LogTagInfo + " Rsync progress update")
+					}
+				}
+			}
+		}
+	}()
+
 	// Execute with configurable retry logic for transient failures
 	// Uses RetryConfig from NamespaceMapping if available, otherwise uses defaults
 	err := withRetryConfig(ctx, retryConfig, func() error {
@@ -455,12 +543,14 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		})
 		entry.Debug(logging.LogTagDetail + " Executing rsync command with destination config")
 
-		// Execute command but don't capture detailed stdout/stderr
-		// Set a minimal timeout since we're not capturing the full output
-		execCtx, cancel := context.WithTimeout(pvcSyncCtx, 30*time.Second)
-		defer cancel()
+		// Execute command with a long timeout (rsync can take hours for large volumes)
+		// The 24-hour timeout from rsyncCtx applies here
+		stdout, stderr, execErr := rsyncpod.ExecuteCommandInPod(pvcSyncCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
 
-		stdout, stderr, execErr := rsyncpod.ExecuteCommandInPod(execCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
+		// Accumulate output for progress parsing
+		progressMu.Lock()
+		accumulatedOutput.WriteString(stdout)
+		progressMu.Unlock()
 
 		if execErr != nil {
 			// Use expanded error classification for transient detection
@@ -480,17 +570,28 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		return nil
 	})
 
+	// Stop the progress update goroutine
+	progressCancel()
+	<-progressDone
+
 	if err != nil {
 		errorEntry := log.WithFields(logrus.Fields{
 			"error": err,
 		})
 		errorEntry.Error(logging.LogTagError + " Rsync command failed after retries")
 
+		// Record failure metrics
+		syncDuration := time.Since(syncStartTime).Seconds()
+		RecordSyncFailure(p.SourceNamespace, destDeployment.PVCName, p.DestinationNamespace, syncDuration)
+
 		// Update status to failed
 		p.FailedSyncStatus(ctx, p.SourceNamespace, destDeployment.PVCName, err)
 
 		return fmt.Errorf("rsync command failed: %v", err)
 	}
+
+	// Suppress unused variable warning for latestProgress (used in goroutine)
+	_ = latestProgress
 
 	// Parse rsync output to get actual transfer statistics
 	bytesTransferred, filesTransferred, _, parseErr := ParseRsyncOutput(rsyncOutput)
@@ -561,6 +662,18 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		}
 	}
 
+	// Record success metrics
+	syncDuration := time.Since(syncStartTime).Seconds()
+	RecordSyncComplete(
+		p.SourceNamespace,
+		destDeployment.PVCName,
+		p.DestinationNamespace,
+		bytesTransferred,
+		filesTransferred,
+		syncDuration,
+		true, // success
+	)
+
 	// Update status to completed with verification result
 	if err := p.CompleteSyncStatusWithVerification(ctx, p.SourceNamespace, destDeployment.PVCName, bytesTransferred, filesTransferred, verificationResult); err != nil {
 		warnEntry := log.WithFields(logrus.Fields{
@@ -568,6 +681,13 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		})
 		warnEntry.Warn(logging.LogTagWarn + " Failed to update final sync status, continuing anyway")
 	}
+
+	log.WithFields(logrus.Fields{
+		"pvc":               destDeployment.PVCName,
+		"bytes_transferred": bytesTransferred,
+		"files_transferred": filesTransferred,
+		"duration_seconds":  syncDuration,
+	}).Info(logging.LogTagInfo + " PVC sync completed successfully")
 
 	return nil
 }

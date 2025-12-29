@@ -45,14 +45,18 @@ const (
 
 // SyncStatus represents the status of a sync operation
 type SyncStatus struct {
-	Phase            string              `json:"phase"`
-	StartTime        time.Time           `json:"startTime"`
-	CompletionTime   time.Time           `json:"completionTime,omitempty"`
-	BytesTransferred int64               `json:"bytesTransferred"`
-	FilesTransferred int                 `json:"filesTransferred"`
-	Progress         int                 `json:"progress"` // 0-100
-	Error            string              `json:"error,omitempty"`
-	Verification     *VerificationResult `json:"verification,omitempty"`
+	Phase              string              `json:"phase"`
+	StartTime          time.Time           `json:"startTime"`
+	CompletionTime     time.Time           `json:"completionTime,omitempty"`
+	BytesTransferred   int64               `json:"bytesTransferred"`
+	FilesTransferred   int                 `json:"filesTransferred"`
+	TotalBytes         int64               `json:"totalBytes,omitempty"`         // Total bytes to transfer (if known)
+	TotalFiles         int                 `json:"totalFiles,omitempty"`         // Total files to transfer (if known)
+	Progress           int                 `json:"progress"`                     // 0-100
+	SpeedBytesPerSec   float64             `json:"speedBytesPerSec,omitempty"`   // Current transfer speed
+	EstimatedRemaining string              `json:"estimatedRemaining,omitempty"` // Estimated time remaining (e.g., "5m30s")
+	Error              string              `json:"error,omitempty"`
+	Verification       *VerificationResult `json:"verification,omitempty"`
 }
 
 // VerificationResult holds the result of data verification after sync
@@ -210,6 +214,129 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// Progress2Info holds parsed information from rsync --info=progress2 output
+type Progress2Info struct {
+	BytesTransferred int64
+	TotalBytes       int64
+	FilesTransferred int
+	TotalFiles       int
+	Progress         int     // 0-100
+	SpeedBytesPerSec float64 // Current transfer speed
+	ETASeconds       int     // Estimated time remaining in seconds
+}
+
+// ParseProgress2Output parses rsync --info=progress2 streaming output
+// This format provides overall transfer progress rather than per-file progress
+// Example output: "  1,234,567  12%  100.00kB/s    0:05:30  (xfr#5, to-chk=95/100)"
+func ParseProgress2Output(output string) *Progress2Info {
+	info := &Progress2Info{}
+
+	// Get the most recent progress line (last non-empty line with progress info)
+	lines := strings.Split(output, "\n")
+	var progressLine string
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" && strings.Contains(line, "%") {
+			progressLine = line
+			break
+		}
+	}
+
+	if progressLine == "" {
+		return info
+	}
+
+	// Parse bytes transferred (first number in the line)
+	// Format: "  1,234,567  12%  100.00kB/s    0:05:30"
+	bytesPattern := regexp.MustCompile(`^\s*([0-9,]+)`)
+	if matches := bytesPattern.FindStringSubmatch(progressLine); len(matches) > 1 {
+		byteStr := strings.ReplaceAll(matches[1], ",", "")
+		if bytes, err := strconv.ParseInt(byteStr, 10, 64); err == nil {
+			info.BytesTransferred = bytes
+		}
+	}
+
+	// Parse progress percentage
+	percentPattern := regexp.MustCompile(`(\d+)%`)
+	if matches := percentPattern.FindStringSubmatch(progressLine); len(matches) > 1 {
+		if pct, err := strconv.Atoi(matches[1]); err == nil {
+			info.Progress = pct
+			// Estimate total bytes from percentage
+			if pct > 0 && info.BytesTransferred > 0 {
+				info.TotalBytes = (info.BytesTransferred * 100) / int64(pct)
+			}
+		}
+	}
+
+	// Parse speed (e.g., "100.00kB/s", "1.23MB/s", "500.00B/s")
+	speedPattern := regexp.MustCompile(`([0-9.]+)([kKMGTB]+)/s`)
+	if matches := speedPattern.FindStringSubmatch(progressLine); len(matches) > 2 {
+		if speed, err := strconv.ParseFloat(matches[1], 64); err == nil {
+			unit := strings.ToUpper(matches[2])
+			switch {
+			case strings.HasPrefix(unit, "K"):
+				info.SpeedBytesPerSec = speed * 1024
+			case strings.HasPrefix(unit, "M"):
+				info.SpeedBytesPerSec = speed * 1024 * 1024
+			case strings.HasPrefix(unit, "G"):
+				info.SpeedBytesPerSec = speed * 1024 * 1024 * 1024
+			case strings.HasPrefix(unit, "T"):
+				info.SpeedBytesPerSec = speed * 1024 * 1024 * 1024 * 1024
+			default:
+				info.SpeedBytesPerSec = speed
+			}
+		}
+	}
+
+	// Parse ETA (e.g., "0:05:30" or "1:23:45")
+	etaPattern := regexp.MustCompile(`(\d+):(\d+):(\d+)`)
+	if matches := etaPattern.FindStringSubmatch(progressLine); len(matches) > 3 {
+		hours, _ := strconv.Atoi(matches[1])
+		mins, _ := strconv.Atoi(matches[2])
+		secs, _ := strconv.Atoi(matches[3])
+		info.ETASeconds = hours*3600 + mins*60 + secs
+	}
+
+	// Parse file transfer info (e.g., "xfr#5, to-chk=95/100")
+	xfrPattern := regexp.MustCompile(`xfr#(\d+)`)
+	if matches := xfrPattern.FindStringSubmatch(progressLine); len(matches) > 1 {
+		if xfr, err := strconv.Atoi(matches[1]); err == nil {
+			info.FilesTransferred = xfr
+		}
+	}
+
+	toChkPattern := regexp.MustCompile(`to-ch[ek]+=(\d+)/(\d+)`)
+	if matches := toChkPattern.FindStringSubmatch(progressLine); len(matches) > 2 {
+		remaining, _ := strconv.Atoi(matches[1])
+		total, _ := strconv.Atoi(matches[2])
+		info.TotalFiles = total
+		if info.FilesTransferred == 0 {
+			info.FilesTransferred = total - remaining
+		}
+	}
+
+	return info
+}
+
+// FormatDuration formats seconds into a human-readable duration string
+func FormatDuration(seconds int) string {
+	if seconds <= 0 {
+		return ""
+	}
+	d := time.Duration(seconds) * time.Second
+	if d >= time.Hour {
+		hours := int(d.Hours())
+		mins := int(d.Minutes()) % 60
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	}
+	if d >= time.Minute {
+		mins := int(d.Minutes())
+		secs := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm%ds", mins, secs)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
 // recordSyncEvent records a Kubernetes event for a sync operation (legacy stub - kept for compatibility)
