@@ -13,6 +13,55 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// isTransientError checks if an error is transient and should be retried
+// It checks both the error message and stderr output for transient patterns
+func isTransientError(err error, stderr string) bool {
+	// Check error message for transient patterns
+	if err != nil {
+		errStr := strings.ToLower(err.Error())
+		transientErrorPatterns := []string{
+			"connection refused",
+			"connection reset",
+			"connection timed out",
+			"no route to host",
+			"network is unreachable",
+			"i/o timeout",
+			"broken pipe",
+			"eof",
+			"temporary failure",
+			"resource temporarily unavailable",
+		}
+		for _, pattern := range transientErrorPatterns {
+			if strings.Contains(errStr, pattern) {
+				return true
+			}
+		}
+	}
+
+	// Check stderr for SSH/rsync specific transient errors
+	if stderr != "" {
+		stderrPatterns := []string{
+			"Connection timed out",
+			"Connection reset by peer",
+			"Connection closed",
+			"Host key verification failed",
+			"Permission denied (publickey)",
+			"ssh_exchange_identification",
+			"Read from socket failed",
+			"Write failed",
+			"rsync error: error in rsync protocol data stream",
+			"rsync: connection unexpectedly closed",
+		}
+		for _, pattern := range stderrPatterns {
+			if strings.Contains(stderr, pattern) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // performRsync performs the rsync operation between source and destination pods
 func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.RsyncDeployment, nodeIP, mountPath string) error {
 	// Create a context with a timeout for the entire operation
@@ -50,10 +99,16 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// By default we won't use checksums for faster performance
 	useChecksum := false
 
+	// RetryConfig for configurable retry behavior (nil uses defaults)
+	var retryConfig *drv1alpha1.RetryConfig
+
 	// Get NamespaceMapping to check for bandwidth limit and custom options
 	var nm drv1alpha1.NamespaceMapping
 	nmKey := client.ObjectKey{Name: fmt.Sprintf("%s-%s", p.SourceNamespace, p.DestinationNamespace)}
 	if err := p.SourceClient.Get(ctx, nmKey, &nm); err == nil {
+		// Get RetryConfig from NamespaceMapping if available
+		retryConfig = nm.Spec.RetryConfig
+
 		// Check if PVCConfig and DataSyncConfig are defined
 		if nm.Spec.PVCConfig != nil && nm.Spec.PVCConfig.DataSyncConfig != nil {
 			// Check if custom RsyncOptions are provided
@@ -194,8 +249,9 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 	// Variable to store rsync output for parsing after successful execution
 	var rsyncOutput string
 
-	// Execute with retry logic for transient failures
-	err := withRetry(ctx, 2, 10*time.Second, func() error {
+	// Execute with configurable retry logic for transient failures
+	// Uses RetryConfig from NamespaceMapping if available, otherwise uses defaults
+	err := withRetryConfig(ctx, retryConfig, func() error {
 		entry := log.WithFields(logrus.Fields{
 			"deployment":       destDeployment.Name,
 			"namespace":        destDeployment.Namespace,
@@ -212,17 +268,15 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		stdout, stderr, execErr := rsyncpod.ExecuteCommandInPod(execCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, cmd, p.DestinationConfig)
 
 		if execErr != nil {
-			// Check if the error is retryable
-			if strings.Contains(execErr.Error(), "connection refused") ||
-				strings.Contains(execErr.Error(), "connection reset") {
+			// Use expanded error classification for transient detection
+			if isTransientError(execErr, "") {
 				return &RetryableError{Err: fmt.Errorf("transient error during rsync: %v", execErr)}
 			}
 			return execErr
 		}
 
-		// Check stderr for transient errors that might need retry
-		if strings.Contains(stderr, "Connection timed out") ||
-			strings.Contains(stderr, "Connection reset by peer") {
+		// Check stderr for SSH/rsync specific transient errors
+		if isTransientError(nil, stderr) {
 			return &RetryableError{Err: fmt.Errorf("transient connection error in rsync: %s", stderr)}
 		}
 

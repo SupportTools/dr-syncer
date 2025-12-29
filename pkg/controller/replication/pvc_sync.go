@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -167,6 +168,88 @@ func withRetry(ctx context.Context, maxRetries int, backoff time.Duration, opera
 		case <-time.After(backoff * time.Duration(1<<attempt)):
 			// Continue to next attempt
 		}
+	}
+
+	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)
+}
+
+// withRetryConfig performs operation with retry using CRD configuration
+// This uses the RetryConfig from NamespaceMapping to configure retries
+func withRetryConfig(ctx context.Context, config *drv1alpha1.RetryConfig, operation func() error) error {
+	// Use defaults if config is nil
+	maxRetries := int32(5)
+	initialBackoff := 5 * time.Second
+	maxBackoff := 5 * time.Minute
+	multiplier := float64(2.0)
+
+	if config != nil {
+		if config.MaxRetries != nil {
+			maxRetries = *config.MaxRetries
+		}
+		if config.InitialBackoff != "" {
+			if parsed, err := time.ParseDuration(config.InitialBackoff); err == nil {
+				initialBackoff = parsed
+			} else {
+				log.WithFields(logrus.Fields{
+					"value": config.InitialBackoff,
+					"error": err,
+				}).Warn("Failed to parse InitialBackoff, using default")
+			}
+		}
+		if config.MaxBackoff != "" {
+			if parsed, err := time.ParseDuration(config.MaxBackoff); err == nil {
+				maxBackoff = parsed
+			} else {
+				log.WithFields(logrus.Fields{
+					"value": config.MaxBackoff,
+					"error": err,
+				}).Warn("Failed to parse MaxBackoff, using default")
+			}
+		}
+		if config.BackoffMultiplier != nil {
+			multiplier = float64(*config.BackoffMultiplier) / 100.0
+		}
+	}
+
+	var err error
+	currentBackoff := initialBackoff
+
+	for attempt := int32(0); attempt < maxRetries; attempt++ {
+		err = operation()
+		if err == nil {
+			return nil
+		}
+
+		// Check if error is retryable
+		if _, ok := err.(*RetryableError); !ok {
+			return err // Non-retryable error, return immediately
+		}
+
+		// Log retry attempt
+		log.WithFields(logrus.Fields{
+			"attempt":     attempt + 1,
+			"max_retries": maxRetries,
+			"backoff":     currentBackoff.String(),
+			"error":       err,
+		}).Info("Operation failed, retrying with exponential backoff...")
+
+		// Add jitter: ±15% randomization to prevent thundering herd
+		jitter := 1.0 + (rand.Float64()*0.3 - 0.15)
+		backoffWithJitter := time.Duration(float64(currentBackoff) * jitter)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoffWithJitter):
+			// Continue to next attempt
+		}
+
+		// Calculate next backoff with multiplier, capped at maxBackoff
+		nextBackoff := time.Duration(float64(currentBackoff) * multiplier)
+		if nextBackoff > maxBackoff {
+			nextBackoff = maxBackoff
+		}
+		currentBackoff = nextBackoff
 	}
 
 	return fmt.Errorf("operation failed after %d attempts: %v", maxRetries, err)

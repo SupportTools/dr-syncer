@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -253,4 +254,233 @@ func TestWithRetry_MixedErrors(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, 3, callCount, "Should stop on first non-retryable error")
 	assert.Equal(t, "permanent failure", err.Error())
+}
+
+// Tests for withRetryConfig function
+
+func TestWithRetryConfig_UsesDefaults(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+
+	// With nil config, should use defaults (5 retries)
+	err := withRetryConfig(ctx, nil, func() error {
+		callCount++
+		if callCount < 3 {
+			return &RetryableError{Err: errors.New("transient failure")}
+		}
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 3, callCount, "Should succeed after 3 attempts with default 5 max retries")
+}
+
+func TestWithRetryConfig_RespectsMaxRetries(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	maxRetries := int32(2)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "10ms",
+	}
+
+	err := withRetryConfig(ctx, config, func() error {
+		callCount++
+		return &RetryableError{Err: errors.New("always fails")}
+	})
+
+	assert.Error(t, err)
+	assert.Equal(t, 2, callCount, "Should exhaust exactly 2 retries from config")
+	assert.Contains(t, err.Error(), "operation failed after 2 attempts")
+}
+
+func TestWithRetryConfig_RespectsBackoffConfig(t *testing.T) {
+	ctx := context.Background()
+	callTimes := make([]time.Time, 0)
+	maxRetries := int32(3)
+	multiplier := int32(200) // 2x multiplier
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:        &maxRetries,
+		InitialBackoff:    "50ms",
+		BackoffMultiplier: &multiplier,
+	}
+
+	err := withRetryConfig(ctx, config, func() error {
+		callTimes = append(callTimes, time.Now())
+		return &RetryableError{Err: errors.New("failure")}
+	})
+
+	assert.Error(t, err)
+	assert.Len(t, callTimes, 3)
+
+	// Verify backoff increases (gaps should grow)
+	if len(callTimes) >= 3 {
+		gap1 := callTimes[1].Sub(callTimes[0])
+		gap2 := callTimes[2].Sub(callTimes[1])
+
+		// gap2 should be approximately 2x gap1 (allowing for jitter ±15%)
+		// So gap2 should be at least 1.5x gap1
+		assert.Greater(t, gap2, time.Duration(float64(gap1)*1.5),
+			"Backoff should increase with multiplier")
+	}
+}
+
+func TestWithRetryConfig_AppliesJitter(t *testing.T) {
+	ctx := context.Background()
+	maxRetries := int32(10)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "100ms",
+		MaxBackoff:     "100ms", // Cap to prevent long test
+	}
+
+	// Run multiple trials to observe jitter variance
+	var gaps []time.Duration
+	for trial := 0; trial < 3; trial++ {
+		callTimes := make([]time.Time, 0)
+
+		_ = withRetryConfig(ctx, config, func() error {
+			callTimes = append(callTimes, time.Now())
+			if len(callTimes) >= 2 {
+				// Stop after 2 calls to measure one gap
+				return nil
+			}
+			return &RetryableError{Err: errors.New("failure")}
+		})
+
+		if len(callTimes) >= 2 {
+			gaps = append(gaps, callTimes[1].Sub(callTimes[0]))
+		}
+	}
+
+	// With jitter, gaps should vary (not all identical)
+	// Due to jitter randomness, we just verify gaps are in expected range
+	for _, gap := range gaps {
+		// Expected backoff is 100ms ±15%, so 85ms to 115ms
+		assert.GreaterOrEqual(t, gap, 80*time.Millisecond, "Gap should be at least ~85ms")
+		assert.LessOrEqual(t, gap, 130*time.Millisecond, "Gap should be at most ~115ms")
+	}
+}
+
+func TestWithRetryConfig_CapsAtMaxBackoff(t *testing.T) {
+	ctx := context.Background()
+	callTimes := make([]time.Time, 0)
+	maxRetries := int32(5)
+	multiplier := int32(300) // 3x multiplier - would grow quickly
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:        &maxRetries,
+		InitialBackoff:    "20ms",
+		MaxBackoff:        "50ms", // Cap at 50ms
+		BackoffMultiplier: &multiplier,
+	}
+
+	err := withRetryConfig(ctx, config, func() error {
+		callTimes = append(callTimes, time.Now())
+		return &RetryableError{Err: errors.New("failure")}
+	})
+
+	assert.Error(t, err)
+	assert.Len(t, callTimes, 5)
+
+	// Later gaps should be capped at ~50ms (plus jitter tolerance)
+	if len(callTimes) >= 5 {
+		// Gap 4 (between call 4 and 5) should be capped
+		gap4 := callTimes[4].Sub(callTimes[3])
+		// With jitter, max should be 50ms * 1.15 ≈ 58ms
+		assert.LessOrEqual(t, gap4, 70*time.Millisecond,
+			"Backoff should be capped at maxBackoff")
+	}
+}
+
+func TestWithRetryConfig_SuccessOnFirstAttempt(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	maxRetries := int32(5)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "10ms",
+	}
+
+	err := withRetryConfig(ctx, config, func() error {
+		callCount++
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callCount, "Should succeed on first attempt")
+}
+
+func TestWithRetryConfig_NonRetryableErrorStopsImmediately(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	maxRetries := int32(5)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "10ms",
+	}
+
+	err := withRetryConfig(ctx, config, func() error {
+		callCount++
+		return errors.New("permanent failure")
+	})
+
+	assert.Error(t, err)
+	assert.Equal(t, 1, callCount, "Should stop immediately on non-retryable error")
+	assert.Equal(t, "permanent failure", err.Error())
+}
+
+func TestWithRetryConfig_RespectsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	callCount := 0
+	maxRetries := int32(10)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "100ms",
+	}
+
+	// Cancel after first attempt
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := withRetryConfig(ctx, config, func() error {
+		callCount++
+		return &RetryableError{Err: errors.New("transient")}
+	})
+
+	assert.Error(t, err)
+	assert.Equal(t, context.Canceled, err)
+	assert.LessOrEqual(t, callCount, 2, "Should stop after context is cancelled")
+}
+
+func TestWithRetryConfig_InvalidDurationUsesDefault(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	maxRetries := int32(2)
+
+	config := &drv1alpha1.RetryConfig{
+		MaxRetries:     &maxRetries,
+		InitialBackoff: "invalid-duration",
+		MaxBackoff:     "also-invalid",
+	}
+
+	// Should not panic, should use default durations
+	err := withRetryConfig(ctx, config, func() error {
+		callCount++
+		if callCount < 2 {
+			return &RetryableError{Err: errors.New("transient")}
+		}
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2, callCount, "Should work with invalid durations, using defaults")
 }
