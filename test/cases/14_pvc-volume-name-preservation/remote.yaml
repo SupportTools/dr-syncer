@@ -19,55 +19,15 @@ metadata:
     test-type: pvc-sync-persistent-volumes
 data:
   app.properties: |
-    static.path=/data/static
-    dynamic.path=/data/dynamic
-    local.path=/data/local
-    nfs.path=/data/nfs
-    block.path=/data/block
+    pvc1.path=/data/pvc1
+    pvc2.path=/data/pvc2
+    pvc3.path=/data/pvc3
 ---
-# Static PV
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: test-static-pv-case14
-  labels:
-    type: static
-    test-type: pvc-sync-persistent-volumes
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: do-block-storage-retain
-  hostPath:
-    path: /mnt/data/static-case14
-    type: DirectoryOrCreate
----
-# Static PVC
+# Dynamic PVC 1
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-static-pvc
-  namespace: dr-sync-test-case14
-  labels:
-    app: test-app
-    test-type: pvc-sync-persistent-volumes
-    volume-type: static
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-  storageClassName: do-block-storage-retain
-  volumeName: test-static-pv-case14
----
-# Dynamic PVC (PV created automatically)
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-dynamic-pvc
+  name: test-pvc-1
   namespace: dr-sync-test-case14
   labels:
     app: test-app
@@ -78,141 +38,47 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
-  storageClassName: do-block-storage-retain
+      storage: 1Gi
+  storageClassName: local-path
+  volumeMode: Filesystem
 ---
-# Local PV
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: test-local-pv-case14
-  labels:
-    type: local
-    test-type: pvc-sync-persistent-volumes
-spec:
-  capacity:
-    storage: 20Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: do-block-storage-retain
-  local:
-    path: /mnt/data/local-case14
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - worker-do-nyc3-001
----
-# Local PVC
+# Dynamic PVC 2
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-local-pvc
+  name: test-pvc-2
   namespace: dr-sync-test-case14
   labels:
     app: test-app
     test-type: pvc-sync-persistent-volumes
-    volume-type: local
+    volume-type: dynamic
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 20Gi
-  storageClassName: do-block-storage-retain
-  volumeName: test-local-pv-case14
+      storage: 2Gi
+  storageClassName: local-path
+  volumeMode: Filesystem
 ---
-# NFS PV
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: test-nfs-pv-case14
-  labels:
-    type: nfs
-    test-type: pvc-sync-persistent-volumes
-spec:
-  capacity:
-    storage: 15Gi
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: do-block-storage-retain
-  nfs:
-    server: nfs.example.com
-    path: /exports/data-case14
-  mountOptions:
-    - hard
-    - nfsvers=4.1
----
-# NFS PVC
+# Dynamic PVC 3
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-nfs-pvc
+  name: test-pvc-3
   namespace: dr-sync-test-case14
   labels:
     app: test-app
     test-type: pvc-sync-persistent-volumes
-    volume-type: nfs
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 15Gi
-  storageClassName: do-block-storage-retain
-  volumeName: test-nfs-pv-case14
----
-# Block Device PV
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: test-block-pv-case14
-  labels:
-    type: block
-    test-type: pvc-sync-persistent-volumes
-spec:
-  capacity:
-    storage: 30Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: do-block-storage-retain
-  volumeMode: Block
-  local:
-    path: /dev/sdb-case14
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - worker-do-nyc3-002
----
-# Block Device PVC
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-block-pvc
-  namespace: dr-sync-test-case14
-  labels:
-    app: test-app
-    test-type: pvc-sync-persistent-volumes
-    volume-type: block
+    volume-type: dynamic
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 30Gi
-  storageClassName: do-block-storage-retain
-  volumeMode: Block
-  volumeName: test-block-pv-case14
+      storage: 3Gi
+  storageClassName: local-path
+  volumeMode: Filesystem
 ---
 # Deployment using all PVCs
 apiVersion: apps/v1
@@ -237,17 +103,12 @@ spec:
         - name: app
           image: nginx:latest
           volumeMounts:
-            - name: static-storage
-              mountPath: /data/static
-            - name: dynamic-storage
-              mountPath: /data/dynamic
-            - name: local-storage
-              mountPath: /data/local
-            - name: nfs-storage
-              mountPath: /data/nfs
-          volumeDevices:
-            - name: block-storage
-              devicePath: /dev/xvda
+            - name: pvc1-storage
+              mountPath: /data/pvc1
+            - name: pvc2-storage
+              mountPath: /data/pvc2
+            - name: pvc3-storage
+              mountPath: /data/pvc3
           resources:
             requests:
               cpu: "100m"
@@ -256,21 +117,15 @@ spec:
               cpu: "500m"
               memory: "256Mi"
       volumes:
-        - name: static-storage
+        - name: pvc1-storage
           persistentVolumeClaim:
-            claimName: test-static-pvc
-        - name: dynamic-storage
+            claimName: test-pvc-1
+        - name: pvc2-storage
           persistentVolumeClaim:
-            claimName: test-dynamic-pvc
-        - name: local-storage
+            claimName: test-pvc-2
+        - name: pvc3-storage
           persistentVolumeClaim:
-            claimName: test-local-pvc
-        - name: nfs-storage
-          persistentVolumeClaim:
-            claimName: test-nfs-pvc
-        - name: block-storage
-          persistentVolumeClaim:
-            claimName: test-block-pvc
+            claimName: test-pvc-3
 ---
 # Service for the deployment
 apiVersion: v1

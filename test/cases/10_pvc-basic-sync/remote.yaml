@@ -20,7 +20,6 @@ metadata:
 data:
   app.properties: |
     storage.path=/data/standard
-    block.device=/dev/block
     filesystem.mount=/data/fs
 ---
 # Standard PVC with default configuration
@@ -41,29 +40,8 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: do-block-storage
+  storageClassName: local-path
   volumeMode: Filesystem
----
-# Block device PVC
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-pvc-block
-  namespace: dr-sync-test-case10
-  labels:
-    app: test-app
-    test-type: pvc-basic-sync
-    pvc-type: block
-  annotations:
-    description: "Block device PVC with raw access"
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
-  storageClassName: do-block-storage
-  volumeMode: Block
 ---
 # Filesystem PVC with specific configuration
 apiVersion: v1
@@ -82,11 +60,11 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi
-  storageClassName: do-block-storage
+      storage: 2Gi
+  storageClassName: local-path
   volumeMode: Filesystem
 ---
-# Deployment using all PVCs
+# Deployment using PVCs
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -113,9 +91,6 @@ spec:
               mountPath: /data/standard
             - name: filesystem-storage
               mountPath: /data/fs
-          volumeDevices:
-            - name: block-storage
-              devicePath: /dev/block
           resources:
             requests:
               cpu: "100m"
@@ -127,9 +102,6 @@ spec:
         - name: standard-storage
           persistentVolumeClaim:
             claimName: test-pvc-standard
-        - name: block-storage
-          persistentVolumeClaim:
-            claimName: test-pvc-block
         - name: filesystem-storage
           persistentVolumeClaim:
             claimName: test-pvc-filesystem

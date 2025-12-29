@@ -40,10 +40,10 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: do-block-storage
+  storageClassName: local-path
   volumeMode: Filesystem
 ---
-# Retain Policy PVC
+# Premium Storage PVC (same class in k3d)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -52,16 +52,16 @@ metadata:
   labels:
     app: test-app
     test-type: pvc-storage-class-mapping
-    storage-type: retain
+    storage-type: premium
   annotations:
-    description: "PVC with retain policy configuration"
+    description: "Premium PVC configuration"
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi
-  storageClassName: do-block-storage-retain
+      storage: 2Gi
+  storageClassName: local-path
   volumeMode: Filesystem
 ---
 # Deployment using all PVCs
@@ -89,7 +89,7 @@ spec:
           volumeMounts:
             - name: standard-storage
               mountPath: /data/standard
-            - name: retain-storage
+            - name: premium-storage
               mountPath: /data/premium
           resources:
             requests:
@@ -102,7 +102,7 @@ spec:
         - name: standard-storage
           persistentVolumeClaim:
             claimName: test-pvc-standard
-        - name: retain-storage
+        - name: premium-storage
           persistentVolumeClaim:
             claimName: test-pvc-premium
 ---

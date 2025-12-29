@@ -20,11 +20,9 @@ metadata:
 data:
   app.properties: |
     rwo.path=/data/rwo
-    rwm.path=/data/rwm
-    rom.path=/data/rom
-    rwop.path=/data/rwop
+    rwo2.path=/data/rwo2
 ---
-# ReadWriteOnce PVC
+# ReadWriteOnce PVC 1
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -42,73 +40,31 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: do-block-storage
+  storageClassName: local-path
   volumeMode: Filesystem
 ---
-# ReadWriteMany PVC
+# ReadWriteOnce PVC 2
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: test-pvc-rwm
+  name: test-pvc-rwo2
   namespace: dr-sync-test-case12
   labels:
     app: test-app
     test-type: pvc-access-mode-mapping
-    access-mode: rwm
+    access-mode: rwo2
   annotations:
-    description: "ReadWriteMany PVC for multi-node read-write access"
+    description: "Second ReadWriteOnce PVC"
 spec:
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
-  storageClassName: do-block-storage
+  storageClassName: local-path
   volumeMode: Filesystem
 ---
-# ReadOnlyMany PVC
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-pvc-rom
-  namespace: dr-sync-test-case12
-  labels:
-    app: test-app
-    test-type: pvc-access-mode-mapping
-    access-mode: rom
-  annotations:
-    description: "ReadOnlyMany PVC for multi-node read-only access"
-spec:
-  accessModes:
-    - ReadOnlyMany
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: do-block-storage
-  volumeMode: Filesystem
----
-# ReadWriteOncePod PVC
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: test-pvc-rwop
-  namespace: dr-sync-test-case12
-  labels:
-    app: test-app
-    test-type: pvc-access-mode-mapping
-    access-mode: rwop
-  annotations:
-    description: "ReadWriteOncePod PVC for single pod access"
-spec:
-  accessModes:
-    - ReadWriteOncePod
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: do-block-storage
-  volumeMode: Filesystem
----
-# Deployment using all PVCs
+# Deployment using PVCs
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -133,12 +89,8 @@ spec:
           volumeMounts:
             - name: rwo-storage
               mountPath: /data/rwo
-            - name: rwm-storage
-              mountPath: /data/rwm
-            - name: rom-storage
-              mountPath: /data/rom
-            - name: rwop-storage
-              mountPath: /data/rwop
+            - name: rwo2-storage
+              mountPath: /data/rwo2
           resources:
             requests:
               cpu: "100m"
@@ -150,15 +102,9 @@ spec:
         - name: rwo-storage
           persistentVolumeClaim:
             claimName: test-pvc-rwo
-        - name: rwm-storage
+        - name: rwo2-storage
           persistentVolumeClaim:
-            claimName: test-pvc-rwm
-        - name: rom-storage
-          persistentVolumeClaim:
-            claimName: test-pvc-rom
-        - name: rwop-storage
-          persistentVolumeClaim:
-            claimName: test-pvc-rwop
+            claimName: test-pvc-rwo2
 ---
 # Service for the deployment
 apiVersion: v1

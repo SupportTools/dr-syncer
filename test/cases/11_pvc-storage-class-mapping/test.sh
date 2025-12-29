@@ -465,7 +465,7 @@ main() {
     
     # Verify Standard PVC
     if verify_resource "dr-sync-test-case11" "persistentvolumeclaim" "test-pvc-standard"; then
-        if verify_pvc "dr-sync-test-case11" "dr-sync-test-case11" "test-pvc-standard" "do-block-storage" "do-block-storage-retain"; then
+        if verify_pvc "dr-sync-test-case11" "dr-sync-test-case11" "test-pvc-standard" "local-path" "local-path"; then
             print_result "Standard PVC synced and verified" "pass"
         else
             print_result "Standard PVC verification failed" "fail"
@@ -473,10 +473,10 @@ main() {
     else
         print_result "Standard PVC not found" "fail"
     fi
-    
+
     # Verify Premium PVC
     if verify_resource "dr-sync-test-case11" "persistentvolumeclaim" "test-pvc-premium"; then
-        if verify_pvc "dr-sync-test-case11" "dr-sync-test-case11" "test-pvc-premium" "do-block-storage-retain" "do-block-storage-retain"; then
+        if verify_pvc "dr-sync-test-case11" "dr-sync-test-case11" "test-pvc-premium" "local-path" "local-path"; then
             print_result "Premium PVC synced and verified" "pass"
         else
             print_result "Premium PVC verification failed" "fail"

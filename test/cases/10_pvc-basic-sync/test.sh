@@ -485,17 +485,6 @@ main() {
         print_result "Standard PVC not found" "fail"
     fi
     
-    # Verify Block PVC
-    if verify_resource "dr-sync-test-case10" "persistentvolumeclaim" "test-pvc-block"; then
-        if verify_pvc "dr-sync-test-case10" "dr-sync-test-case10" "test-pvc-block"; then
-            print_result "Block PVC synced and verified" "pass"
-        else
-            print_result "Block PVC verification failed" "fail"
-        fi
-    else
-        print_result "Block PVC not found" "fail"
-    fi
-    
     # Verify Filesystem PVC
     if verify_resource "dr-sync-test-case10" "persistentvolumeclaim" "test-pvc-filesystem"; then
         if verify_pvc "dr-sync-test-case10" "dr-sync-test-case10" "test-pvc-filesystem"; then

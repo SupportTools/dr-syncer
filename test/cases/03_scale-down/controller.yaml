@@ -1,56 +1,3 @@
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: RemoteCluster
-metadata:
-  name: test-remote-nyc3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "03"
-    dr-syncer.io/test-name: "scale-down"
-    dr-syncer.io/test: "true"
-spec:
-  kubeconfigSecretRef:
-    name: dr-syncer-nyc3-kubeconfig
-    namespace: dr-syncer
-  defaultSchedule: "*/5 * * * *" # Every 5 minutes
-  defaultResourceTypes:
-    - "*" # Wildcard to include all resources
-  pvcSync:
-    enabled: true
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: RemoteCluster
-metadata:
-  name: test-remote-sfo3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "03"
-    dr-syncer.io/test-name: "scale-down"
-    dr-syncer.io/test: "true"
-spec:
-  kubeconfigSecretRef:
-    name: dr-syncer-sfo3-kubeconfig
-    namespace: dr-syncer
-  defaultSchedule: "*/5 * * * *" # Every 5 minutes
-  defaultResourceTypes:
-    - "*" # Wildcard to include all resources
-  pvcSync:
-    enabled: true
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: ClusterMapping
-metadata:
-  name: test-nyc3-to-sfo3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "03"
-    dr-syncer.io/test-name: "scale-down"
-    dr-syncer.io/test: "true"
-spec:
-  sourceCluster: test-remote-nyc3
-  targetCluster: test-remote-sfo3
-  verifyConnectivity: true
----
 apiVersion: dr-syncer.io/v1alpha1
 kind: NamespaceMapping
 metadata:
@@ -65,9 +12,9 @@ spec:
   replicationMode: Scheduled
   schedule: "*/5 * * * *" # Run every 5 minutes
 
-  # Cluster configuration
+  # Cluster configuration - use E2E cluster mapping
   clusterMappingRef:
-    name: test-nyc3-to-sfo3
+    name: prod-to-dr
     namespace: dr-syncer
   sourceNamespace: dr-sync-test-case03
   destinationNamespace: dr-sync-test-case03

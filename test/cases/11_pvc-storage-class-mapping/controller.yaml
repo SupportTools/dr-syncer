@@ -1,56 +1,3 @@
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: RemoteCluster
-metadata:
-  name: test-remote-nyc3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "11"
-    dr-syncer.io/test-name: "pvc-storage-class-mapping"
-    dr-syncer.io/test: "true"
-spec:
-  kubeconfigSecretRef:
-    name: dr-syncer-nyc3-kubeconfig
-    namespace: dr-syncer
-  defaultSchedule: "*/5 * * * *" # Every 5 minutes
-  defaultResourceTypes:
-    - "*" # Wildcard to include all resources
-  pvcSync:
-    enabled: true
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: RemoteCluster
-metadata:
-  name: test-remote-sfo3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "11"
-    dr-syncer.io/test-name: "pvc-storage-class-mapping"
-    dr-syncer.io/test: "true"
-spec:
-  kubeconfigSecretRef:
-    name: dr-syncer-sfo3-kubeconfig
-    namespace: dr-syncer
-  defaultSchedule: "*/5 * * * *" # Every 5 minutes
-  defaultResourceTypes:
-    - "*" # Wildcard to include all resources
-  pvcSync:
-    enabled: true
----
-apiVersion: dr-syncer.io/v1alpha1
-kind: ClusterMapping
-metadata:
-  name: test-nyc3-to-sfo3
-  namespace: dr-syncer
-  labels:
-    dr-syncer.io/test-case: "11"
-    dr-syncer.io/test-name: "pvc-storage-class-mapping"
-    dr-syncer.io/test: "true"
-spec:
-  sourceCluster: test-remote-nyc3
-  targetCluster: test-remote-sfo3
-  verifyConnectivity: true
----
 apiVersion: dr-syncer.io/v1alpha1
 kind: NamespaceMapping
 metadata:
@@ -64,40 +11,40 @@ spec:
   # Use scheduled mode for predictable testing
   replicationMode: Scheduled
   schedule: "*/5 * * * *"  # Run every 5 minutes
-  
-  # Cluster configuration
+
+  # Cluster configuration - use E2E cluster mapping
   clusterMappingRef:
-    name: test-nyc3-to-sfo3
+    name: prod-to-dr
     namespace: dr-syncer
   sourceNamespace: dr-sync-test-case11
   destinationNamespace: dr-sync-test-case11
-  
+
   # Resource types to sync
   resourceTypes:
     - "*"  # Sync all resource types
-  
+
   # Scale deployments to zero in DR
   scaleToZero: true
-  
+
   # Configure immutable resource handling
   immutableResourceConfig:
     defaultHandling: Recreate
     drainTimeout: 5m
     forceDeleteTimeout: 2m
-  
+
   # Namespace configuration
   namespaceConfig:
     createNamespace: true
     preserveLabels: true
     preserveAnnotations: true
-    
+
   # PVC configuration with storage class mapping
   pvcConfig:
     syncPersistentVolumes: false # Don't sync PVs directly
     preserveVolumeAttributes: true # Maintain volume attributes
     syncData: false # Don't sync data inside PVCs, just the PVC resources
-    
-    # Storage class mapping configuration for DO storage classes
+
+    # Storage class mapping configuration for k3d local-path
     storageClassMappings:
-    - from: do-block-storage           # Default class
-      to: do-block-storage-retain     # Map to Retain variant
+    - from: local-path           # Source class
+      to: local-path             # Keep same in k3d

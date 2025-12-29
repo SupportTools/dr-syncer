@@ -454,7 +454,7 @@ main() {
         print_result "ConfigMap not found" "fail"
     fi
     
-    # Verify ReadWriteOnce PVC
+    # Verify ReadWriteOnce PVC 1
     if verify_resource "dr-sync-test-case12" "persistentvolumeclaim" "test-pvc-rwo"; then
         if verify_pvc_access_mode "dr-sync-test-case12" "dr-sync-test-case12" "test-pvc-rwo" "ReadWriteOnce" "ReadWriteOnce"; then
             print_result "ReadWriteOnce PVC synced and verified" "pass"
@@ -464,38 +464,16 @@ main() {
     else
         print_result "ReadWriteOnce PVC not found" "fail"
     fi
-    
-    # Verify ReadWriteMany PVC
-    if verify_resource "dr-sync-test-case12" "persistentvolumeclaim" "test-pvc-rwm"; then
-        if verify_pvc_access_mode "dr-sync-test-case12" "dr-sync-test-case12" "test-pvc-rwm" "ReadWriteMany" "ReadWriteMany"; then
-            print_result "ReadWriteMany PVC synced and verified" "pass"
+
+    # Verify ReadWriteOnce PVC 2
+    if verify_resource "dr-sync-test-case12" "persistentvolumeclaim" "test-pvc-rwo2"; then
+        if verify_pvc_access_mode "dr-sync-test-case12" "dr-sync-test-case12" "test-pvc-rwo2" "ReadWriteOnce" "ReadWriteOnce"; then
+            print_result "ReadWriteOnce PVC 2 synced and verified" "pass"
         else
-            print_result "ReadWriteMany PVC verification failed" "fail"
+            print_result "ReadWriteOnce PVC 2 verification failed" "fail"
         fi
     else
-        print_result "ReadWriteMany PVC not found" "fail"
-    fi
-    
-    # Verify ReadOnlyMany PVC
-    if verify_resource "dr-sync-test-case12" "persistentvolumeclaim" "test-pvc-rom"; then
-        if verify_pvc_access_mode "dr-sync-test-case12" "dr-sync-test-case12" "test-pvc-rom" "ReadOnlyMany" "ReadWriteMany"; then
-            print_result "ReadOnlyMany PVC synced and mapped to ReadWriteMany" "pass"
-        else
-            print_result "ReadOnlyMany PVC verification failed" "fail"
-        fi
-    else
-        print_result "ReadOnlyMany PVC not found" "fail"
-    fi
-    
-    # Verify ReadWriteOncePod PVC
-    if verify_resource "dr-sync-test-case12" "persistentvolumeclaim" "test-pvc-rwop"; then
-        if verify_pvc_access_mode "dr-sync-test-case12" "dr-sync-test-case12" "test-pvc-rwop" "ReadWriteOncePod" "ReadWriteOnce"; then
-            print_result "ReadWriteOncePod PVC synced and mapped to ReadWriteOnce" "pass"
-        else
-            print_result "ReadWriteOncePod PVC verification failed" "fail"
-        fi
-    else
-        print_result "ReadWriteOncePod PVC not found" "fail"
+        print_result "ReadWriteOnce PVC 2 not found" "fail"
     fi
     
     # Verify Deployment
