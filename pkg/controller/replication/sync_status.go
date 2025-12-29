@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,13 +45,30 @@ const (
 
 // SyncStatus represents the status of a sync operation
 type SyncStatus struct {
-	Phase            string    `json:"phase"`
-	StartTime        time.Time `json:"startTime"`
-	CompletionTime   time.Time `json:"completionTime,omitempty"`
-	BytesTransferred int64     `json:"bytesTransferred"`
-	FilesTransferred int       `json:"filesTransferred"`
-	Progress         int       `json:"progress"` // 0-100
-	Error            string    `json:"error,omitempty"`
+	Phase            string              `json:"phase"`
+	StartTime        time.Time           `json:"startTime"`
+	CompletionTime   time.Time           `json:"completionTime,omitempty"`
+	BytesTransferred int64               `json:"bytesTransferred"`
+	FilesTransferred int                 `json:"filesTransferred"`
+	Progress         int                 `json:"progress"` // 0-100
+	Error            string              `json:"error,omitempty"`
+	Verification     *VerificationResult `json:"verification,omitempty"`
+}
+
+// VerificationResult holds the result of data verification after sync
+type VerificationResult struct {
+	// Mode is the verification mode used
+	Mode drv1alpha1.VerificationMode `json:"mode"`
+	// FilesVerified is the number of files that were verified
+	FilesVerified int `json:"filesVerified"`
+	// FilesTotal is the total number of files in the destination
+	FilesTotal int `json:"filesTotal"`
+	// ChecksumMatch indicates whether all verified checksums matched
+	ChecksumMatch bool `json:"checksumMatch"`
+	// VerifiedAt is when the verification was performed
+	VerifiedAt time.Time `json:"verifiedAt,omitempty"`
+	// Error contains any error message from verification
+	Error string `json:"error,omitempty"`
 }
 
 // UpdateSyncStatus updates the sync status on the PVC
@@ -280,6 +298,35 @@ func (p *PVCSyncer) CompleteSyncStatus(ctx context.Context, namespace, pvcName s
 		BytesTransferred: bytesTransferred,
 		FilesTransferred: filesTransferred,
 		Progress:         100,
+	}
+
+	return p.UpdateSyncStatus(ctx, namespace, pvcName, status)
+}
+
+// CompleteSyncStatusWithVerification updates the sync status to completed with verification results
+func (p *PVCSyncer) CompleteSyncStatusWithVerification(ctx context.Context, namespace, pvcName string,
+	bytesTransferred int64, filesTransferred int, verification *VerificationResult) error {
+
+	status := SyncStatus{
+		Phase:            "Completed",
+		StartTime:        time.Now().Add(-1 * time.Minute), // Approximate
+		CompletionTime:   time.Now(),
+		BytesTransferred: bytesTransferred,
+		FilesTransferred: filesTransferred,
+		Progress:         100,
+		Verification:     verification,
+	}
+
+	// Log verification results if available
+	if verification != nil {
+		log.WithFields(logrus.Fields{
+			"namespace":      namespace,
+			"pvc_name":       pvcName,
+			"mode":           verification.Mode,
+			"files_verified": verification.FilesVerified,
+			"files_total":    verification.FilesTotal,
+			"checksum_match": verification.ChecksumMatch,
+		}).Info(logging.LogTagInfo + " Sync completed with verification")
 	}
 
 	return p.UpdateSyncStatus(ctx, namespace, pvcName, status)

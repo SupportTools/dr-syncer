@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -10,8 +11,200 @@ import (
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/agent/rsyncpod"
 	"github.com/supporttools/dr-syncer/pkg/logging"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// VerificationConfig holds the resolved verification configuration
+type VerificationConfig struct {
+	Mode          drv1alpha1.VerificationMode
+	SamplePercent int32
+}
+
+// getVerificationConfig resolves the verification configuration with 3-level hierarchy:
+// 1. Per-PVC annotation (highest priority)
+// 2. NamespaceMapping config
+// 3. RemoteCluster default (lowest priority)
+func (p *PVCSyncer) getVerificationConfig(ctx context.Context, pvcName string, nm *drv1alpha1.NamespaceMapping) VerificationConfig {
+	config := VerificationConfig{
+		Mode:          drv1alpha1.VerificationModeNone,
+		SamplePercent: 10, // Default sample percentage
+	}
+
+	// Priority 3: Get RemoteCluster defaults (lowest priority)
+	remoteClustersList := &drv1alpha1.RemoteClusterList{}
+	if err := p.SourceClient.List(ctx, remoteClustersList); err == nil {
+		if len(remoteClustersList.Items) > 0 {
+			rc := remoteClustersList.Items[0]
+			if rc.Spec.PVCSync != nil {
+				if rc.Spec.PVCSync.DefaultVerificationMode != "" {
+					config.Mode = rc.Spec.PVCSync.DefaultVerificationMode
+				}
+				if rc.Spec.PVCSync.DefaultSamplePercent != nil {
+					config.SamplePercent = *rc.Spec.PVCSync.DefaultSamplePercent
+				}
+			}
+		}
+	}
+
+	// Priority 2: NamespaceMapping config overrides RemoteCluster
+	if nm != nil && nm.Spec.PVCConfig != nil && nm.Spec.PVCConfig.DataSyncConfig != nil {
+		dsc := nm.Spec.PVCConfig.DataSyncConfig
+		if dsc.VerificationMode != "" {
+			config.Mode = dsc.VerificationMode
+		}
+		if dsc.SamplePercent != nil {
+			config.SamplePercent = *dsc.SamplePercent
+		}
+	}
+
+	// Priority 1: Per-PVC annotation (highest priority)
+	pvc, err := p.SourceK8sClient.CoreV1().PersistentVolumeClaims(p.SourceNamespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err == nil && pvc.Annotations != nil {
+		if mode, ok := pvc.Annotations["dr-syncer.io/verification-mode"]; ok {
+			switch drv1alpha1.VerificationMode(mode) {
+			case drv1alpha1.VerificationModeNone, drv1alpha1.VerificationModeSample, drv1alpha1.VerificationModeFull:
+				config.Mode = drv1alpha1.VerificationMode(mode)
+			default:
+				log.WithFields(logrus.Fields{
+					"pvc":  pvcName,
+					"mode": mode,
+				}).Warn(logging.LogTagWarn + " Invalid verification mode in PVC annotation, using inherited value")
+			}
+		}
+		if sampleStr, ok := pvc.Annotations["dr-syncer.io/sample-percent"]; ok {
+			var samplePercent int32
+			if _, err := fmt.Sscanf(sampleStr, "%d", &samplePercent); err == nil {
+				if samplePercent >= 1 && samplePercent <= 100 {
+					config.SamplePercent = samplePercent
+				}
+			}
+		}
+	}
+
+	log.WithFields(logrus.Fields{
+		"pvc":            pvcName,
+		"mode":           config.Mode,
+		"sample_percent": config.SamplePercent,
+	}).Debug(logging.LogTagDetail + " Resolved verification configuration")
+
+	return config
+}
+
+// performSampleVerification performs checksum verification on a random sample of files
+func (p *PVCSyncer) performSampleVerification(ctx context.Context, destDeployment *rsyncpod.RsyncDeployment,
+	nodeIP, mountPath string, sshPort int32, samplePercent int32) (*VerificationResult, error) {
+
+	result := &VerificationResult{
+		Mode:          drv1alpha1.VerificationModeSample,
+		ChecksumMatch: true,
+		VerifiedAt:    time.Now(),
+	}
+
+	// Get list of files in destination
+	listCmd := []string{"sh", "-c", "find /data -type f 2>/dev/null | head -1000"}
+	pvcCtx := context.WithValue(ctx, SyncerKey, p)
+	stdout, _, err := rsyncpod.ExecuteCommandInPod(pvcCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, listCmd, p.DestinationConfig)
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to list files: %v", err)
+		result.ChecksumMatch = false
+		return result, err
+	}
+
+	files := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(files) == 0 || (len(files) == 1 && files[0] == "") {
+		log.Debug(logging.LogTagDetail + " No files to verify in sample mode")
+		result.FilesVerified = 0
+		result.FilesTotal = 0
+		return result, nil
+	}
+
+	result.FilesTotal = len(files)
+
+	// Calculate number of files to sample
+	numSamples := int(float64(len(files)) * float64(samplePercent) / 100.0)
+	if numSamples < 1 {
+		numSamples = 1
+	}
+	if numSamples > len(files) {
+		numSamples = len(files)
+	}
+
+	// Randomly select files to verify
+	rand.Shuffle(len(files), func(i, j int) {
+		files[i], files[j] = files[j], files[i]
+	})
+	samplesToVerify := files[:numSamples]
+
+	log.WithFields(logrus.Fields{
+		"total_files":    len(files),
+		"sample_percent": samplePercent,
+		"num_samples":    numSamples,
+	}).Debug(logging.LogTagDetail + " Starting sample verification")
+
+	// Verify each sampled file
+	verified := 0
+	for _, file := range samplesToVerify {
+		if file == "" {
+			continue
+		}
+
+		// Convert destination path to source path
+		relPath := strings.TrimPrefix(file, "/data")
+		if relPath == "" {
+			relPath = "/"
+		}
+		sourcePath := mountPath + relPath
+
+		// Get checksums from both source and destination
+		destChecksumCmd := []string{"sh", "-c", fmt.Sprintf("md5sum '%s' 2>/dev/null | awk '{print $1}'", file)}
+		destChecksum, _, err := rsyncpod.ExecuteCommandInPod(pvcCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, destChecksumCmd, p.DestinationConfig)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"file":  file,
+				"error": err,
+			}).Warn(logging.LogTagWarn + " Failed to get destination checksum")
+			continue
+		}
+
+		// Get source checksum via SSH
+		sourceChecksumCmd := []string{"sh", "-c", fmt.Sprintf(
+			"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/id_rsa -p %d root@%s \"md5sum '%s' 2>/dev/null | awk '{print \\$1}'\"",
+			sshPort, nodeIP, sourcePath)}
+		sourceChecksum, _, err := rsyncpod.ExecuteCommandInPod(pvcCtx, p.DestinationK8sClient, destDeployment.Namespace, destDeployment.PodName, sourceChecksumCmd, p.DestinationConfig)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"file":  sourcePath,
+				"error": err,
+			}).Warn(logging.LogTagWarn + " Failed to get source checksum")
+			continue
+		}
+
+		destChecksum = strings.TrimSpace(destChecksum)
+		sourceChecksum = strings.TrimSpace(sourceChecksum)
+
+		if destChecksum != sourceChecksum {
+			log.WithFields(logrus.Fields{
+				"file":         file,
+				"src_checksum": sourceChecksum,
+				"dst_checksum": destChecksum,
+			}).Warn(logging.LogTagWarn + " Checksum mismatch detected")
+			result.ChecksumMatch = false
+			result.Error = fmt.Sprintf("checksum mismatch for file: %s", file)
+		}
+		verified++
+	}
+
+	result.FilesVerified = verified
+
+	log.WithFields(logrus.Fields{
+		"files_verified": verified,
+		"files_total":    result.FilesTotal,
+		"checksum_match": result.ChecksumMatch,
+	}).Info(logging.LogTagInfo + " Sample verification completed")
+
+	return result, nil
+}
 
 // isTransientError checks if an error is transient and should be retried
 // It checks both the error message and stderr output for transient patterns
@@ -104,8 +297,10 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 
 	// Get NamespaceMapping to check for bandwidth limit and custom options
 	var nm drv1alpha1.NamespaceMapping
+	var nmPtr *drv1alpha1.NamespaceMapping
 	nmKey := client.ObjectKey{Name: fmt.Sprintf("%s-%s", p.SourceNamespace, p.DestinationNamespace)}
 	if err := p.SourceClient.Get(ctx, nmKey, &nm); err == nil {
+		nmPtr = &nm
 		// Get RetryConfig from NamespaceMapping if available
 		retryConfig = nm.Spec.RetryConfig
 
@@ -130,18 +325,6 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 				}
 			}
 
-			// Check for thorough flag in rsync options via timeout
-			if nm.Spec.PVCConfig.DataSyncConfig.Timeout != nil {
-				defaultDuration, _ := time.ParseDuration("30m")
-				if nm.Spec.PVCConfig.DataSyncConfig.Timeout.Duration > defaultDuration {
-					useChecksum = true
-					entry := log.WithFields(logrus.Fields{
-						"timeout": nm.Spec.PVCConfig.DataSyncConfig.Timeout.Duration,
-					})
-					entry.Debug(logging.LogTagDetail + " Longer timeout requested, enabling checksum mode")
-				}
-			}
-
 			// Check for bandwidth limit
 			if nm.Spec.PVCConfig.DataSyncConfig.BandwidthLimit != nil {
 				bwLimit := *nm.Spec.PVCConfig.DataSyncConfig.BandwidthLimit
@@ -159,6 +342,18 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 			"error": err,
 		})
 		entry.Debug(logging.LogTagDetail + " Failed to get NamespaceMapping for custom options, continuing with defaults")
+	}
+
+	// Get verification configuration with 3-level hierarchy
+	verifyConfig := p.getVerificationConfig(ctx, destDeployment.PVCName, nmPtr)
+
+	// Apply verification mode to rsync options
+	if verifyConfig.Mode == drv1alpha1.VerificationModeFull {
+		useChecksum = true
+		log.WithFields(logrus.Fields{
+			"pvc":  destDeployment.PVCName,
+			"mode": verifyConfig.Mode,
+		}).Info(logging.LogTagInfo + " Using full checksum verification mode")
 	}
 
 	// Add checksum option if thorough verification needed
@@ -337,8 +532,37 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		return err
 	}
 
-	// Update status to completed
-	if err := p.CompleteSyncStatus(ctx, p.SourceNamespace, destDeployment.PVCName, bytesTransferred, filesTransferred); err != nil {
+	// Perform sample verification if configured
+	var verificationResult *VerificationResult
+	if verifyConfig.Mode == drv1alpha1.VerificationModeSample {
+		log.WithFields(logrus.Fields{
+			"pvc":            destDeployment.PVCName,
+			"sample_percent": verifyConfig.SamplePercent,
+		}).Info(logging.LogTagInfo + " Performing sample checksum verification")
+
+		verificationResult, err = p.performSampleVerification(ctx, destDeployment, nodeIP, mountPath, sshPort, verifyConfig.SamplePercent)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"error": err,
+			}).Warn(logging.LogTagWarn + " Sample verification failed, but rsync completed")
+		} else if !verificationResult.ChecksumMatch {
+			log.WithFields(logrus.Fields{
+				"files_verified": verificationResult.FilesVerified,
+				"files_total":    verificationResult.FilesTotal,
+				"error":          verificationResult.Error,
+			}).Warn(logging.LogTagWarn + " Sample verification detected checksum mismatch")
+		}
+	} else if verifyConfig.Mode == drv1alpha1.VerificationModeFull {
+		// For full mode, rsync --checksum already verified everything
+		verificationResult = &VerificationResult{
+			Mode:          drv1alpha1.VerificationModeFull,
+			ChecksumMatch: true,
+			VerifiedAt:    time.Now(),
+		}
+	}
+
+	// Update status to completed with verification result
+	if err := p.CompleteSyncStatusWithVerification(ctx, p.SourceNamespace, destDeployment.PVCName, bytesTransferred, filesTransferred, verificationResult); err != nil {
 		warnEntry := log.WithFields(logrus.Fields{
 			"error": err,
 		})

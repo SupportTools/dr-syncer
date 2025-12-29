@@ -94,6 +94,19 @@ type PVCConfig struct {
 	DataSyncConfig *PVCDataSyncConfig `json:"dataSyncConfig,omitempty"`
 }
 
+// VerificationMode defines how data integrity is verified during PVC sync
+// +kubebuilder:validation:Enum=none;sample;full
+type VerificationMode string
+
+const (
+	// VerificationModeNone uses time/size-based comparison (default, fastest)
+	VerificationModeNone VerificationMode = "none"
+	// VerificationModeSample checksums a random subset of files after sync
+	VerificationModeSample VerificationMode = "sample"
+	// VerificationModeFull always uses --checksum flag for thorough verification
+	VerificationModeFull VerificationMode = "full"
+)
+
 // PVCDataSyncConfig defines configuration for PVC data synchronization
 type PVCDataSyncConfig struct {
 	// ConcurrentSyncs is the maximum number of concurrent PVC data syncs.
@@ -120,6 +133,22 @@ type PVCDataSyncConfig struct {
 	// +optional
 	// +kubebuilder:default="30m"
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// VerificationMode specifies how data integrity is verified after sync.
+	// Options: none (default, time/size comparison), sample (checksum random files),
+	// full (always use --checksum flag).
+	// Can be overridden per-PVC with annotation 'dr-syncer.io/verification-mode'.
+	// +optional
+	// +kubebuilder:default=none
+	VerificationMode VerificationMode `json:"verificationMode,omitempty"`
+
+	// SamplePercent is the percentage of files to verify when using 'sample' mode.
+	// Only used when VerificationMode is 'sample'.
+	// +optional
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	SamplePercent *int32 `json:"samplePercent,omitempty"`
 }
 
 // DeepCopyInto copies PVCDataSyncConfig into out
@@ -148,6 +177,11 @@ func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 	if in.Timeout != nil {
 		in, out := &in.Timeout, &out.Timeout
 		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.SamplePercent != nil {
+		in, out := &in.SamplePercent, &out.SamplePercent
+		*out = new(int32)
 		**out = **in
 	}
 }

@@ -95,6 +95,26 @@ spec:
                       syncs
                     format: int32
                     type: integer
+                  defaultSamplePercent:
+                    default: 10
+                    description: |-
+                      DefaultSamplePercent sets the default sample percentage for 'sample' mode.
+                      Only used when DefaultVerificationMode or inherited mode is 'sample'.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  defaultVerificationMode:
+                    default: none
+                    description: |-
+                      DefaultVerificationMode sets the default verification mode for all PVC syncs
+                      using this cluster. Can be overridden at NamespaceMapping or per-PVC level.
+                      Options: none (default), sample, full
+                    enum:
+                    - none
+                    - sample
+                    - full
+                    type: string
                   deployment:
                     description: Deployment configures the agent deployment options
                     properties:

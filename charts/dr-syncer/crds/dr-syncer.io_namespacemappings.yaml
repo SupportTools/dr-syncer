@@ -296,10 +296,31 @@ spec:
                         items:
                           type: string
                         type: array
+                      samplePercent:
+                        default: 10
+                        description: |-
+                          SamplePercent is the percentage of files to verify when using 'sample' mode.
+                          Only used when VerificationMode is 'sample'.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
                       timeout:
                         default: 30m
                         description: Timeout is the maximum time to wait for a sync
                           operation to complete.
+                        type: string
+                      verificationMode:
+                        default: none
+                        description: |-
+                          VerificationMode specifies how data integrity is verified after sync.
+                          Options: none (default, time/size comparison), sample (checksum random files),
+                          full (always use --checksum flag).
+                          Can be overridden per-PVC with annotation 'dr-syncer.io/verification-mode'.
+                        enum:
+                        - none
+                        - sample
+                        - full
                         type: string
                     type: object
                   preserveVolumeAttributes:

@@ -86,6 +86,21 @@ type PVCSyncSpec struct {
 	// HealthCheck configures health checking behavior
 	// +optional
 	HealthCheck *HealthCheckConfig `json:"healthCheck,omitempty"`
+
+	// DefaultVerificationMode sets the default verification mode for all PVC syncs
+	// using this cluster. Can be overridden at NamespaceMapping or per-PVC level.
+	// Options: none (default), sample, full
+	// +optional
+	// +kubebuilder:default=none
+	DefaultVerificationMode VerificationMode `json:"defaultVerificationMode,omitempty"`
+
+	// DefaultSamplePercent sets the default sample percentage for 'sample' mode.
+	// Only used when DefaultVerificationMode or inherited mode is 'sample'.
+	// +optional
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	DefaultSamplePercent *int32 `json:"defaultSamplePercent,omitempty"`
 }
 
 // PVCSyncDeployment defines deployment configuration for the PVC sync agent
