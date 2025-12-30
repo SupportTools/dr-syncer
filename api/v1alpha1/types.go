@@ -149,6 +149,63 @@ type PVCDataSyncConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
 	SamplePercent *int32 `json:"samplePercent,omitempty"`
+
+	// SnapshotConfig enables snapshot-based sync for point-in-time consistency.
+	// When enabled, creates a VolumeSnapshot before sync and syncs from the snapshot
+	// instead of the live PVC data.
+	// +optional
+	SnapshotConfig *SnapshotConfig `json:"snapshotConfig,omitempty"`
+}
+
+// SnapshotConfig configures snapshot-based PVC sync for point-in-time consistency
+type SnapshotConfig struct {
+	// Enabled enables snapshot-based sync (default: false).
+	// When enabled, a VolumeSnapshot is created before sync and the sync
+	// runs against the snapshot data instead of live PVC data.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// VolumeSnapshotClassName specifies the VolumeSnapshotClass to use.
+	// If empty, the default VolumeSnapshotClass for the storage class is used.
+	// +optional
+	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
+
+	// SnapshotTimeout is how long to wait for snapshot to become ready.
+	// +optional
+	// +kubebuilder:default="5m"
+	SnapshotTimeout *metav1.Duration `json:"snapshotTimeout,omitempty"`
+
+	// FallbackToLive falls back to live sync if snapshot creation fails.
+	// When true (default), sync continues with live data if snapshot fails.
+	// When false, sync fails if snapshot cannot be created.
+	// +optional
+	// +kubebuilder:default=true
+	FallbackToLive *bool `json:"fallbackToLive,omitempty"`
+}
+
+// DeepCopyInto copies SnapshotConfig into out
+func (in *SnapshotConfig) DeepCopyInto(out *SnapshotConfig) {
+	*out = *in
+	if in.SnapshotTimeout != nil {
+		in, out := &in.SnapshotTimeout, &out.SnapshotTimeout
+		*out = new(metav1.Duration)
+		**out = **in
+	}
+	if in.FallbackToLive != nil {
+		in, out := &in.FallbackToLive, &out.FallbackToLive
+		*out = new(bool)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of SnapshotConfig
+func (in *SnapshotConfig) DeepCopy() *SnapshotConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(SnapshotConfig)
+	in.DeepCopyInto(out)
+	return out
 }
 
 // DeepCopyInto copies PVCDataSyncConfig into out
@@ -183,6 +240,11 @@ func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 		in, out := &in.SamplePercent, &out.SamplePercent
 		*out = new(int32)
 		**out = **in
+	}
+	if in.SnapshotConfig != nil {
+		in, out := &in.SnapshotConfig, &out.SnapshotConfig
+		*out = new(SnapshotConfig)
+		(*in).DeepCopyInto(*out)
 	}
 }
 

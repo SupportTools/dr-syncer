@@ -126,6 +126,29 @@ type PVCSyncHistoryEntry struct {
 	Error string `json:"error,omitempty"`
 }
 
+// SnapshotSyncInfo tracks snapshot-based sync metadata
+type SnapshotSyncInfo struct {
+	// SnapshotName is the VolumeSnapshot used for this sync
+	// +optional
+	SnapshotName string `json:"snapshotName,omitempty"`
+
+	// SnapshotReadyTime when snapshot became ready
+	// +optional
+	SnapshotReadyTime *metav1.Time `json:"snapshotReadyTime,omitempty"`
+
+	// RestorePVCName is the temporary PVC created from snapshot
+	// +optional
+	RestorePVCName string `json:"restorePVCName,omitempty"`
+
+	// SnapshotSize in bytes (if reported by CSI driver)
+	// +optional
+	SnapshotSize *int64 `json:"snapshotSize,omitempty"`
+
+	// UsedLiveFallback indicates snapshot failed and live sync was used
+	// +optional
+	UsedLiveFallback bool `json:"usedLiveFallback,omitempty"`
+}
+
 // PVCSyncOperationStatus defines the observed state of a PVC sync operation
 type PVCSyncOperationStatus struct {
 	// Phase is the current phase of the sync operation
@@ -179,6 +202,10 @@ type PVCSyncOperationStatus struct {
 	// Verification contains the results of post-sync verification
 	// +optional
 	Verification *PVCSyncVerificationResult `json:"verification,omitempty"`
+
+	// SnapshotInfo contains snapshot-based sync details
+	// +optional
+	SnapshotInfo *SnapshotSyncInfo `json:"snapshotInfo,omitempty"`
 
 	// History contains the last few sync attempts (max 5)
 	// +optional
@@ -298,6 +325,30 @@ func (in *PVCSyncHistoryEntry) DeepCopy() *PVCSyncHistoryEntry {
 }
 
 // DeepCopyInto copies all properties of this object into another object of the same type
+func (in *SnapshotSyncInfo) DeepCopyInto(out *SnapshotSyncInfo) {
+	*out = *in
+	if in.SnapshotReadyTime != nil {
+		in, out := &in.SnapshotReadyTime, &out.SnapshotReadyTime
+		*out = (*in).DeepCopy()
+	}
+	if in.SnapshotSize != nil {
+		in, out := &in.SnapshotSize, &out.SnapshotSize
+		*out = new(int64)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of SnapshotSyncInfo
+func (in *SnapshotSyncInfo) DeepCopy() *SnapshotSyncInfo {
+	if in == nil {
+		return nil
+	}
+	out := new(SnapshotSyncInfo)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies all properties of this object into another object of the same type
 func (in *PVCSyncOperationStatus) DeepCopyInto(out *PVCSyncOperationStatus) {
 	*out = *in
 	if in.StartTime != nil {
@@ -311,6 +362,11 @@ func (in *PVCSyncOperationStatus) DeepCopyInto(out *PVCSyncOperationStatus) {
 	if in.Verification != nil {
 		in, out := &in.Verification, &out.Verification
 		*out = new(PVCSyncVerificationResult)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.SnapshotInfo != nil {
+		in, out := &in.SnapshotInfo, &out.SnapshotInfo
+		*out = new(SnapshotSyncInfo)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.History != nil {

@@ -9,6 +9,7 @@ import (
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -51,9 +52,12 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 
 	// Track resources for cleanup
 	var (
-		lockAcquired  bool
-		destRsyncPod  *rsyncpod.RsyncDeployment
-		workflowError error // Track workflow error for deferred PVCSyncOperation failure update
+		lockAcquired    bool
+		destRsyncPod    *rsyncpod.RsyncDeployment
+		workflowError   error                        // Track workflow error for deferred PVCSyncOperation failure update
+		snapshotCleanup func()                       // Cleanup function for snapshot resources
+		snapshotInfo    *drv1alpha1.SnapshotSyncInfo // Snapshot info for status tracking
+		actualSourcePVC = sourcePVCName              // May be replaced by temp PVC from snapshot
 	)
 
 	// Deferred function to release lock on error returns and update PVCSyncOperation on failure
@@ -89,6 +93,11 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 			// Clean up the deployment if it exists
 			if destRsyncPod != nil {
 				p.cleanupResources(ctx, destRsyncPod)
+			}
+
+			// Clean up snapshot resources if they exist
+			if snapshotCleanup != nil {
+				snapshotCleanup()
 			}
 
 			// Release the lock if we acquired it
@@ -172,6 +181,60 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	// Emit LockAcquired event
 	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonLockAcquired,
 		"Acquired sync lock for PVC")
+
+	// Step 0.5: Check if snapshot-based sync should be used
+	useSnapshot, snapshotClassName, snapshotConfig := p.shouldUseSnapshot(ctx, sourceNamespace, sourcePVCName)
+	if useSnapshot {
+		log.WithFields(logrus.Fields{
+			"source_namespace":      sourceNamespace,
+			"source_pvc":            sourcePVCName,
+			"volume_snapshot_class": snapshotClassName,
+		}).Info(logging.LogTagInfo + " Snapshot-based sync enabled, preparing snapshot")
+
+		var prepareErr error
+		actualSourcePVC, snapshotCleanup, snapshotInfo, prepareErr = p.prepareSnapshotSync(ctx, sourceNamespace, sourcePVCName, snapshotClassName, snapshotConfig)
+		if prepareErr != nil {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"source_pvc":       sourcePVCName,
+				"error":            prepareErr,
+			}).Error(logging.LogTagError + " Failed to prepare snapshot-based sync")
+
+			// Release the lock since we're failing
+			if lockAcquired {
+				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
+					log.WithFields(logrus.Fields{
+						"source_namespace": sourceNamespace,
+						"source_pvc":       sourcePVCName,
+						"error":            relErr,
+					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+				}
+			}
+			workflowError = fmt.Errorf("failed to prepare snapshot-based sync: %v", prepareErr)
+			return workflowError
+		}
+
+		// Log if we're using a fallback or snapshot
+		if snapshotInfo != nil && snapshotInfo.UsedLiveFallback {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"source_pvc":       sourcePVCName,
+			}).Info(logging.LogTagInfo + " Using live sync (snapshot fallback)")
+		} else if actualSourcePVC != sourcePVCName {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"original_pvc":     sourcePVCName,
+				"snapshot_pvc":     actualSourcePVC,
+			}).Info(logging.LogTagInfo + " Using snapshot-based sync from temporary PVC")
+
+			// Ensure cleanup happens when workflow completes
+			defer func() {
+				if snapshotCleanup != nil {
+					snapshotCleanup()
+				}
+			}()
+		}
+	}
 
 	// Step 1: Deploy rsync deployment in destination cluster and wait for it to be ready
 	log.WithFields(logrus.Fields{
@@ -346,7 +409,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 	}).Info(logging.LogTagStep5 + " Finding node where source PVC is mounted")
 
 	// Find the node where the PVC is mounted
-	sourceNode, err := p.FindPVCNode(ctx, p.SourceClient, sourceNamespace, sourcePVCName)
+	// Note: actualSourcePVC may be a temp PVC restored from snapshot if snapshot sync is enabled
+	sourceNode, err := p.FindPVCNode(ctx, p.SourceClient, sourceNamespace, actualSourcePVC)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -416,7 +480,8 @@ func (p *PVCSyncer) RsyncWorkflow(ctx context.Context, sourceNamespace, sourcePV
 		"agent_pod":        agentPod.Name,
 	}).Info(logging.LogTagStep7 + " Finding mount path for PVC")
 
-	mountPath, err := p.FindPVCMountPath(ctx, sourceNamespace, sourcePVCName, agentPod)
+	// Note: actualSourcePVC may be a temp PVC restored from snapshot if snapshot sync is enabled
+	mountPath, err := p.FindPVCMountPath(ctx, sourceNamespace, actualSourcePVC, agentPod)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -977,10 +1042,17 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 
 	// Track resources for cleanup
 	var (
-		lockAcquired  bool
-		dsPod         *rsyncpod.RsyncDaemonSetPod
-		workflowError error // Track workflow error for deferred PVCSyncOperation failure update
+		lockAcquired    bool
+		dsPod           *rsyncpod.RsyncDaemonSetPod
+		workflowError   error                        // Track workflow error for deferred PVCSyncOperation failure update
+		snapshotCleanup func()                       // Cleanup function for snapshot resources
+		snapshotInfo    *drv1alpha1.SnapshotSyncInfo // Snapshot info for status tracking
+		actualSourcePVC = sourcePVCName              // May be replaced by temp PVC from snapshot
 	)
+
+	// Mark these as used (they may not be used if snapshot sync is disabled)
+	_ = snapshotInfo
+	_ = actualSourcePVC
 
 	// Deferred function for panic recovery and PVCSyncOperation failure update
 	defer func() {
@@ -1008,6 +1080,11 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 						"error": failErr,
 					}).Warn(logging.LogTagWarn + " Failed to update PVCSyncOperation CRD to failed state after panic")
 				}
+			}
+
+			// Clean up snapshot resources if any
+			if snapshotCleanup != nil {
+				snapshotCleanup()
 			}
 
 			// Clean up resources if any
@@ -1063,6 +1140,62 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 
 	p.RecordNormalEvent(ctx, sourceNamespace, sourcePVCName, EventReasonLockAcquired,
 		"Acquired sync lock for PVC")
+
+	// Step 0.5: Check if snapshot-based sync should be used (DaemonSet path)
+	// This creates a VolumeSnapshot from the source PVC and restores it to a temp PVC
+	// for point-in-time consistent data sync
+	useSnapshot, snapshotClassName, snapshotConfig := p.shouldUseSnapshot(ctx, sourceNamespace, sourcePVCName)
+	if useSnapshot {
+		log.WithFields(logrus.Fields{
+			"source_namespace":      sourceNamespace,
+			"source_pvc":            sourcePVCName,
+			"volume_snapshot_class": snapshotClassName,
+		}).Info(logging.LogTagInfo + " Snapshot-based sync enabled, preparing snapshot (DaemonSet path)")
+
+		var prepareErr error
+		actualSourcePVC, snapshotCleanup, snapshotInfo, prepareErr = p.prepareSnapshotSync(ctx, sourceNamespace, sourcePVCName, snapshotClassName, snapshotConfig)
+		if prepareErr != nil {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"source_pvc":       sourcePVCName,
+				"error":            prepareErr,
+			}).Error(logging.LogTagError + " Failed to prepare snapshot-based sync")
+
+			// Release the lock since we're failing
+			if lockAcquired {
+				if relErr := p.ReleasePVCLock(ctx, sourceNamespace, sourcePVCName); relErr != nil {
+					log.WithFields(logrus.Fields{
+						"source_namespace": sourceNamespace,
+						"source_pvc":       sourcePVCName,
+						"error":            relErr,
+					}).Warn(logging.LogTagWarn + " Failed to release lock on source PVC after failure")
+				}
+			}
+			workflowError = fmt.Errorf("failed to prepare snapshot-based sync: %v", prepareErr)
+			return workflowError
+		}
+
+		// Log if we're using a fallback or snapshot
+		if snapshotInfo != nil && snapshotInfo.UsedLiveFallback {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"source_pvc":       sourcePVCName,
+			}).Info(logging.LogTagInfo + " Using live sync (snapshot fallback)")
+		} else if actualSourcePVC != sourcePVCName {
+			log.WithFields(logrus.Fields{
+				"source_namespace": sourceNamespace,
+				"original_pvc":     sourcePVCName,
+				"snapshot_pvc":     actualSourcePVC,
+			}).Info(logging.LogTagInfo + " Using snapshot-based sync from temporary PVC")
+
+			// Ensure cleanup happens when workflow completes
+			defer func() {
+				if snapshotCleanup != nil {
+					snapshotCleanup()
+				}
+			}()
+		}
+	}
 
 	// Ensure DaemonSet is deployed (idempotent - creates if not exists, updates if needed)
 	log.Info(logging.LogTagInfo + " Ensuring rsync DaemonSet is deployed")
@@ -1201,7 +1334,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 		"source_pvc":       sourcePVCName,
 	}).Info(logging.LogTagStep5 + " Finding node where source PVC is mounted")
 
-	sourceNode, err := p.FindPVCNode(ctx, p.SourceClient, sourceNamespace, sourcePVCName)
+	// Note: actualSourcePVC may be a temp PVC restored from snapshot if snapshot sync is enabled
+	sourceNode, err := p.FindPVCNode(ctx, p.SourceClient, sourceNamespace, actualSourcePVC)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -1264,7 +1398,8 @@ func (p *PVCSyncer) RsyncWorkflowWithDaemonSet(ctx context.Context, sourceNamesp
 		"agent_pod":        agentPod.Name,
 	}).Info(logging.LogTagStep7 + " Finding mount path for PVC")
 
-	mountPath, err := p.FindPVCMountPath(ctx, sourceNamespace, sourcePVCName, agentPod)
+	// Note: actualSourcePVC may be a temp PVC restored from snapshot if snapshot sync is enabled
+	mountPath, err := p.FindPVCMountPath(ctx, sourceNamespace, actualSourcePVC, agentPod)
 	if err != nil {
 		log.WithFields(logrus.Fields{
 			"source_namespace": sourceNamespace,
@@ -1489,4 +1624,186 @@ const daemonSetDestPathKey daemonSetDestPathKeyType = "daemonSetDestPath"
 func GetDaemonSetDestPath(ctx context.Context) (string, bool) {
 	path, ok := ctx.Value(daemonSetDestPathKey).(string)
 	return path, ok
+}
+
+// getSnapshotConfig retrieves the SnapshotConfig for a given source namespace.
+// It looks up NamespaceMappings that reference the source namespace and returns
+// the snapshot configuration if enabled.
+func (p *PVCSyncer) getSnapshotConfig(ctx context.Context, sourceNamespace string) *drv1alpha1.SnapshotConfig {
+	// List NamespaceMappings to find one that references this source namespace
+	nmList := &drv1alpha1.NamespaceMappingList{}
+	if err := p.SourceClient.List(ctx, nmList); err != nil {
+		log.WithFields(logrus.Fields{
+			"source_namespace": sourceNamespace,
+			"error":            err,
+		}).Debug("Failed to list NamespaceMappings for snapshot config lookup")
+		return nil
+	}
+
+	// Find a NamespaceMapping that references this source namespace
+	for _, nm := range nmList.Items {
+		if nm.Spec.SourceNamespace == sourceNamespace {
+			if nm.Spec.PVCConfig != nil &&
+				nm.Spec.PVCConfig.DataSyncConfig != nil &&
+				nm.Spec.PVCConfig.DataSyncConfig.SnapshotConfig != nil {
+				return nm.Spec.PVCConfig.DataSyncConfig.SnapshotConfig
+			}
+		}
+	}
+
+	return nil
+}
+
+// shouldUseSnapshot checks if snapshot-based sync is enabled and available for the given PVC.
+// It returns true if:
+// 1. SnapshotConfig is enabled in the NamespaceMapping
+// 2. The PVC supports CSI snapshots
+// Also returns the snapshot class name to use.
+func (p *PVCSyncer) shouldUseSnapshot(ctx context.Context, sourceNamespace, sourcePVCName string) (bool, string, *drv1alpha1.SnapshotConfig) {
+	// Get snapshot config from NamespaceMapping
+	snapshotConfig := p.getSnapshotConfig(ctx, sourceNamespace)
+	if snapshotConfig == nil || !snapshotConfig.Enabled {
+		return false, "", nil
+	}
+
+	// Create snapshot manager and check if PVC supports snapshots
+	snapshotMgr := NewSnapshotManager(p.SourceClient)
+	canSnapshot, autoSnapshotClass, err := snapshotMgr.CanSnapshot(ctx, sourceNamespace, sourcePVCName)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			"source_namespace": sourceNamespace,
+			"source_pvc":       sourcePVCName,
+			"error":            err,
+		}).Warn(logging.LogTagWarn + " Error checking snapshot support for PVC")
+		return false, "", snapshotConfig
+	}
+
+	if !canSnapshot {
+		log.WithFields(logrus.Fields{
+			"source_namespace": sourceNamespace,
+			"source_pvc":       sourcePVCName,
+		}).Info(logging.LogTagInfo + " PVC does not support CSI snapshots")
+		return false, "", snapshotConfig
+	}
+
+	// Determine which snapshot class to use
+	snapshotClassName := snapshotConfig.VolumeSnapshotClassName
+	if snapshotClassName == "" {
+		snapshotClassName = autoSnapshotClass
+	}
+
+	return true, snapshotClassName, snapshotConfig
+}
+
+// snapshotFallbackEnabled checks if fallback to live sync is enabled in the config.
+// Defaults to true if not specified.
+func (p *PVCSyncer) snapshotFallbackEnabled(config *drv1alpha1.SnapshotConfig) bool {
+	if config == nil || config.FallbackToLive == nil {
+		return true // Default to fallback enabled
+	}
+	return *config.FallbackToLive
+}
+
+// getSnapshotTimeout returns the snapshot timeout from config or the default.
+func (p *PVCSyncer) getSnapshotTimeout(config *drv1alpha1.SnapshotConfig) time.Duration {
+	if config != nil && config.SnapshotTimeout != nil {
+		return config.SnapshotTimeout.Duration
+	}
+	return DefaultSnapshotTimeout
+}
+
+// prepareSnapshotSync creates a snapshot and returns a temporary PVC to use as the source.
+// Returns:
+// - The actual PVC name to use for sync (either original or temp restored PVC)
+// - A cleanup function to call when done
+// - SnapshotSyncInfo for status tracking
+// - Error if snapshot creation fails and fallback is disabled
+func (p *PVCSyncer) prepareSnapshotSync(ctx context.Context, sourceNamespace, sourcePVCName, snapshotClassName string, config *drv1alpha1.SnapshotConfig) (string, func(), *drv1alpha1.SnapshotSyncInfo, error) {
+	logger := log.WithFields(logrus.Fields{
+		"source_namespace":      sourceNamespace,
+		"source_pvc":            sourcePVCName,
+		"volume_snapshot_class": snapshotClassName,
+	})
+
+	logger.Info(logging.LogTagInfo + " Preparing snapshot-based sync")
+
+	snapshotMgr := NewSnapshotManager(p.SourceClient)
+	snapshotTimeout := p.getSnapshotTimeout(config)
+
+	// Get the original PVC for restore
+	originalPVC := &corev1.PersistentVolumeClaim{}
+	if err := p.SourceClient.Get(ctx, types.NamespacedName{
+		Namespace: sourceNamespace,
+		Name:      sourcePVCName,
+	}, originalPVC); err != nil {
+		if p.snapshotFallbackEnabled(config) {
+			logger.WithError(err).Warn(logging.LogTagWarn + " Failed to get source PVC for snapshot, falling back to live sync")
+			return sourcePVCName, nil, &drv1alpha1.SnapshotSyncInfo{UsedLiveFallback: true}, nil
+		}
+		return "", nil, nil, fmt.Errorf("failed to get source PVC: %w", err)
+	}
+
+	// Create snapshot
+	snapshot, err := snapshotMgr.CreateSnapshot(ctx, sourceNamespace, sourcePVCName, snapshotClassName)
+	if err != nil {
+		if p.snapshotFallbackEnabled(config) {
+			logger.WithError(err).Warn(logging.LogTagWarn + " Failed to create snapshot, falling back to live sync")
+			return sourcePVCName, nil, &drv1alpha1.SnapshotSyncInfo{UsedLiveFallback: true}, nil
+		}
+		return "", nil, nil, fmt.Errorf("failed to create snapshot: %w", err)
+	}
+
+	logger.WithField("snapshot", snapshot.Name).Info(logging.LogTagInfo + " VolumeSnapshot created, waiting for ready")
+
+	// Wait for snapshot to be ready
+	if err := snapshotMgr.WaitForSnapshotReady(ctx, sourceNamespace, snapshot.Name, snapshotTimeout); err != nil {
+		// Cleanup the failed snapshot
+		snapshotMgr.CleanupSnapshot(ctx, sourceNamespace, snapshot.Name, "")
+
+		if p.snapshotFallbackEnabled(config) {
+			logger.WithError(err).Warn(logging.LogTagWarn + " Snapshot did not become ready in time, falling back to live sync")
+			return sourcePVCName, nil, &drv1alpha1.SnapshotSyncInfo{UsedLiveFallback: true}, nil
+		}
+		return "", nil, nil, fmt.Errorf("snapshot did not become ready: %w", err)
+	}
+
+	logger.WithField("snapshot", snapshot.Name).Info(logging.LogTagInfo + " VolumeSnapshot is ready, restoring to temporary PVC")
+
+	// Restore snapshot to temp PVC
+	tempPVC, err := snapshotMgr.RestoreSnapshotToPVC(ctx, sourceNamespace, snapshot.Name, originalPVC)
+	if err != nil {
+		// Cleanup the snapshot
+		snapshotMgr.CleanupSnapshot(ctx, sourceNamespace, snapshot.Name, "")
+
+		if p.snapshotFallbackEnabled(config) {
+			logger.WithError(err).Warn(logging.LogTagWarn + " Failed to restore snapshot to PVC, falling back to live sync")
+			return sourcePVCName, nil, &drv1alpha1.SnapshotSyncInfo{UsedLiveFallback: true}, nil
+		}
+		return "", nil, nil, fmt.Errorf("failed to restore snapshot to PVC: %w", err)
+	}
+
+	logger.WithFields(logrus.Fields{
+		"snapshot": snapshot.Name,
+		"temp_pvc": tempPVC.Name,
+	}).Info(logging.LogTagInfo + " Snapshot restored to temporary PVC, ready for sync")
+
+	// Get snapshot info for status tracking
+	snapshotInfo, err := snapshotMgr.GetSnapshotInfo(ctx, sourceNamespace, snapshot.Name)
+	if err != nil {
+		logger.WithError(err).Warn(logging.LogTagWarn + " Failed to get snapshot info for status tracking")
+		snapshotInfo = &drv1alpha1.SnapshotSyncInfo{
+			SnapshotName:   snapshot.Name,
+			RestorePVCName: tempPVC.Name,
+		}
+	} else {
+		snapshotInfo.RestorePVCName = tempPVC.Name
+	}
+
+	// Create cleanup function
+	cleanupFunc := func() {
+		logger.Info(logging.LogTagInfo + " Cleaning up snapshot resources")
+		snapshotMgr.CleanupSnapshot(ctx, sourceNamespace, snapshot.Name, tempPVC.Name)
+	}
+
+	return tempPVC.Name, cleanupFunc, snapshotInfo, nil
 }

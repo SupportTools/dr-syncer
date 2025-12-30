@@ -305,6 +305,36 @@ spec:
                         maximum: 100
                         minimum: 1
                         type: integer
+                      snapshotConfig:
+                        description: |-
+                          SnapshotConfig enables snapshot-based sync for point-in-time consistency.
+                          When enabled, creates a VolumeSnapshot before sync and syncs from the snapshot
+                          instead of the live PVC data.
+                        properties:
+                          enabled:
+                            description: |-
+                              Enabled enables snapshot-based sync (default: false).
+                              When enabled, a VolumeSnapshot is created before sync and the sync
+                              runs against the snapshot data instead of live PVC data.
+                            type: boolean
+                          fallbackToLive:
+                            default: true
+                            description: |-
+                              FallbackToLive falls back to live sync if snapshot creation fails.
+                              When true (default), sync continues with live data if snapshot fails.
+                              When false, sync fails if snapshot cannot be created.
+                            type: boolean
+                          snapshotTimeout:
+                            default: 5m
+                            description: SnapshotTimeout is how long to wait for snapshot
+                              to become ready.
+                            type: string
+                          volumeSnapshotClassName:
+                            description: |-
+                              VolumeSnapshotClassName specifies the VolumeSnapshotClass to use.
+                              If empty, the default VolumeSnapshotClass for the storage class is used.
+                            type: string
+                        type: object
                       timeout:
                         default: 30m
                         description: Timeout is the maximum time to wait for a sync

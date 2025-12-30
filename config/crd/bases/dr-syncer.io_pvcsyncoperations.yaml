@@ -251,6 +251,30 @@ spec:
                 description: Progress is the sync progress as a percentage string
                   (e.g., "75%")
                 type: string
+              snapshotInfo:
+                description: SnapshotInfo contains snapshot-based sync details
+                properties:
+                  restorePVCName:
+                    description: RestorePVCName is the temporary PVC created from
+                      snapshot
+                    type: string
+                  snapshotName:
+                    description: SnapshotName is the VolumeSnapshot used for this
+                      sync
+                    type: string
+                  snapshotReadyTime:
+                    description: SnapshotReadyTime when snapshot became ready
+                    format: date-time
+                    type: string
+                  snapshotSize:
+                    description: SnapshotSize in bytes (if reported by CSI driver)
+                    format: int64
+                    type: integer
+                  usedLiveFallback:
+                    description: UsedLiveFallback indicates snapshot failed and live
+                      sync was used
+                    type: boolean
+                type: object
               speed:
                 description: Speed is the current transfer rate as a human-readable
                   string (e.g., "1.5 MB/s")
