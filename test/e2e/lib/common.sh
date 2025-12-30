@@ -250,3 +250,73 @@ usage_footer() {
     echo "  --debug         Enable debug output"
     echo "  --timeout N     Set timeout in seconds (default: $E2E_TIMEOUT)"
 }
+
+# Wait for a namespace to be fully deleted (not just terminating)
+# Usage: wait_for_namespace_deleted <kubeconfig> <namespace> [timeout]
+wait_for_namespace_deleted() {
+    local kubeconfig="$1"
+    local namespace="$2"
+    local timeout="${3:-60}"
+    local interval=2
+
+    # Check if namespace exists at all
+    if ! kubectl --kubeconfig "$kubeconfig" get namespace "$namespace" &>/dev/null; then
+        log_debug "Namespace $namespace does not exist"
+        return 0
+    fi
+
+    log_info "Waiting for namespace $namespace to be fully deleted..."
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        # Check if namespace still exists
+        if ! kubectl --kubeconfig "$kubeconfig" get namespace "$namespace" &>/dev/null; then
+            log_success "Namespace $namespace deleted"
+            return 0
+        fi
+
+        # Check if namespace is terminating
+        local phase
+        phase=$(kubectl --kubeconfig "$kubeconfig" get namespace "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        if [[ "$phase" == "Terminating" ]]; then
+            log_debug "Namespace $namespace is terminating... (${elapsed}s)"
+        fi
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+
+    log_warn "Timeout waiting for namespace $namespace to be deleted"
+    return 1
+}
+
+# Wait for all test namespaces matching a pattern to be deleted
+# Usage: wait_for_test_namespaces_deleted <kubeconfig> <pattern> [timeout]
+wait_for_test_namespaces_deleted() {
+    local kubeconfig="$1"
+    local pattern="$2"
+    local timeout="${3:-60}"
+    local interval=2
+
+    log_info "Waiting for test namespaces matching '$pattern' to be deleted..."
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        local remaining
+        remaining=$(kubectl --kubeconfig "$kubeconfig" get namespaces -o name 2>/dev/null | grep "$pattern" || true)
+
+        if [[ -z "$remaining" ]]; then
+            log_success "All matching namespaces deleted"
+            return 0
+        fi
+
+        log_debug "Still waiting for namespaces: $remaining (${elapsed}s)"
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+
+        if [[ $((elapsed % 10)) -eq 0 ]]; then
+            log_info "Still waiting for namespace deletion... (${elapsed}s)"
+        fi
+    done
+
+    log_warn "Timeout waiting for test namespaces to be deleted"
+    return 1
+}

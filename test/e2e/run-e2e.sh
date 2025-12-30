@@ -185,6 +185,22 @@ run_test_case() {
         return 0
     fi
 
+    # Extract test number from test_name (e.g., "00_standard-resources-test" -> "00")
+    local test_number
+    test_number=$(echo "$test_name" | grep -oE '^[0-9]+' || echo "")
+
+    # Wait for any terminating test namespaces from this test case to be fully deleted
+    # This prevents race conditions where a namespace is still terminating from a previous run
+    if [[ -n "$test_number" ]]; then
+        local test_ns_pattern="dr-sync-test-case${test_number}"
+        for kubeconfig in "$PROD_KUBECONFIG" "$DR_KUBECONFIG"; do
+            wait_for_namespace_deleted "$kubeconfig" "${test_ns_pattern}-prod" 60 || true
+            wait_for_namespace_deleted "$kubeconfig" "${test_ns_pattern}-dr" 60 || true
+            # Also check for the basic namespace name pattern
+            wait_for_namespace_deleted "$kubeconfig" "$test_ns_pattern" 60 || true
+        done
+    fi
+
     # Run the test
     local test_start
     test_start=$(date +%s)
