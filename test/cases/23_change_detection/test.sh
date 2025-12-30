@@ -113,11 +113,11 @@ trigger_change_in_remote_cluster() {
     echo "Modifying RemoteCluster to trigger change..."
     
     # Add a new label to the RemoteCluster
-    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer patch remoteCluster test-remote-nyc3 --type=merge \
+    kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer patch remoteCluster prod --type=merge \
         -p '{"metadata":{"labels":{"test-label":"trigger-change"}}}'
-        
+
     # Check if the change was applied
-    if kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get remoteCluster test-remote-nyc3 -o jsonpath='{.metadata.labels.test-label}' | grep -q "trigger-change"; then
+    if kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get remoteCluster prod -o jsonpath='{.metadata.labels.test-label}' | grep -q "trigger-change"; then
         return 0
     else
         echo "Failed to apply changes to RemoteCluster"
@@ -130,18 +130,18 @@ monitor_clustermapping_reconciliation() {
     echo "Monitoring ClusterMapping reconciliation after RemoteCluster change..."
     
     # Get initial generation and status
-    local initial_gen=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping test-nyc3-to-sfo3 -o jsonpath='{.metadata.generation}')
-    local initial_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping test-nyc3-to-sfo3 -o jsonpath='{.status.phase}')
-    
+    local initial_gen=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping prod-to-dr -o jsonpath='{.metadata.generation}')
+    local initial_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping prod-to-dr -o jsonpath='{.status.phase}')
+
     # Wait and check for changes
     local max_attempts=30
     local attempt=1
     local sleep_time=2
-    
+
     while [ $attempt -le $max_attempts ]; do
         # Get current status
-        local current_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping test-nyc3-to-sfo3 -o jsonpath='{.status.phase}')
-        local current_conditions=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping test-nyc3-to-sfo3 -o jsonpath='{.status.conditions}')
+        local current_phase=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping prod-to-dr -o jsonpath='{.status.phase}')
+        local current_conditions=$(kubectl --kubeconfig ${CONTROLLER_KUBECONFIG} -n dr-syncer get clustermapping prod-to-dr -o jsonpath='{.status.conditions}')
         
         # If status changed, reconciliation happened
         if [ "$current_phase" != "$initial_phase" ] || [ ! -z "$current_conditions" ]; then
