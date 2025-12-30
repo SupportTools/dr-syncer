@@ -290,6 +290,32 @@ spec:
                         items:
                           type: string
                         type: array
+                      parallelConfig:
+                        description: |-
+                          ParallelConfig enables parallel rsync streams for improved throughput.
+                          When streams > 1, top-level directories are partitioned across N concurrent
+                          rsync processes for improved throughput on large PVCs.
+                        properties:
+                          failureMode:
+                            default: fail-all
+                            description: |-
+                              FailureMode determines behavior when a stream fails.
+                              "fail-all": Cancel all streams and fail the sync (default)
+                              "continue": Continue other streams, report partial success
+                            enum:
+                            - fail-all
+                            - continue
+                            type: string
+                          streams:
+                            default: 1
+                            description: |-
+                              Streams is the number of parallel rsync processes (1-8).
+                              Default: 1 (single stream, current behavior)
+                            format: int32
+                            maximum: 8
+                            minimum: 1
+                            type: integer
+                        type: object
                       rsyncOptions:
                         description: RsyncOptions is a list of additional options
                           to pass to rsync.

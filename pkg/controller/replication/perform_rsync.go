@@ -447,6 +447,41 @@ func (p *PVCSyncer) performRsync(ctx context.Context, destDeployment *rsyncpod.R
 		}).Warn(logging.LogTagWarn + " Failed to list RemoteClusters, using default SSH port 2222")
 	}
 
+	// Check for parallel rsync configuration
+	parallelStreams := int32(1) // Default: single stream
+	failureMode := "fail-all"
+	var bandwidthLimit *int32
+
+	if nmPtr != nil && nmPtr.Spec.PVCConfig != nil && nmPtr.Spec.PVCConfig.DataSyncConfig != nil {
+		dsc := nmPtr.Spec.PVCConfig.DataSyncConfig
+		// Get bandwidth limit for parallel streams
+		if dsc.BandwidthLimit != nil {
+			bandwidthLimit = dsc.BandwidthLimit
+		}
+		// Check for parallel config
+		if dsc.ParallelConfig != nil {
+			pc := dsc.ParallelConfig
+			if pc.Streams != nil && *pc.Streams > 1 {
+				parallelStreams = *pc.Streams
+			}
+			if pc.FailureMode != "" {
+				failureMode = pc.FailureMode
+			}
+		}
+	}
+
+	// Use parallel rsync if configured with more than 1 stream
+	if parallelStreams > 1 {
+		log.WithFields(logrus.Fields{
+			"streams":      parallelStreams,
+			"failure_mode": failureMode,
+			"pvc":          destDeployment.PVCName,
+		}).Info(logging.LogTagInfo + " Using parallel rsync mode")
+
+		return p.executeParallelRsyncWorkflow(ctx, destDeployment, nodeIP, mountPath,
+			parallelStreams, failureMode, rsyncOptions, sshPort, syncStartTime, bandwidthLimit)
+	}
+
 	// Build the rsync command to display output to pod's console
 	// Output goes directly to the pod's stdout/stderr without capturing
 	// This will show in the pod logs but not be returned to the controller

@@ -155,6 +155,12 @@ type PVCDataSyncConfig struct {
 	// instead of the live PVC data.
 	// +optional
 	SnapshotConfig *SnapshotConfig `json:"snapshotConfig,omitempty"`
+
+	// ParallelConfig enables parallel rsync streams for improved throughput.
+	// When streams > 1, top-level directories are partitioned across N concurrent
+	// rsync processes for improved throughput on large PVCs.
+	// +optional
+	ParallelConfig *ParallelRsyncConfig `json:"parallelConfig,omitempty"`
 }
 
 // SnapshotConfig configures snapshot-based PVC sync for point-in-time consistency
@@ -183,6 +189,25 @@ type SnapshotConfig struct {
 	FallbackToLive *bool `json:"fallbackToLive,omitempty"`
 }
 
+// ParallelRsyncConfig configures parallel rsync streams for improved throughput
+type ParallelRsyncConfig struct {
+	// Streams is the number of parallel rsync processes (1-8).
+	// Default: 1 (single stream, current behavior)
+	// +optional
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	Streams *int32 `json:"streams,omitempty"`
+
+	// FailureMode determines behavior when a stream fails.
+	// "fail-all": Cancel all streams and fail the sync (default)
+	// "continue": Continue other streams, report partial success
+	// +optional
+	// +kubebuilder:default="fail-all"
+	// +kubebuilder:validation:Enum=fail-all;continue
+	FailureMode string `json:"failureMode,omitempty"`
+}
+
 // DeepCopyInto copies SnapshotConfig into out
 func (in *SnapshotConfig) DeepCopyInto(out *SnapshotConfig) {
 	*out = *in
@@ -204,6 +229,26 @@ func (in *SnapshotConfig) DeepCopy() *SnapshotConfig {
 		return nil
 	}
 	out := new(SnapshotConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies ParallelRsyncConfig into out
+func (in *ParallelRsyncConfig) DeepCopyInto(out *ParallelRsyncConfig) {
+	*out = *in
+	if in.Streams != nil {
+		in, out := &in.Streams, &out.Streams
+		*out = new(int32)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of ParallelRsyncConfig
+func (in *ParallelRsyncConfig) DeepCopy() *ParallelRsyncConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(ParallelRsyncConfig)
 	in.DeepCopyInto(out)
 	return out
 }
@@ -244,6 +289,11 @@ func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 	if in.SnapshotConfig != nil {
 		in, out := &in.SnapshotConfig, &out.SnapshotConfig
 		*out = new(SnapshotConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.ParallelConfig != nil {
+		in, out := &in.ParallelConfig, &out.ParallelConfig
+		*out = new(ParallelRsyncConfig)
 		(*in).DeepCopyInto(*out)
 	}
 }
