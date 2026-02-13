@@ -48,6 +48,31 @@ const sidebars = {
       label: 'Troubleshooting',
       items: ['troubleshooting'],
     },
+    {
+      type: 'category',
+      label: 'Runbooks',
+      items: ['runbooks'],
+    },
+    {
+      type: 'category',
+      label: 'Performance',
+      items: ['performance'],
+    },
+    {
+      type: 'category',
+      label: 'Monitoring',
+      items: ['monitoring'],
+    },
+    {
+      type: 'category',
+      label: 'Web UI',
+      items: ['web-ui'],
+    },
+    {
+      type: 'category',
+      label: 'Helm Reference',
+      items: ['helm-values'],
+    },
   ],
 };
 
