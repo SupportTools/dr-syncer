@@ -270,6 +270,100 @@ spec:
                       DataSyncConfig defines configuration for PVC data synchronization.
                       Only used when SyncData is true.
                     properties:
+                      backupConfig:
+                        description: |-
+                          BackupConfig enables the Kopia snapshot-based backup path for PVC data sync.
+                          When set and Enabled is true, PVC data is synced via S3 using Kopia instead of rsync.
+                          When nil or Enabled is false, the existing rsync-based sync is used (default behavior).
+                        properties:
+                          backupRepositoryRef:
+                            description: |-
+                              BackupRepositoryRef references the BackupRepository resource to use for backups.
+                              The BackupRepository defines the S3 bucket, credentials, and encryption settings.
+                            properties:
+                              name:
+                                description: Name is the name of the secret
+                                type: string
+                              namespace:
+                                description: Namespace is the namespace of the secret
+                                type: string
+                            required:
+                            - name
+                            - namespace
+                            type: object
+                          compressionAlgorithm:
+                            default: zstd
+                            description: CompressionAlgorithm specifies the compression
+                              algorithm for Kopia backups.
+                            enum:
+                            - zstd
+                            - s2
+                            - gzip
+                            - none
+                            type: string
+                          dataAccessStrategy:
+                            allOf:
+                            - enum:
+                              - Auto
+                              - Snapshot
+                              - Live
+                            - enum:
+                              - Auto
+                              - Snapshot
+                              - Live
+                            default: Auto
+                            description: |-
+                              DataAccessStrategy specifies how the backup workflow accesses PVC data.
+                              Auto (default) detects CSI snapshot support and falls back to live access.
+                              Snapshot forces CSI VolumeSnapshot usage (fails if not available).
+                              Live reads directly from the mounted PVC (no snapshot overhead).
+                            type: string
+                          enabled:
+                            default: false
+                            description: Enabled switches PVC data sync from rsync
+                              to the Kopia backup path.
+                            type: boolean
+                          parallelism:
+                            default: 4
+                            description: |-
+                              Parallelism sets the number of parallel upload/download streams for Kopia.
+                              Higher values improve throughput for large PVCs at the cost of more CPU/memory.
+                            format: int32
+                            maximum: 16
+                            minimum: 1
+                            type: integer
+                          scheduleOverride:
+                            description: |-
+                              ScheduleOverride overrides the NamespaceMapping's schedule for backup operations.
+                              Uses cron syntax. If empty, the NamespaceMapping's schedule is used.
+                            pattern: ^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*/[0-9]+)\s+(\*|([0-9]|1[0-9]|2[0-3])|\*/[0-9]+)\s+(\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*/[0-9]+)\s+(\*|([1-9]|1[0-2])|\*/[0-9]+)\s+(\*|([0-6])|\*/[0-9]+)$
+                            type: string
+                          standbyPVCConfig:
+                            description: |-
+                              StandbyPVCConfig configures warm standby PVCs on the DR cluster.
+                              When enabled, the controller maintains pre-restored PVCs for instant failover.
+                            properties:
+                              accessMode:
+                                description: |-
+                                  AccessMode overrides the access mode for standby PVCs on the DR cluster.
+                                  If empty, the source PVC's access mode is used (or mapped via AccessModeMappings).
+                                enum:
+                                - ReadWriteOnce
+                                - ReadWriteMany
+                                - ReadOnlyMany
+                                type: string
+                              enabled:
+                                default: true
+                                description: Enabled enables standby PVC creation
+                                  and maintenance on the DR cluster.
+                                type: boolean
+                              storageClassName:
+                                description: |-
+                                  StorageClassName overrides the storage class for standby PVCs on the DR cluster.
+                                  If empty, the source PVC's storage class is used (or mapped via StorageClassMappings).
+                                type: string
+                            type: object
+                        type: object
                       bandwidthLimit:
                         description: |-
                           BandwidthLimit sets a maximum transfer rate in kilobytes per second.

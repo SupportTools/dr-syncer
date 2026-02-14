@@ -1,0 +1,283 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: backuprepositories.dr-syncer.io
+spec:
+  group: dr-syncer.io
+  names:
+    kind: BackupRepository
+    listKind: BackupRepositoryList
+    plural: backuprepositories
+    shortNames:
+    - br
+    singular: backuprepository
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Current state of the backup repository
+      jsonPath: .status.state
+      name: State
+      type: string
+    - description: S3 bucket name
+      jsonPath: .spec.s3Config.bucket
+      name: Bucket
+      type: string
+    - description: Number of snapshots
+      jsonPath: .status.snapshotCount
+      name: Snapshots
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          BackupRepository represents an S3-backed Kopia repository for storing
+          deduplicated, encrypted backups of PVC data.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BackupRepositorySpec defines the desired state of BackupRepository
+            properties:
+              kopiaConfig:
+                description: KopiaConfig defines Kopia repository settings
+                properties:
+                  compressionAlgorithm:
+                    default: zstd
+                    description: CompressionAlgorithm specifies the compression algorithm
+                      for backups.
+                    enum:
+                    - zstd
+                    - s2
+                    - gzip
+                    - none
+                    type: string
+                  encryptionSecretRef:
+                    description: |-
+                      EncryptionSecretRef references a secret containing the Kopia repository password.
+                      The secret must contain a "password" key.
+                    properties:
+                      name:
+                        description: Name is the name of the secret
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the secret
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                required:
+                - encryptionSecretRef
+                type: object
+              maintenanceSchedule:
+                default: 0 2 * * *
+                description: MaintenanceSchedule is a cron expression for repository
+                  maintenance (index compaction, GC).
+                pattern: ^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*/[0-9]+)\s+(\*|([0-9]|1[0-9]|2[0-3])|\*/[0-9]+)\s+(\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*/[0-9]+)\s+(\*|([1-9]|1[0-2])|\*/[0-9]+)\s+(\*|([0-6])|\*/[0-9]+)$
+                type: string
+              retentionPolicy:
+                description: RetentionPolicy defines how many snapshots to retain
+                properties:
+                  keepDaily:
+                    default: 7
+                    description: KeepDaily is the number of daily snapshots to keep
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  keepLatest:
+                    default: 10
+                    description: KeepLatest is the number of most recent snapshots
+                      to keep
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  keepMonthly:
+                    default: 12
+                    description: KeepMonthly is the number of monthly snapshots to
+                      keep
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  keepWeekly:
+                    default: 4
+                    description: KeepWeekly is the number of weekly snapshots to keep
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              s3Config:
+                description: S3Config defines the S3-compatible storage backend
+                properties:
+                  bucket:
+                    description: Bucket is the S3 bucket name
+                    minLength: 1
+                    type: string
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef references a secret containing S3 access credentials.
+                      The secret must contain keys "accessKeyID" and "secretAccessKey".
+                    properties:
+                      name:
+                        description: Name is the name of the secret
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the secret
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  endpoint:
+                    description: Endpoint is the S3 endpoint URL (e.g., "s3.amazonaws.com",
+                      "minio.example.com:9000")
+                    minLength: 1
+                    type: string
+                  pathPrefix:
+                    description: PathPrefix is an optional prefix for all objects
+                      in the bucket
+                    type: string
+                  region:
+                    description: Region is the S3 region (e.g., "us-west-2")
+                    type: string
+                required:
+                - bucket
+                - credentialsSecretRef
+                - endpoint
+                type: object
+            required:
+            - kopiaConfig
+            - s3Config
+            type: object
+          status:
+            description: BackupRepositoryStatus defines the observed state of BackupRepository
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the repository's state
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastHealthCheckTime:
+                description: LastHealthCheckTime is when the health check was last
+                  run
+                format: date-time
+                type: string
+              lastMaintenanceTime:
+                description: LastMaintenanceTime is when maintenance was last run
+                format: date-time
+                type: string
+              message:
+                description: Message provides additional status information
+                type: string
+              repositorySize:
+                description: RepositorySize is the total size of the repository in
+                  bytes
+                format: int64
+                type: integer
+              snapshotCount:
+                description: SnapshotCount is the total number of snapshots in the
+                  repository
+                format: int32
+                type: integer
+              state:
+                description: State represents the current state of the backup repository
+                enum:
+                - Initializing
+                - Ready
+                - Error
+                - Maintenance
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
