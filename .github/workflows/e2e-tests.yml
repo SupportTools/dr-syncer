@@ -1,0 +1,203 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: 'false'
+        type: boolean
+      specific_test:
+        description: 'Run specific test (e.g., 00, 01, etc.)'
+        required: false
+        default: ''
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - 'api/**'
+      - 'charts/**'
+      - 'test/**'
+      - 'build/**'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pkg/**'
+      - 'cmd/**'
+      - 'api/**'
+      - 'charts/**'
+      - 'test/**'
+      - 'build/**'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4.2.0
+
+      - name: Make scripts executable
+        run: |
+          chmod +x test/e2e/*.sh
+          chmod +x test/e2e/lib/*.sh
+          chmod +x test/run-tests.sh
+          chmod +x test/cases/*/test.sh 2>/dev/null || true
+
+      - name: Create k3d clusters
+        run: |
+          cd test/e2e
+          ./k3d-setup.sh --debug
+        env:
+          E2E_DEBUG: ${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}
+
+      - name: Build and load Docker images
+        run: |
+          # Build images
+          docker build -t dr-syncer:e2e-test -f build/Dockerfile .
+          docker build -t dr-syncer-agent:e2e-test -f build/Dockerfile.agent .
+          docker build -t dr-syncer-rsync:e2e-test -f build/Dockerfile.rsync .
+
+          # Load into k3d clusters
+          for cluster in controller prod dr; do
+            k3d image import dr-syncer:e2e-test -c $cluster
+            k3d image import dr-syncer-agent:e2e-test -c $cluster
+            k3d image import dr-syncer-rsync:e2e-test -c $cluster
+          done
+
+      - name: Deploy controller
+        run: |
+          cd test/e2e
+          ./deploy-controller.sh --skip-build --skip-load --debug
+        env:
+          E2E_DEBUG: ${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}
+          IMAGE_TAG: e2e-test
+
+      - name: Wait for controller to be ready
+        run: |
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer wait \
+            --for=condition=available \
+            --timeout=120s \
+            deployment/dr-syncer
+
+      - name: Run E2E tests
+        id: e2e
+        run: |
+          cd test/e2e
+
+          # Determine test arguments
+          TEST_ARGS="--skip-setup --skip-deploy"
+          if [ "${{ github.event.inputs.debug }}" == "true" ]; then
+            TEST_ARGS="$TEST_ARGS --debug"
+          fi
+          if [ -n "${{ github.event.inputs.specific_test }}" ]; then
+            TEST_ARGS="$TEST_ARGS --test ${{ github.event.inputs.specific_test }}"
+          fi
+
+          # Run tests with no-cleanup to preserve logs
+          ./run-e2e.sh $TEST_ARGS --no-cleanup
+        env:
+          E2E_DEBUG: ${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}
+          E2E_CLEANUP: 'false'
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p test-logs
+
+          # Controller logs
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer logs \
+            -l app.kubernetes.io/name=dr-syncer --tail=2000 \
+            > test-logs/controller.log 2>&1 || true
+
+          # Controller events
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer get events \
+            --sort-by='.lastTimestamp' \
+            > test-logs/controller-events.log 2>&1 || true
+
+          # Resource status
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer get remoteclusters -o yaml \
+            > test-logs/remoteclusters.yaml 2>&1 || true
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer get clustermappings -o yaml \
+            > test-logs/clustermappings.yaml 2>&1 || true
+          kubectl --kubeconfig kubeconfig/controller -n dr-syncer get namespacemappings -o yaml \
+            > test-logs/namespacemappings.yaml 2>&1 || true
+
+          # Pod status in all clusters
+          for cluster in controller prod dr; do
+            kubectl --kubeconfig kubeconfig/$cluster get pods -A \
+              > test-logs/${cluster}-pods.log 2>&1 || true
+          done
+
+          # Agent logs if available
+          kubectl --kubeconfig kubeconfig/prod -n dr-syncer logs \
+            -l app=dr-syncer-agent --tail=500 \
+            > test-logs/agent-prod.log 2>&1 || true
+          kubectl --kubeconfig kubeconfig/dr -n dr-syncer logs \
+            -l app=dr-syncer-agent --tail=500 \
+            > test-logs/agent-dr.log 2>&1 || true
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-logs
+          path: |
+            test-logs/
+            test/e2e/logs/
+          retention-days: 7
+
+      - name: Cleanup k3d clusters
+        if: always()
+        run: |
+          cd test/e2e
+          ./k3d-teardown.sh --force || true
+
+      - name: Print test summary
+        if: always()
+        run: |
+          echo "## E2E Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.e2e.outcome }}" == "success" ]; then
+            echo "✅ **All E2E tests passed!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **E2E tests failed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the uploaded artifacts for detailed logs." >> $GITHUB_STEP_SUMMARY
+          fi
