@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 // --- parseKopiaProgressLine tests ---
@@ -629,6 +632,234 @@ type blockingReader struct {
 func (r *blockingReader) Read(p []byte) (int, error) {
 	<-r.ctx.Done()
 	return 0, r.ctx.Err()
+}
+
+// --- MonitorPodProgress integration tests ---
+//
+// These test the public MonitorPodProgress entry point end-to-end by using
+// a test HTTP server that serves pod log content via the Kubernetes API format.
+
+// newTestClientsetWithLogServer creates a kubernetes.Clientset backed by a test
+// HTTP server. The handler receives the log request and can write arbitrary
+// log content. Returns the clientset and a cleanup function.
+func newTestClientsetWithLogServer(t *testing.T, handler http.HandlerFunc) (kubernetes.Interface, func()) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	clientset, err := kubernetes.NewForConfig(&rest.Config{
+		Host: server.URL,
+	})
+	if err != nil {
+		server.Close()
+		t.Fatalf("failed to create clientset: %v", err)
+	}
+	return clientset, server.Close
+}
+
+func TestMonitorPodProgress_Success(t *testing.T) {
+	logContent := strings.Join([]string{
+		"Snapshotting mmattox@dr-syncer:/data ...",
+		" * 0 hashing, 100 hashed (1.0 GB), 0 cached (0 B), uploaded 500 MB, estimating...",
+		" * 0 hashing, 500 hashed (5.0 GB), 0 cached (0 B), uploaded 2.5 GB, estimated 10.0 GB (50.0%) 5m left",
+	}, "\n")
+
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Verify the request is for pod logs.
+		if !strings.Contains(r.URL.Path, "/pods/test-pod/log") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(logContent))
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(5*time.Second),
+		WithUpdateInterval(0),
+	)
+
+	var updates []ProgressUpdate
+	var mu sync.Mutex
+	callback := func(ctx context.Context, update ProgressUpdate) error {
+		mu.Lock()
+		defer mu.Unlock()
+		updates = append(updates, update)
+		return nil
+	}
+
+	err := monitor.MonitorPodProgress(context.Background(), "test-ns", "test-pod", callback)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(updates) < 2 {
+		t.Fatalf("expected at least 2 updates, got %d", len(updates))
+	}
+
+	last := updates[len(updates)-1]
+	if last.PercentComplete != 50 {
+		t.Errorf("expected 50%%, got %d", last.PercentComplete)
+	}
+	if last.FilesProcessed != 500 {
+		t.Errorf("expected 500 files, got %d", last.FilesProcessed)
+	}
+}
+
+func TestMonitorPodProgress_LogStreamError(t *testing.T) {
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Return an error status for the log request.
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"container not found"}`))
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(5*time.Second),
+	)
+
+	err := monitor.MonitorPodProgress(context.Background(), "test-ns", "test-pod", nil)
+	if err == nil {
+		t.Fatal("expected error when log stream fails")
+	}
+	if !strings.Contains(err.Error(), "open log stream") {
+		t.Errorf("expected 'open log stream' in error, got: %v", err)
+	}
+}
+
+func TestMonitorPodProgress_StallTimeout(t *testing.T) {
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Write a non-progress line, then hold the connection open until client disconnects.
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Write([]byte("Snapshotting mmattox@dr-syncer:/data ...\n"))
+			flusher.Flush()
+		}
+		// Hold connection open to trigger stall.
+		<-r.Context().Done()
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(100*time.Millisecond),
+		WithUpdateInterval(0),
+	)
+
+	err := monitor.MonitorPodProgress(context.Background(), "test-ns", "test-pod", nil)
+	if err != ErrStalled {
+		t.Errorf("expected ErrStalled, got: %v", err)
+	}
+}
+
+func TestMonitorPodProgress_ContextCancellation(t *testing.T) {
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Write([]byte("Starting...\n"))
+			flusher.Flush()
+		}
+		// Hold connection open until client disconnects.
+		<-r.Context().Done()
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(10*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := monitor.MonitorPodProgress(ctx, "test-ns", "test-pod", nil)
+	if err != nil {
+		t.Errorf("expected nil on context cancel, got: %v", err)
+	}
+}
+
+func TestMonitorPodProgress_CallbackError(t *testing.T) {
+	logContent := " * 0 hashing, 100 hashed (1.0 GB), 0 cached (0 B), uploaded 500 MB, estimating...\n"
+
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(logContent))
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(5*time.Second),
+		WithUpdateInterval(0),
+	)
+
+	callbackErr := fmt.Errorf("status update failed")
+	callback := func(ctx context.Context, update ProgressUpdate) error {
+		return callbackErr
+	}
+
+	err := monitor.MonitorPodProgress(context.Background(), "test-ns", "test-pod", callback)
+	if err == nil {
+		t.Fatal("expected error from callback")
+	}
+	if !strings.Contains(err.Error(), "status update failed") {
+		t.Errorf("expected 'status update failed' in error, got: %v", err)
+	}
+}
+
+func TestMonitorPodProgress_RestoreProgress(t *testing.T) {
+	logContent := strings.Join([]string{
+		"Restoring to /data ...",
+		"Processed 500 (1.2 GB) of 1000 (2.5 GB) 100.0 MB/s (48.0%) remaining 13s.",
+		"Processed 1000 (2.5 GB) of 1000 (2.5 GB) 120.0 MB/s (100.0%) remaining 0s.",
+	}, "\n")
+
+	clientset, cleanup := newTestClientsetWithLogServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(logContent))
+	})
+	defer cleanup()
+
+	monitor := NewKopiaPodProgressMonitor(clientset,
+		WithStallTimeout(5*time.Second),
+		WithUpdateInterval(0),
+	)
+
+	var updates []ProgressUpdate
+	var mu sync.Mutex
+	callback := func(ctx context.Context, update ProgressUpdate) error {
+		mu.Lock()
+		defer mu.Unlock()
+		updates = append(updates, update)
+		return nil
+	}
+
+	err := monitor.MonitorPodProgress(context.Background(), "test-ns", "test-pod", callback)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(updates) < 2 {
+		t.Fatalf("expected at least 2 restore updates, got %d", len(updates))
+	}
+
+	last := updates[len(updates)-1]
+	if last.PercentComplete != 100 {
+		t.Errorf("expected 100%%, got %d", last.PercentComplete)
+	}
+	if last.TotalFiles != 1000 {
+		t.Errorf("expected 1000 total files, got %d", last.TotalFiles)
+	}
 }
 
 // --- Interface compliance ---
