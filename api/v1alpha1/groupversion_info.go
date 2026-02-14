@@ -23,4 +23,5 @@ func init() {
 	SchemeBuilder.Register(&RemoteCluster{}, &RemoteClusterList{})
 	SchemeBuilder.Register(&NamespaceMapping{}, &NamespaceMappingList{})
 	SchemeBuilder.Register(&ClusterMapping{}, &ClusterMappingList{})
+	SchemeBuilder.Register(&BackupRepository{}, &BackupRepositoryList{})
 }
