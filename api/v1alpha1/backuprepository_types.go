@@ -169,6 +169,7 @@ func init() {
 // DeepCopyInto copies S3Config into out
 func (in *S3Config) DeepCopyInto(out *S3Config) {
 	*out = *in
+	in.CredentialsSecretRef.DeepCopyInto(&out.CredentialsSecretRef)
 }
 
 // DeepCopy creates a deep copy of S3Config
@@ -184,6 +185,7 @@ func (in *S3Config) DeepCopy() *S3Config {
 // DeepCopyInto copies KopiaConfig into out
 func (in *KopiaConfig) DeepCopyInto(out *KopiaConfig) {
 	*out = *in
+	in.EncryptionSecretRef.DeepCopyInto(&out.EncryptionSecretRef)
 }
 
 // DeepCopy creates a deep copy of KopiaConfig
