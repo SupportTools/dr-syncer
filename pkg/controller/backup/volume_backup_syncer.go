@@ -164,13 +164,13 @@ func (vbs *VolumeBackupSyncer) syncSinglePVC(
 		"pvc":     pvc.Name,
 	})
 
-	// Acquire global concurrency slot.
-	gcm := replication.GetGlobalConcurrencyManager()
-	if gcm != nil {
-		if err := gcm.Acquire(ctx, pvc.Namespace, pvc.Name); err != nil {
-			return PVCSyncResult{PVCName: pvc.Name, Err: fmt.Errorf("concurrency acquire: %w", err)}
+	// Acquire backup concurrency slot (separate pool from rsync operations).
+	bcm := replication.GetBackupConcurrencyManager()
+	if bcm != nil {
+		if err := bcm.Acquire(ctx, pvc.Namespace, pvc.Name); err != nil {
+			return PVCSyncResult{PVCName: pvc.Name, Err: fmt.Errorf("backup concurrency acquire: %w", err)}
 		}
-		defer gcm.Release(pvc.Namespace, pvc.Name)
+		defer bcm.Release(pvc.Namespace, pvc.Name)
 	}
 
 	// Determine operation timeout.

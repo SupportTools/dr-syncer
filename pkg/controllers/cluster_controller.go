@@ -233,6 +233,8 @@ func (r *RemoteClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			limit := latest.Spec.PVCSync.GetGlobalConcurrencyLimit()
 			replication.InitGlobalConcurrencyManager(int64(limit))
 		}
+		// Initialize backup concurrency manager (separate pool from rsync)
+		replication.InitBackupConcurrencyManager(3)
 		// Check if any nodes are not ready
 		if latest.Status.PVCSync != nil && latest.Status.PVCSync.AgentStatus != nil {
 			readyNodes := latest.Status.PVCSync.AgentStatus.ReadyNodes

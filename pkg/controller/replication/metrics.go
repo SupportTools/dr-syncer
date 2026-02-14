@@ -85,6 +85,31 @@ var (
 			Buckets: prometheus.ExponentialBuckets(0.1, 2, 12), // 0.1s to ~7 minutes
 		},
 	)
+
+	// BackupQueueDepth tracks number of backup operations waiting for a concurrency slot
+	BackupQueueDepth = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "dr_syncer_backup_queue_depth",
+			Help: "Number of backup operations waiting for a concurrency slot",
+		},
+	)
+
+	// BackupConcurrentCount tracks number of currently active backup operations
+	BackupConcurrentCount = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "dr_syncer_backup_concurrent_count",
+			Help: "Number of currently active backup operations",
+		},
+	)
+
+	// BackupQueueWaitDuration tracks how long backup operations wait for a concurrency slot
+	BackupQueueWaitDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "dr_syncer_backup_queue_wait_seconds",
+			Help:    "Time spent waiting for a backup concurrency slot in seconds",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 12), // 0.1s to ~7 minutes
+		},
+	)
 )
 
 func init() {
@@ -99,6 +124,9 @@ func init() {
 		PVCSyncQueueDepth,
 		PVCSyncConcurrentCount,
 		PVCSyncQueueWaitDuration,
+		BackupQueueDepth,
+		BackupConcurrentCount,
+		BackupQueueWaitDuration,
 	)
 }
 
