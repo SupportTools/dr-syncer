@@ -123,7 +123,10 @@ func TestBuildBackupPod(t *testing.T) {
 	cfg := DefaultKopiaPodConfig()
 	cfg.NodeName = "worker-1"
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Basic metadata.
 	if pod.Namespace != "test-ns" {
@@ -280,7 +283,10 @@ func TestBuildBackupPodWithS3PathPrefix(t *testing.T) {
 	repo.Spec.S3Config.PathPrefix = "cluster-a/backups"
 	cfg := DefaultKopiaPodConfig()
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	cmdStr := pod.Spec.Containers[0].Args[0]
 
 	if !strings.Contains(cmdStr, "--prefix=cluster-a/backups") {
@@ -294,7 +300,10 @@ func TestBuildBackupPodNoCompression(t *testing.T) {
 	cfg := DefaultKopiaPodConfig()
 	cfg.CompressionAlgorithm = "none"
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	cmdStr := pod.Spec.Containers[0].Args[0]
 
 	if strings.Contains(cmdStr, "--compression") {
@@ -316,7 +325,10 @@ func TestBuildBackupPodTolerations(t *testing.T) {
 	}
 	cfg.PriorityClassName = "system-cluster-critical"
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(pod.Spec.Tolerations) != 1 {
 		t.Fatalf("expected 1 toleration, got %d", len(pod.Spec.Tolerations))
@@ -356,7 +368,10 @@ func TestPodNameTruncation(t *testing.T) {
 	repo := newTestBackupRepo()
 	cfg := DefaultKopiaPodConfig()
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if len(pod.Name) > 63 {
 		t.Errorf("pod name exceeds 63 chars: %s (len=%d)", pod.Name, len(pod.Name))
@@ -368,7 +383,10 @@ func TestBuildBackupPodAnnotations(t *testing.T) {
 	repo := newTestBackupRepo()
 	cfg := DefaultKopiaPodConfig()
 
-	pod := BuildBackupPod(op, repo, cfg)
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if pod.Annotations[annotationKopiaOperation] != op.Name {
 		t.Errorf("expected annotation %s=%s, got %s", annotationKopiaOperation, op.Name, pod.Annotations[annotationKopiaOperation])
@@ -697,6 +715,140 @@ func TestBuildRestorePodRejectsInvalidS3Config(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid S3 config") {
 		t.Errorf("expected 'invalid S3 config' in error, got: %v", err)
+	}
+}
+
+// --- SecurityContext, ActiveDeadlineSeconds, and S3 validation tests ---
+
+func TestBuildBackupPodSecurityContext(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	repo := newTestBackupRepo()
+	cfg := DefaultKopiaPodConfig()
+
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Pod-level SecurityContext.
+	if pod.Spec.SecurityContext == nil {
+		t.Fatal("expected pod-level SecurityContext to be set")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile == nil {
+		t.Fatal("expected SeccompProfile to be set")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("expected SeccompProfile RuntimeDefault, got %s", pod.Spec.SecurityContext.SeccompProfile.Type)
+	}
+
+	// Container-level SecurityContext.
+	c := pod.Spec.Containers[0]
+	if c.SecurityContext == nil {
+		t.Fatal("expected container SecurityContext to be set")
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+		t.Error("expected AllowPrivilegeEscalation to be false")
+	}
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) == 0 {
+		t.Fatal("expected Capabilities.Drop to be set")
+	}
+	if c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Errorf("expected Capabilities.Drop=[ALL], got %v", c.SecurityContext.Capabilities.Drop)
+	}
+}
+
+func TestBuildRestorePodSecurityContext(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeRestore, "k1234abcdef")
+	repo := newTestBackupRepo()
+	cfg := DefaultKopiaPodConfig()
+
+	pod, err := BuildRestorePod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Pod-level SecurityContext.
+	if pod.Spec.SecurityContext == nil {
+		t.Fatal("expected pod-level SecurityContext to be set")
+	}
+	if pod.Spec.SecurityContext.SeccompProfile == nil || pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Error("expected SeccompProfile RuntimeDefault")
+	}
+
+	// Container-level SecurityContext.
+	c := pod.Spec.Containers[0]
+	if c.SecurityContext == nil {
+		t.Fatal("expected container SecurityContext to be set")
+	}
+	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+		t.Error("expected AllowPrivilegeEscalation to be false")
+	}
+	if c.SecurityContext.Capabilities == nil || len(c.SecurityContext.Capabilities.Drop) == 0 || c.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Errorf("expected Capabilities.Drop=[ALL], got %v", c.SecurityContext.Capabilities)
+	}
+}
+
+func TestBuildBackupPodActiveDeadlineSeconds(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	repo := newTestBackupRepo()
+
+	// Default config should have ActiveDeadlineSeconds.
+	cfg := DefaultKopiaPodConfig()
+	pod, err := BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pod.Spec.ActiveDeadlineSeconds == nil {
+		t.Fatal("expected ActiveDeadlineSeconds to be set")
+	}
+	if *pod.Spec.ActiveDeadlineSeconds != DefaultActiveDeadlineSeconds {
+		t.Errorf("expected ActiveDeadlineSeconds %d, got %d", DefaultActiveDeadlineSeconds, *pod.Spec.ActiveDeadlineSeconds)
+	}
+
+	// Custom deadline.
+	custom := int64(7200)
+	cfg.ActiveDeadlineSeconds = &custom
+	pod, err = BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if *pod.Spec.ActiveDeadlineSeconds != 7200 {
+		t.Errorf("expected ActiveDeadlineSeconds 7200, got %d", *pod.Spec.ActiveDeadlineSeconds)
+	}
+
+	// Nil deadline means no pod deadline.
+	cfg.ActiveDeadlineSeconds = nil
+	pod, err = BuildBackupPod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pod.Spec.ActiveDeadlineSeconds != nil {
+		t.Errorf("expected nil ActiveDeadlineSeconds, got %d", *pod.Spec.ActiveDeadlineSeconds)
+	}
+}
+
+func TestBuildBackupPodRejectsInvalidS3Config(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	repo := newTestBackupRepo()
+	repo.Spec.S3Config.Bucket = "bucket; evil"
+	cfg := DefaultKopiaPodConfig()
+
+	_, err := BuildBackupPod(op, repo, cfg)
+	if err == nil {
+		t.Fatal("expected error for shell injection in S3 bucket")
+	}
+	if !strings.Contains(err.Error(), "invalid S3 config") {
+		t.Errorf("expected 'invalid S3 config' in error, got: %v", err)
+	}
+}
+
+func TestDefaultKopiaPodConfigActiveDeadline(t *testing.T) {
+	cfg := DefaultKopiaPodConfig()
+	if cfg.ActiveDeadlineSeconds == nil {
+		t.Fatal("expected default ActiveDeadlineSeconds to be set")
+	}
+	if *cfg.ActiveDeadlineSeconds != DefaultActiveDeadlineSeconds {
+		t.Errorf("expected default ActiveDeadlineSeconds %d, got %d", DefaultActiveDeadlineSeconds, *cfg.ActiveDeadlineSeconds)
 	}
 }
 

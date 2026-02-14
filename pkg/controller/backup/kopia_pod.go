@@ -57,6 +57,9 @@ const (
 	// kopiaPodPrefix is used for generating Kopia pod names.
 	kopiaPodPrefix = "dr-syncer-kopia"
 
+	// DefaultActiveDeadlineSeconds is the default pod deadline (1 hour).
+	DefaultActiveDeadlineSeconds int64 = 3600
+
 	// Volume names used within Kopia pods.
 	volumeNameData      = "data"
 	volumeNameKopiaHome = "kopia-home"
@@ -101,10 +104,15 @@ type KopiaPodConfig struct {
 
 	// PriorityClassName for the Kopia pod.
 	PriorityClassName string
+
+	// ActiveDeadlineSeconds limits how long the pod can run.
+	// Prevents runaway pods if the controller crashes.
+	ActiveDeadlineSeconds *int64
 }
 
 // DefaultKopiaPodConfig returns a KopiaPodConfig with sensible defaults.
 func DefaultKopiaPodConfig() KopiaPodConfig {
+	deadline := DefaultActiveDeadlineSeconds
 	return KopiaPodConfig{
 		Image:                DefaultKopiaImage,
 		Parallelism:          4,
@@ -119,6 +127,7 @@ func DefaultKopiaPodConfig() KopiaPodConfig {
 				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 		},
+		ActiveDeadlineSeconds: &deadline,
 	}
 }
 
@@ -140,11 +149,16 @@ func KopiaPodConfigFromBackupConfig(bc *drv1alpha1.BackupConfig) KopiaPodConfig 
 
 // BuildBackupPod creates a Pod spec for a Kopia backup (snapshot create) operation.
 // The pod mounts the source PVC at /data and runs `kopia snapshot create /data`.
+// Returns an error if S3 config fields contain unsafe characters.
 func BuildBackupPod(
 	operation *drv1alpha1.VolumeBackupOperation,
 	repo *drv1alpha1.BackupRepository,
 	cfg KopiaPodConfig,
-) *corev1.Pod {
+) (*corev1.Pod, error) {
+	if err := validateS3Config(repo.Spec.S3Config); err != nil {
+		return nil, fmt.Errorf("invalid S3 config: %w", err)
+	}
+
 	podName := fmt.Sprintf("%s-backup-%s", kopiaPodPrefix, operation.Name)
 	if len(podName) > 63 {
 		podName = podName[:63]
@@ -153,7 +167,7 @@ func BuildBackupPod(
 	pvcRef := operation.Spec.SourcePVC
 	command := buildBackupCommand(repo.Spec.S3Config, cfg)
 
-	return buildKopiaPod(podName, operation, repo, pvcRef, cfg, command, "backup")
+	return buildKopiaPod(podName, operation, repo, pvcRef, cfg, command, "backup"), nil
 }
 
 // BuildRestorePod creates a Pod spec for a Kopia restore (snapshot restore) operation.
@@ -217,6 +231,8 @@ func buildKopiaPod(
 	labels := buildLabels(operation, component)
 	annotations := buildAnnotations(operation)
 
+	allowPrivEsc := false
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        podName,
@@ -225,7 +241,13 @@ func buildKopiaPod(
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: cfg.ActiveDeadlineSeconds,
+			SecurityContext: &corev1.PodSecurityContext{
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
+			},
 			Containers: []corev1.Container{
 				{
 					Name:    "kopia",
@@ -249,6 +271,12 @@ func buildKopiaPod(
 					},
 					Resources:                cfg.Resources,
 					TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+					SecurityContext: &corev1.SecurityContext{
+						AllowPrivilegeEscalation: &allowPrivEsc,
+						Capabilities: &corev1.Capabilities{
+							Drop: []corev1.Capability{"ALL"},
+						},
+					},
 				},
 			},
 			Volumes: []corev1.Volume{

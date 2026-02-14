@@ -278,8 +278,11 @@ func (bw *BackupWorkflow) runBackupPod(
 ) error {
 	log := bw.Log.WithField("operation", statusOperation.Name)
 
-	// Build the Kopia backup pod.
-	pod := BuildBackupPod(podOperation, repo, podConfig)
+	// Build the Kopia backup pod (validates S3 config).
+	pod, err := BuildBackupPod(podOperation, repo, podConfig)
+	if err != nil {
+		return bw.failOperation(ctx, statusOperation, fmt.Errorf("build backup pod: %w", err))
+	}
 
 	// Clean up pod on exit.
 	defer func() {
