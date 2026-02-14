@@ -18,6 +18,12 @@ rules:
   - clustermappings
   - clustermappings/status
   - clustermappings/finalizers
+  - backuprepositories
+  - backuprepositories/status
+  - backuprepositories/finalizers
+  - volumebackupoperations
+  - volumebackupoperations/status
+  - volumebackupoperations/finalizers
   verbs:
   - get
   - list
@@ -26,6 +32,32 @@ rules:
   - update
   - patch
   - delete
+# VolumeSnapshot permissions for CSI snapshot-based backup path
+- apiGroups:
+  - "snapshot.storage.k8s.io"
+  resources:
+  - volumesnapshots
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+- apiGroups:
+  - "snapshot.storage.k8s.io"
+  resources:
+  - volumesnapshotcontents
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - "snapshot.storage.k8s.io"
+  resources:
+  - volumesnapshotclasses
+  verbs:
+  - get
+  - list
 - apiGroups:
   - coordination.k8s.io
   resources:
