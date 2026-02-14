@@ -162,6 +162,11 @@ func TestBuildBackupPod(t *testing.T) {
 		t.Errorf("expected image %s, got %s", DefaultKopiaImage, c.Image)
 	}
 
+	// Verify TerminationMessagePolicy is set for snapshot ID extraction.
+	if c.TerminationMessagePolicy != corev1.TerminationMessageFallbackToLogsOnError {
+		t.Errorf("expected TerminationMessagePolicy FallbackToLogsOnError, got %s", c.TerminationMessagePolicy)
+	}
+
 	// Verify command runs via shell.
 	if len(c.Command) != 2 || c.Command[0] != "/bin/sh" || c.Command[1] != "-c" {
 		t.Errorf("expected command [/bin/sh -c], got %v", c.Command)

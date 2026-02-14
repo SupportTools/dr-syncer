@@ -184,7 +184,8 @@ func buildKopiaPod(
 							MountPath: mountPathKopiaTmp,
 						},
 					},
-					Resources: cfg.Resources,
+					Resources:                cfg.Resources,
+					TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
 				},
 			},
 			Volumes: []corev1.Volume{
