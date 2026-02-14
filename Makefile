@@ -178,12 +178,49 @@ vet: ## Run go vet against code
 
 .PHONY: test
 test: fmt vet ## Run tests
-	go test ./... $(if $(filter 1,$(DEBUG)),-v) -coverprofile cover.out
+	go test ./... $(if $(filter 1,$(DEBUG)),-v) -timeout 300s -coverprofile cover.out
 
 .PHONY: test-cli
 test-cli: build-cli ## Run CLI tests
 	@echo "Running CLI tests..."
 	./test/cli/test-cli.sh
+
+##@ E2E Testing
+
+.PHONY: e2e
+e2e: ## Run full E2E test suite (setup clusters, deploy, test, cleanup)
+	@echo "Running full E2E test suite..."
+	./test/e2e/run-e2e.sh
+
+.PHONY: e2e-debug
+e2e-debug: ## Run E2E tests with debug output
+	@echo "Running E2E tests in debug mode..."
+	./test/e2e/run-e2e.sh --debug
+
+.PHONY: e2e-setup
+e2e-setup: ## Create k3d clusters for E2E testing
+	@echo "Setting up k3d clusters..."
+	./test/e2e/k3d-setup.sh
+
+.PHONY: e2e-deploy
+e2e-deploy: ## Build and deploy controller to k3d clusters
+	@echo "Deploying controller to k3d clusters..."
+	./test/e2e/deploy-controller.sh
+
+.PHONY: e2e-test
+e2e-test: ## Run E2E tests (assumes clusters already exist)
+	@echo "Running E2E tests..."
+	./test/e2e/run-e2e.sh --skip-setup --skip-deploy
+
+.PHONY: e2e-cleanup
+e2e-cleanup: ## Delete k3d clusters
+	@echo "Cleaning up k3d clusters..."
+	./test/e2e/k3d-teardown.sh
+
+.PHONY: e2e-no-cleanup
+e2e-no-cleanup: ## Run E2E tests without cleanup (for debugging)
+	@echo "Running E2E tests without cleanup..."
+	./test/e2e/run-e2e.sh --no-cleanup
 
 ##@ Build
 

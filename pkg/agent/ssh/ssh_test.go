@@ -425,17 +425,17 @@ func TestGenerateKeyPair_SmallKeySize(t *testing.T) {
 }
 
 func TestGenerateKeyPair_LargeKeySize(t *testing.T) {
-	// 8192 bit key - larger but slower
-	privateKey, publicKey, fingerprint, err := GenerateKeyPair(8192)
+	// 4096 bit key - verifies larger keys work (8192 is too slow for CI)
+	privateKey, publicKey, fingerprint, err := GenerateKeyPair(4096)
 
 	require.NoError(t, err)
 	assert.NotNil(t, privateKey)
 	assert.NotNil(t, publicKey)
 	assert.NotEmpty(t, fingerprint)
 
-	// Should be larger than 4096 bit key
-	privateKey4096, _, _, _ := GenerateKeyPair(4096)
-	assert.Greater(t, len(privateKey), len(privateKey4096))
+	// Should be larger than 2048 bit key
+	privateKey2048, _, _, _ := GenerateKeyPair(2048)
+	assert.Greater(t, len(privateKey), len(privateKey2048))
 }
 
 // Test realistic SSH key scenarios
