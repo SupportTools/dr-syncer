@@ -11,6 +11,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/supporttools/dr-syncer/pkg/config"
+	"github.com/supporttools/dr-syncer/pkg/controller/backup"
 	"github.com/supporttools/dr-syncer/pkg/controller/remotecluster"
 	"github.com/supporttools/dr-syncer/pkg/logging"
 	"github.com/supporttools/dr-syncer/pkg/version"
@@ -116,6 +117,18 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("configured ClusterMapping controller")
+
+	// Set up BackupRepository controller
+	kopiaClient := backup.NewKopiaRepositoryClient(mgr.GetClient())
+	if err = (&controllers.BackupRepositoryReconciler{
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		RepoClient: kopiaClient,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error("unable to create BackupRepository controller")
+		os.Exit(1)
+	}
+	log.Info("configured BackupRepository controller")
 
 	// Set up health checks
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
