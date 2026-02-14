@@ -83,6 +83,15 @@ type PVCSyncSpec struct {
 	// +kubebuilder:validation:Maximum=256
 	GlobalConcurrencyLimit *int32 `json:"globalConcurrencyLimit,omitempty"`
 
+	// BackupConcurrencyLimit sets the maximum number of concurrent Kopia backup/restore
+	// operations across all NamespaceMappings for this cluster. This is a separate pool
+	// from the rsync GlobalConcurrencyLimit. Defaults to 3.
+	// +optional
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=64
+	BackupConcurrencyLimit *int32 `json:"backupConcurrencyLimit,omitempty"`
+
 	// RetryConfig configures retry behavior for failed syncs
 	// +optional
 	RetryConfig *PVCSyncRetryConfig `json:"retryConfig,omitempty"`
@@ -123,6 +132,14 @@ func (p *PVCSyncSpec) GetGlobalConcurrencyLimit() int32 {
 		return 4
 	}
 	return *p.GlobalConcurrencyLimit
+}
+
+// GetBackupConcurrencyLimit returns the backup concurrency limit with default value of 3
+func (p *PVCSyncSpec) GetBackupConcurrencyLimit() int32 {
+	if p == nil || p.BackupConcurrencyLimit == nil {
+		return 3
+	}
+	return *p.BackupConcurrencyLimit
 }
 
 // RsyncDaemonSetConfig configures the destination rsync DaemonSet pool
