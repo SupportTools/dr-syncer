@@ -18,11 +18,3 @@ var (
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
 )
-
-func init() {
-	SchemeBuilder.Register(&RemoteCluster{}, &RemoteClusterList{})
-	SchemeBuilder.Register(&NamespaceMapping{}, &NamespaceMappingList{})
-	SchemeBuilder.Register(&ClusterMapping{}, &ClusterMappingList{})
-	SchemeBuilder.Register(&BackupRepository{}, &BackupRepositoryList{})
-	SchemeBuilder.Register(&VolumeBackupOperation{}, &VolumeBackupOperationList{})
-}
