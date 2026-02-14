@@ -32,8 +32,16 @@ type ProgressUpdate struct {
 	// BytesProcessed is the total bytes processed so far.
 	BytesProcessed int64
 
+	// TotalBytes is the estimated total bytes (available during restore operations).
+	// This is 0 if not available.
+	TotalBytes int64
+
 	// FilesProcessed is the number of files processed so far.
 	FilesProcessed int64
+
+	// TotalFiles is the estimated total file count (available during restore operations).
+	// This is 0 if not available.
+	TotalFiles int64
 
 	// PercentComplete is the estimated completion percentage (0-100).
 	// This is -1 if not yet estimable.
@@ -230,11 +238,17 @@ func (m *KopiaPodProgressMonitor) processLogStream(ctx context.Context, log *log
 }
 
 // Kopia progress line patterns.
-// Examples of Kopia stderr progress output:
+//
+// Backup progress examples:
 //   - "Snapshotting mmattox@dr-syncer:/data ..."
 //   - " * 0 hashing, 1234 hashed (5.6 GB), 0 cached (0 B), uploaded 1.2 GB, estimating..."
 //   - " * 0 hashing, 5678 hashed (12.3 GB), 100 cached (500 MB), uploaded 5.6 GB, estimated 20.5 GB (60.0%) 50m12s left"
 //   - "Created snapshot with root k1234567890abcdef ..."
+//
+// Restore progress examples:
+//   - "Processed 12877 (43.9 MB) of 79255 (614.3 MB) 351.5 Mbit/s (7.2%) remaining 12s."
+//   - "Processed 30953 (258.4 GB) of 30952 (258.4 GB) 28.4 MB/s (100.0%) remaining 0s."
+//   - "Processed 500 (1.2 GB) of 1000 (2.5 GB)"
 var (
 	// reKopiaHashing matches Kopia's incremental progress lines.
 	// Pattern: N hashed (X.Y GB), ... uploaded Z.W GB, estimated T.U GB (P%) ...
@@ -248,7 +262,25 @@ var (
 		`estimated\s+[\d.]+\s+\w+\s+\((\d+(?:\.\d+)?)%\)`,
 	)
 
-	// reKopiaProcessed matches simpler "Processed" output.
+	// reKopiaRestore matches Kopia's restore progress lines.
+	// Pattern: Processed N (X.Y GB) of M (T.U GB) [speed (P%) remaining Ts]
+	reKopiaRestore = regexp.MustCompile(
+		`[Pp]rocessed\s+(\d+)\s+\(([^)]+)\)\s+of\s+(\d+)\s+\(([^)]+)\)`,
+	)
+
+	// reKopiaRestorePercent extracts percentage from restore progress lines.
+	// Pattern: (P%) remaining ...
+	reKopiaRestorePercent = regexp.MustCompile(
+		`\((\d+(?:\.\d+)?)%\)\s+remaining`,
+	)
+
+	// reKopiaRestoreSpeed extracts speed from restore progress lines.
+	// Pattern: 351.5 Mbit/s or 28.4 MB/s
+	reKopiaRestoreSpeed = regexp.MustCompile(
+		`(\d+(?:\.\d+)?)\s+((?:K|M|G|T)?(?:bit|B)/s)`,
+	)
+
+	// reKopiaProcessed matches simpler "Processed" output (backup-specific).
 	// Pattern: Processed N files, X.Y GB ...
 	reKopiaProcessed = regexp.MustCompile(
 		`[Pp]rocessed\s+(\d+)\s+(?:files?|contents?).*?(\d+(?:\.\d+)?)\s*((?:K|M|G|T)?i?B)`,
@@ -291,7 +323,43 @@ func parseKopiaProgressLine(line string) (ProgressUpdate, bool) {
 		return update, true
 	}
 
-	// Try the processed pattern.
+	// Try the restore progress pattern: "Processed N (X.Y GB) of M (T.U GB) ..."
+	if matches := reKopiaRestore.FindStringSubmatch(line); matches != nil {
+		filesProcessed, _ := strconv.ParseInt(matches[1], 10, 64)
+		bytesProcessed := parseSizeString(matches[2])
+		totalFiles, _ := strconv.ParseInt(matches[3], 10, 64)
+		totalBytes := parseSizeString(matches[4])
+
+		update.FilesProcessed = filesProcessed
+		update.BytesProcessed = bytesProcessed
+		update.TotalFiles = totalFiles
+		update.TotalBytes = totalBytes
+
+		// Extract percentage if present.
+		if pctMatches := reKopiaRestorePercent.FindStringSubmatch(line); pctMatches != nil {
+			pct, err := strconv.ParseFloat(pctMatches[1], 64)
+			if err == nil && pct >= 0 && pct <= 100 {
+				update.PercentComplete = int32(pct)
+			}
+		}
+
+		// Compute percentage from bytes if not explicitly provided.
+		if update.PercentComplete == -1 && update.TotalBytes > 0 {
+			computed := float64(update.BytesProcessed) / float64(update.TotalBytes) * 100
+			if computed >= 0 && computed <= 100 {
+				update.PercentComplete = int32(computed)
+			}
+		}
+
+		// Extract speed if present.
+		if speedMatches := reKopiaRestoreSpeed.FindStringSubmatch(line); speedMatches != nil {
+			update.Speed = speedMatches[1] + " " + speedMatches[2]
+		}
+
+		return update, true
+	}
+
+	// Try the processed pattern (backup-specific: "Processed N files, X.Y GB").
 	if matches := reKopiaProcessed.FindStringSubmatch(line); matches != nil {
 		files, _ := strconv.ParseInt(matches[1], 10, 64)
 		sizeVal, _ := strconv.ParseFloat(matches[2], 64)

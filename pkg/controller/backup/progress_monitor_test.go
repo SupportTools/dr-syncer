@@ -96,6 +96,131 @@ func TestParseKopiaProgressLine_ProcessedContents(t *testing.T) {
 	}
 }
 
+// --- Restore progress parsing tests ---
+
+func TestParseKopiaProgressLine_RestoreFullLine(t *testing.T) {
+	line := "Processed 12877 (43.9 MB) of 79255 (614.3 MB) 351.5 Mbit/s (7.2%) remaining 12s."
+	update, ok := parseKopiaProgressLine(line)
+	if !ok {
+		t.Fatal("expected restore progress line to be parsed")
+	}
+	if update.FilesProcessed != 12877 {
+		t.Errorf("expected 12877 files processed, got %d", update.FilesProcessed)
+	}
+	if update.TotalFiles != 79255 {
+		t.Errorf("expected 79255 total files, got %d", update.TotalFiles)
+	}
+	// 43.9 MB ≈ 46,031,462
+	if update.BytesProcessed < 45000000 || update.BytesProcessed > 47000000 {
+		t.Errorf("expected ~46M bytes processed, got %d", update.BytesProcessed)
+	}
+	// 614.3 MB ≈ 644,087,603
+	if update.TotalBytes < 640000000 || update.TotalBytes > 650000000 {
+		t.Errorf("expected ~644M total bytes, got %d", update.TotalBytes)
+	}
+	if update.PercentComplete != 7 {
+		t.Errorf("expected 7%%, got %d", update.PercentComplete)
+	}
+	if update.Speed != "351.5 Mbit/s" {
+		t.Errorf("expected '351.5 Mbit/s', got %q", update.Speed)
+	}
+}
+
+func TestParseKopiaProgressLine_RestoreComplete(t *testing.T) {
+	line := "Processed 30953 (258.4 GB) of 30952 (258.4 GB) 28.4 MB/s (100.0%) remaining 0s."
+	update, ok := parseKopiaProgressLine(line)
+	if !ok {
+		t.Fatal("expected restore progress line to be parsed")
+	}
+	if update.FilesProcessed != 30953 {
+		t.Errorf("expected 30953 files, got %d", update.FilesProcessed)
+	}
+	if update.TotalFiles != 30952 {
+		t.Errorf("expected 30952 total files, got %d", update.TotalFiles)
+	}
+	if update.PercentComplete != 100 {
+		t.Errorf("expected 100%%, got %d", update.PercentComplete)
+	}
+	if update.Speed != "28.4 MB/s" {
+		t.Errorf("expected '28.4 MB/s', got %q", update.Speed)
+	}
+}
+
+func TestParseKopiaProgressLine_RestoreWithoutSpeed(t *testing.T) {
+	line := "Processed 500 (1.2 GB) of 1000 (2.5 GB)"
+	update, ok := parseKopiaProgressLine(line)
+	if !ok {
+		t.Fatal("expected restore progress line to be parsed")
+	}
+	if update.FilesProcessed != 500 {
+		t.Errorf("expected 500 files, got %d", update.FilesProcessed)
+	}
+	if update.TotalFiles != 1000 {
+		t.Errorf("expected 1000 total files, got %d", update.TotalFiles)
+	}
+	// 1.2 GB ≈ 1,288,490,188
+	if update.BytesProcessed < 1280000000 || update.BytesProcessed > 1300000000 {
+		t.Errorf("expected ~1.29B bytes processed, got %d", update.BytesProcessed)
+	}
+	// 2.5 GB ≈ 2,684,354,560
+	if update.TotalBytes < 2680000000 || update.TotalBytes > 2700000000 {
+		t.Errorf("expected ~2.68B total bytes, got %d", update.TotalBytes)
+	}
+	// When no explicit percentage, it's computed from bytes: ~1.29B / ~2.68B ≈ 48%
+	// int32 truncation means this lands at 47 or 48 depending on binary size rounding.
+	if update.PercentComplete < 47 || update.PercentComplete > 48 {
+		t.Errorf("expected ~48%% (computed from bytes), got %d", update.PercentComplete)
+	}
+	if update.Speed != "" {
+		t.Errorf("expected empty speed, got %q", update.Speed)
+	}
+}
+
+func TestParseKopiaProgressLine_RestoreLargeDataset(t *testing.T) {
+	line := "Processed 150000 (1.5 TB) of 200000 (2.0 TB) 512.0 MB/s (75.0%) remaining 15m30s."
+	update, ok := parseKopiaProgressLine(line)
+	if !ok {
+		t.Fatal("expected restore progress line to be parsed")
+	}
+	if update.FilesProcessed != 150000 {
+		t.Errorf("expected 150000 files, got %d", update.FilesProcessed)
+	}
+	if update.TotalFiles != 200000 {
+		t.Errorf("expected 200000 total files, got %d", update.TotalFiles)
+	}
+	// 1.5 TB = 1.5 * 1024^4 ≈ 1,649,267,441,664
+	if update.BytesProcessed < 1640000000000 || update.BytesProcessed > 1660000000000 {
+		t.Errorf("expected ~1.65T bytes processed, got %d", update.BytesProcessed)
+	}
+	// 2.0 TB = 2.0 * 1024^4 ≈ 2,199,023,255,552
+	if update.TotalBytes < 2190000000000 || update.TotalBytes > 2210000000000 {
+		t.Errorf("expected ~2.2T total bytes, got %d", update.TotalBytes)
+	}
+	if update.PercentComplete != 75 {
+		t.Errorf("expected 75%%, got %d", update.PercentComplete)
+	}
+	if update.Speed != "512.0 MB/s" {
+		t.Errorf("expected '512.0 MB/s', got %q", update.Speed)
+	}
+}
+
+func TestParseKopiaProgressLine_RestoreLowercase(t *testing.T) {
+	line := "processed 100 (50.0 MB) of 200 (100.0 MB) 10.0 MB/s (50.0%) remaining 5s."
+	update, ok := parseKopiaProgressLine(line)
+	if !ok {
+		t.Fatal("expected lowercase restore progress line to be parsed")
+	}
+	if update.FilesProcessed != 100 {
+		t.Errorf("expected 100 files, got %d", update.FilesProcessed)
+	}
+	if update.TotalFiles != 200 {
+		t.Errorf("expected 200 total files, got %d", update.TotalFiles)
+	}
+	if update.PercentComplete != 50 {
+		t.Errorf("expected 50%%, got %d", update.PercentComplete)
+	}
+}
+
 // --- Size parsing tests ---
 
 func TestParseSizeString(t *testing.T) {
@@ -275,6 +400,52 @@ func TestProcessLogStream_ParsesProgress(t *testing.T) {
 	}
 	if last.FilesProcessed != 200 {
 		t.Errorf("expected 200 files, got %d", last.FilesProcessed)
+	}
+}
+
+func TestProcessLogStream_ParsesRestoreProgress(t *testing.T) {
+	lines := strings.Join([]string{
+		"Restoring to /data ...",
+		"Processed 500 (1.2 GB) of 1000 (2.5 GB) 100.0 MB/s (48.0%) remaining 13s.",
+		"Processed 1000 (2.5 GB) of 1000 (2.5 GB) 120.0 MB/s (100.0%) remaining 0s.",
+	}, "\n")
+
+	reader := strings.NewReader(lines)
+	monitor := &KopiaPodProgressMonitor{
+		stallTimeout:   1 * time.Minute,
+		updateInterval: 0,
+		log:            logrusTestEntry(),
+	}
+
+	var updates []ProgressUpdate
+	var mu sync.Mutex
+	callback := func(ctx context.Context, update ProgressUpdate) error {
+		mu.Lock()
+		defer mu.Unlock()
+		updates = append(updates, update)
+		return nil
+	}
+
+	err := monitor.processLogStream(context.Background(), monitor.log, reader, callback)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(updates) < 2 {
+		t.Fatalf("expected at least 2 restore updates, got %d", len(updates))
+	}
+
+	last := updates[len(updates)-1]
+	if last.PercentComplete != 100 {
+		t.Errorf("expected 100%%, got %d", last.PercentComplete)
+	}
+	if last.TotalFiles != 1000 {
+		t.Errorf("expected 1000 total files, got %d", last.TotalFiles)
+	}
+	if last.TotalBytes == 0 {
+		t.Error("expected non-zero TotalBytes")
 	}
 }
 
