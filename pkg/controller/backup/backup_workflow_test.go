@@ -310,10 +310,9 @@ func TestWaitForPodCompletion_Succeeded(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
-	// Timeout must be > podPollInterval (5s) to allow at least one poll cycle.
-	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 1*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -338,9 +337,9 @@ func TestWaitForPodCompletion_Failed(t *testing.T) {
 		},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
-	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected error for failed pod")
 	}
@@ -356,9 +355,9 @@ func TestWaitForPodCompletion_FailedNoContainerStatus(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
-	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected error for failed pod")
 	}
@@ -370,9 +369,9 @@ func TestWaitForPodCompletion_FailedNoContainerStatus(t *testing.T) {
 func TestWaitForPodCompletion_Deleted(t *testing.T) {
 	scheme := workflowTestScheme()
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
-	err := bw.waitForPodCompletion(context.Background(), "test-ns", "nonexistent", 10*time.Second)
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "nonexistent", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected error for deleted pod")
 	}
@@ -388,7 +387,7 @@ func TestWaitForPodCompletion_Timeout(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
 	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 100*time.Millisecond)
 	if err == nil {
@@ -406,12 +405,12 @@ func TestWaitForPodCompletion_ContextCancelled(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry(), PodPollInterval: testPollInterval}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := bw.waitForPodCompletion(ctx, "test-ns", "kopia-pod", 5*time.Second)
+	err := bw.waitForPodCompletion(ctx, "test-ns", "kopia-pod", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected context cancelled error")
 	}
@@ -884,6 +883,9 @@ func TestNewBackupWorkflow(t *testing.T) {
 	if bw.Log == nil {
 		t.Error("expected non-nil logger")
 	}
+	if bw.PodPollInterval != DefaultPodPollInterval {
+		t.Errorf("expected PodPollInterval %v, got %v", DefaultPodPollInterval, bw.PodPollInterval)
+	}
 }
 
 func TestSetPodLogReader(t *testing.T) {
@@ -988,9 +990,10 @@ func TestExecute_BackupLivePath(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Simulate pod completion in background — the kopia backup pod has prefix "dr-syncer-kopia-backup-".
@@ -1038,9 +1041,10 @@ func TestExecute_RestoreSuccess(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Simulate restore pod completion (restore pods don't need termination messages for snapshot ID).
@@ -1081,9 +1085,10 @@ func TestRunBackupPod_PodFails(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Simulate pod failure.
@@ -1122,9 +1127,10 @@ func TestExecute_RestorePodFails(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go simulatePodCompletion(ctx, k8sClient, "test-ns", "dr-syncer-kopia-restore-",
@@ -1180,9 +1186,10 @@ func TestExecuteLiveBackup_WithNodePinning(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go simulatePodCompletion(ctx, k8sClient, "test-ns", "dr-syncer-kopia-backup-",
@@ -1238,10 +1245,11 @@ func TestExecuteBackup_SnapshotIDFromLogs(t *testing.T) {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrusTestEntry(),
+		PodPollInterval: testPollInterval,
 		podLogReader:    &mockPodLogReader{logs: `{"id":"snap-from-log-reader"}`},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Pod succeeds with empty termination message.
@@ -1263,6 +1271,9 @@ func TestExecuteBackup_SnapshotIDFromLogs(t *testing.T) {
 }
 
 // --- test helpers ---
+
+// testPollInterval is a fast poll interval for tests to avoid 5-second waits.
+const testPollInterval = 50 * time.Millisecond
 
 func workflowTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()

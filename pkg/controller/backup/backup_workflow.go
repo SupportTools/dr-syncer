@@ -22,8 +22,8 @@ const (
 	// defaultPodTimeout is the maximum time to wait for a Kopia pod to complete.
 	defaultPodTimeout = 30 * time.Minute
 
-	// podPollInterval is how often to check pod status.
-	podPollInterval = 5 * time.Second
+	// DefaultPodPollInterval is how often to check pod status.
+	DefaultPodPollInterval = 5 * time.Second
 
 	// snapshotTimeout is how long to wait for a VolumeSnapshot to become ready.
 	snapshotTimeout = 5 * time.Minute
@@ -36,6 +36,7 @@ type BackupWorkflow struct {
 	Client          client.Client
 	SnapshotManager *replication.SnapshotManager
 	Log             *logrus.Entry
+	PodPollInterval time.Duration
 	podLogReader    PodLogReader
 }
 
@@ -45,6 +46,7 @@ func NewBackupWorkflow(k8sClient client.Client) *BackupWorkflow {
 		Client:          k8sClient,
 		SnapshotManager: replication.NewSnapshotManager(k8sClient),
 		Log:             logrus.WithField("component", "backup-workflow"),
+		PodPollInterval: DefaultPodPollInterval,
 	}
 }
 
@@ -411,9 +413,13 @@ func (bw *BackupWorkflow) findPVCNode(ctx context.Context, namespace, pvcName st
 
 // waitForPodCompletion polls a pod until it reaches Succeeded, Failed, or the timeout expires.
 func (bw *BackupWorkflow) waitForPodCompletion(ctx context.Context, namespace, podName string, timeout time.Duration) error {
+	pollInterval := bw.PodPollInterval
+	if pollInterval <= 0 {
+		pollInterval = DefaultPodPollInterval
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	ticker := time.NewTicker(podPollInterval)
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
