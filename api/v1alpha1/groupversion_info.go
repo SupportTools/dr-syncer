@@ -24,4 +24,5 @@ func init() {
 	SchemeBuilder.Register(&NamespaceMapping{}, &NamespaceMappingList{})
 	SchemeBuilder.Register(&ClusterMapping{}, &ClusterMappingList{})
 	SchemeBuilder.Register(&BackupRepository{}, &BackupRepositoryList{})
+	SchemeBuilder.Register(&VolumeBackupOperation{}, &VolumeBackupOperationList{})
 }
