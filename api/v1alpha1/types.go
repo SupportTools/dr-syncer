@@ -161,6 +161,79 @@ type PVCDataSyncConfig struct {
 	// rsync processes for improved throughput on large PVCs.
 	// +optional
 	ParallelConfig *ParallelRsyncConfig `json:"parallelConfig,omitempty"`
+
+	// BackupConfig enables the Kopia snapshot-based backup path for PVC data sync.
+	// When set and Enabled is true, PVC data is synced via S3 using Kopia instead of rsync.
+	// When nil or Enabled is false, the existing rsync-based sync is used (default behavior).
+	// +optional
+	BackupConfig *BackupConfig `json:"backupConfig,omitempty"`
+}
+
+// BackupConfig configures the Kopia backup path for PVC data synchronization.
+// This is an alternative to the rsync-based sync that uses S3 as an intermediary.
+type BackupConfig struct {
+	// Enabled switches PVC data sync from rsync to the Kopia backup path.
+	// +optional
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// BackupRepositoryRef references the BackupRepository resource to use for backups.
+	// The BackupRepository defines the S3 bucket, credentials, and encryption settings.
+	// +optional
+	BackupRepositoryRef *SecretReference `json:"backupRepositoryRef,omitempty"`
+
+	// DataAccessStrategy specifies how the backup workflow accesses PVC data.
+	// Auto (default) detects CSI snapshot support and falls back to live access.
+	// Snapshot forces CSI VolumeSnapshot usage (fails if not available).
+	// Live reads directly from the mounted PVC (no snapshot overhead).
+	// +optional
+	// +kubebuilder:default="Auto"
+	// +kubebuilder:validation:Enum=Auto;Snapshot;Live
+	DataAccessStrategy DataAccessStrategy `json:"dataAccessStrategy,omitempty"`
+
+	// Parallelism sets the number of parallel upload/download streams for Kopia.
+	// Higher values improve throughput for large PVCs at the cost of more CPU/memory.
+	// +optional
+	// +kubebuilder:default=4
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=16
+	Parallelism *int32 `json:"parallelism,omitempty"`
+
+	// CompressionAlgorithm specifies the compression algorithm for Kopia backups.
+	// +optional
+	// +kubebuilder:default="zstd"
+	// +kubebuilder:validation:Enum=zstd;s2;gzip;none
+	CompressionAlgorithm string `json:"compressionAlgorithm,omitempty"`
+
+	// StandbyPVCConfig configures warm standby PVCs on the DR cluster.
+	// When enabled, the controller maintains pre-restored PVCs for instant failover.
+	// +optional
+	StandbyPVCConfig *StandbyPVCConfig `json:"standbyPVCConfig,omitempty"`
+
+	// ScheduleOverride overrides the NamespaceMapping's schedule for backup operations.
+	// Uses cron syntax. If empty, the NamespaceMapping's schedule is used.
+	// +optional
+	// +kubebuilder:validation:Pattern=^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*/[0-9]+)\s+(\*|([0-9]|1[0-9]|2[0-3])|\*/[0-9]+)\s+(\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*/[0-9]+)\s+(\*|([1-9]|1[0-2])|\*/[0-9]+)\s+(\*|([0-6])|\*/[0-9]+)$
+	ScheduleOverride string `json:"scheduleOverride,omitempty"`
+}
+
+// StandbyPVCConfig configures warm standby PVCs on the DR cluster.
+type StandbyPVCConfig struct {
+	// Enabled enables standby PVC creation and maintenance on the DR cluster.
+	// +optional
+	// +kubebuilder:default=true
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// StorageClassName overrides the storage class for standby PVCs on the DR cluster.
+	// If empty, the source PVC's storage class is used (or mapped via StorageClassMappings).
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// AccessMode overrides the access mode for standby PVCs on the DR cluster.
+	// If empty, the source PVC's access mode is used (or mapped via AccessModeMappings).
+	// +optional
+	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadWriteMany;ReadOnlyMany
+	AccessMode string `json:"accessMode,omitempty"`
 }
 
 // SnapshotConfig configures snapshot-based PVC sync for point-in-time consistency
@@ -253,6 +326,56 @@ func (in *ParallelRsyncConfig) DeepCopy() *ParallelRsyncConfig {
 	return out
 }
 
+// DeepCopyInto copies BackupConfig into out
+func (in *BackupConfig) DeepCopyInto(out *BackupConfig) {
+	*out = *in
+	if in.BackupRepositoryRef != nil {
+		in, out := &in.BackupRepositoryRef, &out.BackupRepositoryRef
+		*out = new(SecretReference)
+		**out = **in
+	}
+	if in.Parallelism != nil {
+		in, out := &in.Parallelism, &out.Parallelism
+		*out = new(int32)
+		**out = **in
+	}
+	if in.StandbyPVCConfig != nil {
+		in, out := &in.StandbyPVCConfig, &out.StandbyPVCConfig
+		*out = new(StandbyPVCConfig)
+		(*in).DeepCopyInto(*out)
+	}
+}
+
+// DeepCopy creates a deep copy of BackupConfig
+func (in *BackupConfig) DeepCopy() *BackupConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(BackupConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto copies StandbyPVCConfig into out
+func (in *StandbyPVCConfig) DeepCopyInto(out *StandbyPVCConfig) {
+	*out = *in
+	if in.Enabled != nil {
+		in, out := &in.Enabled, &out.Enabled
+		*out = new(bool)
+		**out = **in
+	}
+}
+
+// DeepCopy creates a deep copy of StandbyPVCConfig
+func (in *StandbyPVCConfig) DeepCopy() *StandbyPVCConfig {
+	if in == nil {
+		return nil
+	}
+	out := new(StandbyPVCConfig)
+	in.DeepCopyInto(out)
+	return out
+}
+
 // DeepCopyInto copies PVCDataSyncConfig into out
 func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 	*out = *in
@@ -294,6 +417,11 @@ func (in *PVCDataSyncConfig) DeepCopyInto(out *PVCDataSyncConfig) {
 	if in.ParallelConfig != nil {
 		in, out := &in.ParallelConfig, &out.ParallelConfig
 		*out = new(ParallelRsyncConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.BackupConfig != nil {
+		in, out := &in.BackupConfig, &out.BackupConfig
+		*out = new(BackupConfig)
 		(*in).DeepCopyInto(*out)
 	}
 }
