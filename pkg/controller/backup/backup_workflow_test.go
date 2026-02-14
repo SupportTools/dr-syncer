@@ -1,0 +1,915 @@
+package backup
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
+	"github.com/supporttools/dr-syncer/pkg/controller/replication"
+)
+
+// --- parseKopiaSnapshotID tests (table-driven) ---
+
+func TestParseKopiaSnapshotID(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantID     string
+		wantErr    bool
+		errContain string
+	}{
+		{
+			name:   "valid JSON with id field",
+			input:  `{"id":"k1234567890abcdef","rootEntry":{"obj":"x123abc"}}`,
+			wantID: "k1234567890abcdef",
+		},
+		{
+			name:   "valid JSON with only rootEntry",
+			input:  `{"rootEntry":{"obj":"x123abc"}}`,
+			wantID: "x123abc",
+		},
+		{
+			name:   "JSON on last line after progress lines",
+			input:  "Snapshotting data...\nProgress 50%\n{\"id\":\"snap-final\",\"rootEntry\":{\"obj\":\"obj1\"}}",
+			wantID: "snap-final",
+		},
+		{
+			name:   "JSON on last line with trailing newline",
+			input:  "{\"id\":\"snap-123\"}\n",
+			wantID: "snap-123",
+		},
+		{
+			name:   "multiple JSON lines picks last valid",
+			input:  "{\"id\":\"snap-old\"}\nsome text\n{\"id\":\"snap-new\"}",
+			wantID: "snap-new",
+		},
+		{
+			name:       "no JSON in output",
+			input:      "just plain text\nno json here",
+			wantErr:    true,
+			errContain: "no valid Kopia snapshot JSON",
+		},
+		{
+			name:       "empty output",
+			input:      "",
+			wantErr:    true,
+			errContain: "no valid Kopia snapshot JSON",
+		},
+		{
+			name:       "JSON without id or rootEntry",
+			input:      `{"description":"some snapshot"}`,
+			wantErr:    true,
+			errContain: "no valid Kopia snapshot JSON",
+		},
+		{
+			name:       "malformed JSON",
+			input:      `{"id": broken}`,
+			wantErr:    true,
+			errContain: "no valid Kopia snapshot JSON",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := parseKopiaSnapshotID(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if tt.errContain != "" && !strings.Contains(err.Error(), tt.errContain) {
+					t.Errorf("expected error containing %q, got %q", tt.errContain, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("expected ID %q, got %q", tt.wantID, id)
+			}
+		})
+	}
+}
+
+// --- findPVCNode tests ---
+
+func TestFindPVCNode(t *testing.T) {
+	scheme := workflowTestScheme()
+
+	tests := []struct {
+		name       string
+		pods       []client.Object
+		pvcName    string
+		namespace  string
+		wantNode   string
+		wantErr    bool
+		errContain string
+	}{
+		{
+			name: "running pod mounting PVC found",
+			pods: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						NodeName: "worker-1",
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "my-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			pvcName:   "my-pvc",
+			namespace: "test-ns",
+			wantNode:  "worker-1",
+		},
+		{
+			name: "pod exists but not running",
+			pods: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "pending-pod", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "my-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodPending},
+				},
+			},
+			pvcName:    "my-pvc",
+			namespace:  "test-ns",
+			wantErr:    true,
+			errContain: "no running pod found",
+		},
+		{
+			name: "running pod without NodeName",
+			pods: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "no-node-pod", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						NodeName: "",
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "my-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			pvcName:    "my-pvc",
+			namespace:  "test-ns",
+			wantErr:    true,
+			errContain: "no running pod found",
+		},
+		{
+			name:       "no pods in namespace",
+			pods:       nil,
+			pvcName:    "my-pvc",
+			namespace:  "test-ns",
+			wantErr:    true,
+			errContain: "no running pod found",
+		},
+		{
+			name: "running pod mounting different PVC",
+			pods: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "other-pod", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						NodeName: "worker-2",
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "other-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			pvcName:    "my-pvc",
+			namespace:  "test-ns",
+			wantErr:    true,
+			errContain: "no running pod found",
+		},
+		{
+			name: "multiple pods first match wins",
+			pods: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						NodeName: "node-a",
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "my-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: "pod-b", Namespace: "test-ns"},
+					Spec: corev1.PodSpec{
+						NodeName: "node-b",
+						Volumes: []corev1.Volume{
+							{
+								Name: "data",
+								VolumeSource: corev1.VolumeSource{
+									PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+										ClaimName: "my-pvc",
+									},
+								},
+							},
+						},
+					},
+					Status: corev1.PodStatus{Phase: corev1.PodRunning},
+				},
+			},
+			pvcName:   "my-pvc",
+			namespace: "test-ns",
+			wantNode:  "node-a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if len(tt.pods) > 0 {
+				builder = builder.WithObjects(tt.pods...)
+			}
+			k8sClient := builder.Build()
+
+			bw := &BackupWorkflow{
+				Client: k8sClient,
+				Log:    logrusTestEntry(),
+			}
+
+			node, err := bw.findPVCNode(context.Background(), tt.namespace, tt.pvcName)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContain != "" && !strings.Contains(err.Error(), tt.errContain) {
+					t.Errorf("expected error containing %q, got %q", tt.errContain, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if node != tt.wantNode {
+				t.Errorf("expected node %q, got %q", tt.wantNode, node)
+			}
+		})
+	}
+}
+
+// --- waitForPodCompletion tests ---
+
+func TestWaitForPodCompletion_Succeeded(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	// Timeout must be > podPollInterval (5s) to allow at least one poll cycle.
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWaitForPodCompletion_Failed(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodFailed,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 1,
+							Reason:   "Error",
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	if err == nil {
+		t.Fatal("expected error for failed pod")
+	}
+	if !strings.Contains(err.Error(), "exit code 1") {
+		t.Errorf("expected exit code in error, got: %v", err)
+	}
+}
+
+func TestWaitForPodCompletion_FailedNoContainerStatus(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 10*time.Second)
+	if err == nil {
+		t.Fatal("expected error for failed pod")
+	}
+	if !strings.Contains(err.Error(), "pod failed") {
+		t.Errorf("expected 'pod failed' in error, got: %v", err)
+	}
+}
+
+func TestWaitForPodCompletion_Deleted(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "nonexistent", 10*time.Second)
+	if err == nil {
+		t.Fatal("expected error for deleted pod")
+	}
+	if !strings.Contains(err.Error(), "was deleted") {
+		t.Errorf("expected 'was deleted' in error, got: %v", err)
+	}
+}
+
+func TestWaitForPodCompletion_Timeout(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	err := bw.waitForPodCompletion(context.Background(), "test-ns", "kopia-pod", 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("expected 'timed out' in error, got: %v", err)
+	}
+}
+
+func TestWaitForPodCompletion_ContextCancelled(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := bw.waitForPodCompletion(ctx, "test-ns", "kopia-pod", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected context cancelled error")
+	}
+}
+
+// --- extractSnapshotIDFromPodLogs tests ---
+
+func TestExtractSnapshotIDFromPodLogs_TerminationMessage(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  `{"id":"snap-from-termination","rootEntry":{"obj":"obj1"}}`,
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	id, err := bw.extractSnapshotIDFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "snap-from-termination" {
+		t.Errorf("expected 'snap-from-termination', got %q", id)
+	}
+}
+
+func TestExtractSnapshotIDFromPodLogs_FallbackToPodLogReader(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "", // empty termination message
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{
+		Client:       k8sClient,
+		Log:          logrusTestEntry(),
+		podLogReader: &mockPodLogReader{logs: `{"id":"snap-from-logs"}`},
+	}
+
+	id, err := bw.extractSnapshotIDFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "snap-from-logs" {
+		t.Errorf("expected 'snap-from-logs', got %q", id)
+	}
+}
+
+func TestExtractSnapshotIDFromPodLogs_NoPodLogReader(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "not json",
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	_, err := bw.extractSnapshotIDFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err == nil {
+		t.Fatal("expected error when no snapshot ID found")
+	}
+	if !strings.Contains(err.Error(), "no snapshot ID found") {
+		t.Errorf("expected 'no snapshot ID found', got: %v", err)
+	}
+}
+
+func TestExtractSnapshotIDFromPodLogs_NoContainerStatuses(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	_, err := bw.extractSnapshotIDFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err == nil {
+		t.Fatal("expected error when no container statuses")
+	}
+}
+
+func TestExtractSnapshotIDFromPodLogs_PodLogReaderError(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{{}},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{
+		Client:       k8sClient,
+		Log:          logrusTestEntry(),
+		podLogReader: &mockPodLogReader{err: fmt.Errorf("log stream broken")},
+	}
+
+	_, err := bw.extractSnapshotIDFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err == nil {
+		t.Fatal("expected error from pod log reader")
+	}
+	if !strings.Contains(err.Error(), "get pod logs") {
+		t.Errorf("expected 'get pod logs' error, got: %v", err)
+	}
+}
+
+// --- resolveDataAccessStrategy tests ---
+
+func TestResolveDataAccessStrategy_Live(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			DataAccessStrategy: drv1alpha1.DataAccessStrategyLive,
+			SourcePVC:          drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+		},
+	}
+
+	strategy, className, err := bw.resolveDataAccessStrategy(context.Background(), op)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strategy != drv1alpha1.DataAccessStrategyLive {
+		t.Errorf("expected Live strategy, got %s", strategy)
+	}
+	if className != "" {
+		t.Errorf("expected empty className for Live, got %q", className)
+	}
+}
+
+func TestResolveDataAccessStrategy_EmptyDefaultsToAuto(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			DataAccessStrategy: "", // empty → Auto
+			SourcePVC:          drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+		},
+	}
+
+	// Auto with no PVC → CanSnapshot will fail → fallback to Live
+	strategy, _, err := bw.resolveDataAccessStrategy(context.Background(), op)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strategy != drv1alpha1.DataAccessStrategyLive {
+		t.Errorf("expected fallback to Live, got %s", strategy)
+	}
+}
+
+func TestResolveDataAccessStrategy_SnapshotNotSupported(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			DataAccessStrategy: drv1alpha1.DataAccessStrategySnapshot,
+			SourcePVC:          drv1alpha1.PVCReference{Namespace: "test-ns", Name: "nonexistent"},
+		},
+	}
+
+	// Snapshot requested but PVC doesn't exist → error
+	_, _, err := bw.resolveDataAccessStrategy(context.Background(), op)
+	if err == nil {
+		t.Fatal("expected error when snapshot requested but PVC doesn't support it")
+	}
+}
+
+func TestResolveDataAccessStrategy_UnknownStrategy(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			DataAccessStrategy: "InvalidStrategy",
+			SourcePVC:          drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+		},
+	}
+
+	_, _, err := bw.resolveDataAccessStrategy(context.Background(), op)
+	if err == nil {
+		t.Fatal("expected error for unknown strategy")
+	}
+	if !strings.Contains(err.Error(), "unknown data access strategy") {
+		t.Errorf("expected 'unknown data access strategy' error, got: %v", err)
+	}
+}
+
+// --- failOperation tests ---
+
+func TestFailOperation(t *testing.T) {
+	scheme := workflowTestScheme()
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: "fail-op", Namespace: "test-ns"},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeBackup,
+			SourcePVC:     drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+			BackupRepositoryRef: drv1alpha1.SecretReference{
+				Name:      "repo",
+				Namespace: "test-ns",
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(op).
+		WithStatusSubresource(op).
+		Build()
+
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	opErr := fmt.Errorf("something went wrong")
+	returnedErr := bw.failOperation(context.Background(), op, opErr)
+
+	// failOperation should return the original error.
+	if returnedErr.Error() != opErr.Error() {
+		t.Errorf("expected original error returned, got: %v", returnedErr)
+	}
+
+	// Verify status was updated to Failed.
+	latest := &drv1alpha1.VolumeBackupOperation{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(op), latest); err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if latest.Status.Phase != drv1alpha1.VolumeBackupPhaseFailed {
+		t.Errorf("expected phase Failed, got %s", latest.Status.Phase)
+	}
+	if latest.Status.ErrorMessage != "something went wrong" {
+		t.Errorf("expected error message 'something went wrong', got %q", latest.Status.ErrorMessage)
+	}
+}
+
+// --- updateStatus tests ---
+
+func TestUpdateStatus(t *testing.T) {
+	scheme := workflowTestScheme()
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: "status-op", Namespace: "test-ns"},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeBackup,
+			SourcePVC:     drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+			BackupRepositoryRef: drv1alpha1.SecretReference{
+				Name:      "repo",
+				Namespace: "test-ns",
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(op).
+		WithStatusSubresource(op).
+		Build()
+
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	err := bw.updateStatus(context.Background(), op, func(status *drv1alpha1.VolumeBackupOperationStatus) {
+		status.Phase = drv1alpha1.VolumeBackupPhaseBackupInProgress
+		status.Message = "Working on it"
+		status.ProgressPercentage = 50
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	latest := &drv1alpha1.VolumeBackupOperation{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(op), latest); err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if latest.Status.Phase != drv1alpha1.VolumeBackupPhaseBackupInProgress {
+		t.Errorf("expected phase BackupInProgress, got %s", latest.Status.Phase)
+	}
+	if latest.Status.Message != "Working on it" {
+		t.Errorf("expected message 'Working on it', got %q", latest.Status.Message)
+	}
+	if latest.Status.ProgressPercentage != 50 {
+		t.Errorf("expected progress 50, got %d", latest.Status.ProgressPercentage)
+	}
+}
+
+// --- Execute dispatch tests ---
+
+func TestExecute_UnknownOperationType(t *testing.T) {
+	scheme := workflowTestScheme()
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: "unknown-op", Namespace: "test-ns"},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: "Unknown",
+			SourcePVC:     drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+			BackupRepositoryRef: drv1alpha1.SecretReference{
+				Name:      "repo",
+				Namespace: "test-ns",
+			},
+		},
+	}
+	repo := newTestBackupRepo()
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(op).
+		WithStatusSubresource(op).
+		Build()
+
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	err := bw.Execute(context.Background(), op, repo, DefaultKopiaPodConfig())
+	if err == nil {
+		t.Fatal("expected error for unknown operation type")
+	}
+	if !strings.Contains(err.Error(), "unknown operation type") {
+		t.Errorf("expected 'unknown operation type' error, got: %v", err)
+	}
+
+	// Verify status was set to Failed.
+	latest := &drv1alpha1.VolumeBackupOperation{}
+	if getErr := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(op), latest); getErr != nil {
+		t.Fatalf("get failed: %v", getErr)
+	}
+	if latest.Status.Phase != drv1alpha1.VolumeBackupPhaseFailed {
+		t.Errorf("expected phase Failed, got %s", latest.Status.Phase)
+	}
+}
+
+func TestExecute_RestoreWithoutSnapshotID(t *testing.T) {
+	scheme := workflowTestScheme()
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-no-snap", Namespace: "test-ns"},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeRestore,
+			SourcePVC:     drv1alpha1.PVCReference{Namespace: "test-ns", Name: "pvc-1"},
+			BackupRepositoryRef: drv1alpha1.SecretReference{
+				Name:      "repo",
+				Namespace: "test-ns",
+			},
+			SnapshotID: "", // missing
+		},
+	}
+	repo := newTestBackupRepo()
+
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(op).
+		WithStatusSubresource(op).
+		Build()
+
+	bw := &BackupWorkflow{
+		Client:          k8sClient,
+		SnapshotManager: replication.NewSnapshotManager(k8sClient),
+		Log:             logrusTestEntry(),
+	}
+
+	err := bw.Execute(context.Background(), op, repo, DefaultKopiaPodConfig())
+	if err == nil {
+		t.Fatal("expected error for restore without snapshot ID")
+	}
+	if !strings.Contains(err.Error(), "snapshotID is required") {
+		t.Errorf("expected 'snapshotID is required' error, got: %v", err)
+	}
+}
+
+// --- cleanupPod tests ---
+
+func TestCleanupPod_ExistingPod(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "cleanup-pod", Namespace: "test-ns"},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	bw.cleanupPod(context.Background(), "test-ns", "cleanup-pod")
+
+	// Verify pod was deleted.
+	result := &corev1.Pod{}
+	err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "test-ns", Name: "cleanup-pod"}, result)
+	if err == nil {
+		t.Error("expected pod to be deleted")
+	}
+}
+
+func TestCleanupPod_NonExistentPod(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	// Should not panic on NotFound.
+	bw.cleanupPod(context.Background(), "test-ns", "no-such-pod")
+}
+
+// --- NewBackupWorkflow tests ---
+
+func TestNewBackupWorkflow(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	bw := NewBackupWorkflow(k8sClient)
+	if bw == nil {
+		t.Fatal("expected non-nil BackupWorkflow")
+	}
+	if bw.Client != k8sClient {
+		t.Error("client not set correctly")
+	}
+	if bw.SnapshotManager == nil {
+		t.Error("expected non-nil SnapshotManager")
+	}
+	if bw.Log == nil {
+		t.Error("expected non-nil logger")
+	}
+}
+
+func TestSetPodLogReader(t *testing.T) {
+	bw := &BackupWorkflow{Log: logrusTestEntry()}
+	reader := &mockPodLogReader{logs: "test"}
+	bw.SetPodLogReader(reader)
+	if bw.podLogReader == nil {
+		t.Error("expected podLogReader to be set")
+	}
+}
+
+// --- test helpers ---
+
+func workflowTestScheme() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = corev1.AddToScheme(s)
+	_ = drv1alpha1.AddToScheme(s)
+	return s
+}
+
+type mockPodLogReader struct {
+	logs string
+	err  error
+}
+
+func (m *mockPodLogReader) GetPodLogs(ctx context.Context, namespace, podName, containerName string) (string, error) {
+	return m.logs, m.err
+}
+

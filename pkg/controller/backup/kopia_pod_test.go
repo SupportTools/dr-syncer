@@ -370,6 +370,228 @@ func TestBuildBackupPodAnnotations(t *testing.T) {
 	}
 }
 
+// --- buildBackupCommand / buildRestoreCommand tests ---
+
+func TestBuildBackupCommand(t *testing.T) {
+	s3Config := drv1alpha1.S3Config{
+		Endpoint: "s3.example.com",
+		Bucket:   "my-bucket",
+		Region:   "eu-west-1",
+	}
+	cfg := DefaultKopiaPodConfig()
+
+	cmd := buildBackupCommand(s3Config, cfg)
+	joined := joinCommand(cmd)
+
+	expectations := []string{
+		"kopia repository connect s3",
+		"--bucket=my-bucket",
+		"--endpoint=s3.example.com",
+		"--region=eu-west-1",
+		"--override-hostname=dr-syncer",
+		"--override-username=dr-syncer",
+		"kopia snapshot create /data",
+		"--parallel=4",
+		"--json",
+		"--compression=zstd",
+	}
+	for _, exp := range expectations {
+		if !strings.Contains(joined, exp) {
+			t.Errorf("expected %q in command, got: %s", exp, joined)
+		}
+	}
+}
+
+func TestBuildBackupCommand_NoRegion(t *testing.T) {
+	s3Config := drv1alpha1.S3Config{
+		Endpoint: "minio.local:9000",
+		Bucket:   "backups",
+	}
+	cfg := DefaultKopiaPodConfig()
+
+	cmd := buildBackupCommand(s3Config, cfg)
+	joined := joinCommand(cmd)
+
+	if strings.Contains(joined, "--region") {
+		t.Error("expected no --region flag when region is empty")
+	}
+}
+
+func TestBuildRestoreCommand(t *testing.T) {
+	s3Config := drv1alpha1.S3Config{
+		Endpoint:   "s3.example.com",
+		Bucket:     "my-bucket",
+		PathPrefix: "dr/snapshots",
+	}
+	cfg := DefaultKopiaPodConfig()
+	cfg.Parallelism = 8
+
+	cmd := buildRestoreCommand("snap-abc123", s3Config, cfg)
+	joined := joinCommand(cmd)
+
+	expectations := []string{
+		"kopia repository connect s3",
+		"--bucket=my-bucket",
+		"--prefix=dr/snapshots",
+		"kopia snapshot restore",
+		"snap-abc123",
+		"/data",
+		"--parallel=8",
+	}
+	for _, exp := range expectations {
+		if !strings.Contains(joined, exp) {
+			t.Errorf("expected %q in command, got: %s", exp, joined)
+		}
+	}
+	// Restore should NOT have --compression or --json.
+	if strings.Contains(joined, "--compression") {
+		t.Error("restore command should not have --compression")
+	}
+	if strings.Contains(joined, "--json") {
+		t.Error("restore command should not have --json")
+	}
+}
+
+func TestBuildS3ConnectArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   drv1alpha1.S3Config
+		contains []string
+		excludes []string
+	}{
+		{
+			name: "full config",
+			config: drv1alpha1.S3Config{
+				Bucket:     "test-bucket",
+				Endpoint:   "s3.test.com",
+				Region:     "us-east-1",
+				PathPrefix: "prefix/path",
+			},
+			contains: []string{
+				"--bucket=test-bucket",
+				"--endpoint=s3.test.com",
+				"--region=us-east-1",
+				"--prefix=prefix/path",
+			},
+		},
+		{
+			name: "minimal config",
+			config: drv1alpha1.S3Config{
+				Bucket:   "minimal",
+				Endpoint: "s3.minimal.com",
+			},
+			contains: []string{
+				"--bucket=minimal",
+				"--endpoint=s3.minimal.com",
+			},
+			excludes: []string{"--region", "--prefix"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildS3ConnectArgs(tt.config)
+			joined := strings.Join(args, " ")
+			for _, c := range tt.contains {
+				if !strings.Contains(joined, c) {
+					t.Errorf("expected %q in args, got: %s", c, joined)
+				}
+			}
+			for _, e := range tt.excludes {
+				if strings.Contains(joined, e) {
+					t.Errorf("did not expect %q in args, got: %s", e, joined)
+				}
+			}
+		})
+	}
+}
+
+func TestJoinCommand(t *testing.T) {
+	tests := []struct {
+		name   string
+		parts  []string
+		expect string
+	}{
+		{
+			name:   "empty",
+			parts:  []string{},
+			expect: "",
+		},
+		{
+			name:   "single part",
+			parts:  []string{"echo"},
+			expect: "echo",
+		},
+		{
+			name:   "multiple parts",
+			parts:  []string{"kopia", "snapshot", "create", "/data"},
+			expect: "kopia snapshot create /data",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := joinCommand(tt.parts)
+			if got != tt.expect {
+				t.Errorf("joinCommand(%v) = %q, want %q", tt.parts, got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestBuildEnvVars(t *testing.T) {
+	repo := newTestBackupRepo()
+	envs := buildEnvVars(repo)
+
+	// Should have exactly 5 env vars.
+	if len(envs) != 5 {
+		t.Fatalf("expected 5 env vars, got %d", len(envs))
+	}
+
+	// Verify all expected env vars exist.
+	names := make(map[string]bool)
+	for _, e := range envs {
+		names[e.Name] = true
+	}
+	for _, expected := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "KOPIA_PASSWORD", "KOPIA_CHECK_FOR_UPDATES", "HOME"} {
+		if !names[expected] {
+			t.Errorf("missing env var %s", expected)
+		}
+	}
+}
+
+func TestBuildLabels(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	labels := buildLabels(op, "backup")
+
+	if labels[labelKopiaName] != "dr-syncer-kopia" {
+		t.Errorf("expected name label dr-syncer-kopia, got %s", labels[labelKopiaName])
+	}
+	if labels[labelKopiaInstance] != op.Name {
+		t.Errorf("expected instance label %s, got %s", op.Name, labels[labelKopiaInstance])
+	}
+	if labels[labelKopiaComponent] != "backup" {
+		t.Errorf("expected component label backup, got %s", labels[labelKopiaComponent])
+	}
+	if labels[labelKopiaManagedBy] != "dr-syncer" {
+		t.Errorf("expected managed-by label dr-syncer, got %s", labels[labelKopiaManagedBy])
+	}
+}
+
+func TestBuildAnnotations(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeBackup, "")
+	annotations := buildAnnotations(op)
+
+	if annotations[annotationKopiaOperation] != op.Name {
+		t.Errorf("expected operation annotation %s, got %s", op.Name, annotations[annotationKopiaOperation])
+	}
+	if annotations[annotationKopiaPVC] != "test-pvc" {
+		t.Errorf("expected PVC annotation test-pvc, got %s", annotations[annotationKopiaPVC])
+	}
+	if _, ok := annotations[annotationKopiaCreatedAt]; !ok {
+		t.Error("expected created-at annotation")
+	}
+}
+
 // --- helpers ---
 
 func verifyVolume(t *testing.T, vol corev1.Volume, expectedName, expectedClaimName string) {

@@ -175,6 +175,62 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
+// --- Additional size parsing edge cases ---
+
+func TestApplyUnit_IECUnits(t *testing.T) {
+	tests := []struct {
+		val    float64
+		unit   string
+		expect int64
+	}{
+		{1, "KiB", 1024},
+		{1, "MiB", 1048576},
+		{1, "GiB", 1073741824},
+		{1, "TiB", 1099511627776},
+	}
+	for _, tt := range tests {
+		got := applyUnit(tt.val, tt.unit)
+		if got != tt.expect {
+			t.Errorf("applyUnit(%f, %q) = %d, want %d", tt.val, tt.unit, got, tt.expect)
+		}
+	}
+}
+
+func TestApplyUnit_UnknownUnit(t *testing.T) {
+	got := applyUnit(42, "XB")
+	if got != 42 {
+		t.Errorf("applyUnit(42, 'XB') = %d, want 42", got)
+	}
+}
+
+func TestParseSizeString_CombinedFormat(t *testing.T) {
+	result := parseSizeString("5.6GB")
+	if result < 6000000000 || result > 6100000000 {
+		t.Errorf("parseSizeString('5.6GB') = %d, expected ~6 billion", result)
+	}
+}
+
+func TestParseSizeString_InvalidInput(t *testing.T) {
+	result := parseSizeString("not-a-size")
+	if result != 0 {
+		t.Errorf("expected 0 for invalid input, got %d", result)
+	}
+}
+
+func TestParseCombinedSize_InvalidInput(t *testing.T) {
+	result := parseCombinedSize("notasize")
+	if result != 0 {
+		t.Errorf("expected 0 for invalid input, got %d", result)
+	}
+}
+
+func TestFormatBytes_Zero(t *testing.T) {
+	got := formatBytes(0)
+	if got != "0 B" {
+		t.Errorf("formatBytes(0) = %q, want '0 B'", got)
+	}
+}
+
 // --- processLogStream tests ---
 
 func TestProcessLogStream_ParsesProgress(t *testing.T) {
