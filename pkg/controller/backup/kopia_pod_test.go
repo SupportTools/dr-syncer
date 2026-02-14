@@ -701,6 +701,7 @@ func TestValidateCompressionAlgorithm(t *testing.T) {
 		{name: "zstd", algorithm: "zstd", expectErr: false},
 		{name: "zstd-fastest", algorithm: "zstd-fastest", expectErr: false},
 		{name: "zstd-better-compression", algorithm: "zstd-better-compression", expectErr: false},
+		{name: "zstd-best-compression", algorithm: "zstd-best-compression", expectErr: false},
 		{name: "s2-default", algorithm: "s2-default", expectErr: false},
 		{name: "s2-better", algorithm: "s2-better", expectErr: false},
 		{name: "s2-parallel-4", algorithm: "s2-parallel-4", expectErr: false},

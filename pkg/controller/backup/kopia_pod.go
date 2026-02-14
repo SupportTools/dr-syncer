@@ -29,6 +29,7 @@ var (
 		"zstd":                    true,
 		"zstd-fastest":            true,
 		"zstd-better-compression": true,
+		"zstd-best-compression":   true, // deprecated but still valid in Kopia
 		// s2 family
 		"s2-default":    true,
 		"s2-better":     true,
