@@ -2,6 +2,7 @@ package backup
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -11,6 +12,43 @@ import (
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
+
+var (
+	// snapshotIDPattern matches valid Kopia snapshot IDs: alphanumeric and hyphens only.
+	snapshotIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*$`)
+
+	// s3FieldPattern matches safe S3 configuration values: alphanumeric, hyphens, dots, slashes, colons, underscores.
+	s3FieldPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.\-/:_]*$`)
+)
+
+// ValidateSnapshotID checks that a Kopia snapshot ID contains only safe characters.
+// This prevents shell injection when the ID is used in pod command construction.
+func ValidateSnapshotID(snapshotID string) error {
+	if snapshotID == "" {
+		return fmt.Errorf("snapshot ID is empty")
+	}
+	if len(snapshotID) > 256 {
+		return fmt.Errorf("snapshot ID exceeds maximum length of 256")
+	}
+	if !snapshotIDPattern.MatchString(snapshotID) {
+		return fmt.Errorf("snapshot ID contains invalid characters: %q", snapshotID)
+	}
+	return nil
+}
+
+// ValidateS3Field checks that an S3 configuration field contains only safe characters.
+func ValidateS3Field(fieldName, value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 1024 {
+		return fmt.Errorf("S3 %s exceeds maximum length of 1024", fieldName)
+	}
+	if !s3FieldPattern.MatchString(value) {
+		return fmt.Errorf("S3 %s contains invalid characters: %q", fieldName, value)
+	}
+	return nil
+}
 
 const (
 	// DefaultKopiaImage is the default Kopia container image.
@@ -120,11 +158,19 @@ func BuildBackupPod(
 
 // BuildRestorePod creates a Pod spec for a Kopia restore (snapshot restore) operation.
 // The pod mounts the destination PVC at /data and runs `kopia snapshot restore <snapshotID> /data`.
+// Returns an error if the snapshot ID or S3 config fields contain unsafe characters.
 func BuildRestorePod(
 	operation *drv1alpha1.VolumeBackupOperation,
 	repo *drv1alpha1.BackupRepository,
 	cfg KopiaPodConfig,
-) *corev1.Pod {
+) (*corev1.Pod, error) {
+	if err := ValidateSnapshotID(operation.Spec.SnapshotID); err != nil {
+		return nil, fmt.Errorf("invalid snapshot ID: %w", err)
+	}
+	if err := validateS3Config(repo.Spec.S3Config); err != nil {
+		return nil, fmt.Errorf("invalid S3 config: %w", err)
+	}
+
 	podName := fmt.Sprintf("%s-restore-%s", kopiaPodPrefix, operation.Name)
 	if len(podName) > 63 {
 		podName = podName[:63]
@@ -138,7 +184,24 @@ func BuildRestorePod(
 
 	command := buildRestoreCommand(operation.Spec.SnapshotID, repo.Spec.S3Config, cfg)
 
-	return buildKopiaPod(podName, operation, repo, pvcRef, cfg, command, "restore")
+	return buildKopiaPod(podName, operation, repo, pvcRef, cfg, command, "restore"), nil
+}
+
+// validateS3Config checks that all S3 configuration fields used in shell commands are safe.
+func validateS3Config(s3Config drv1alpha1.S3Config) error {
+	if err := ValidateS3Field("bucket", s3Config.Bucket); err != nil {
+		return err
+	}
+	if err := ValidateS3Field("endpoint", s3Config.Endpoint); err != nil {
+		return err
+	}
+	if err := ValidateS3Field("region", s3Config.Region); err != nil {
+		return err
+	}
+	if err := ValidateS3Field("pathPrefix", s3Config.PathPrefix); err != nil {
+		return err
+	}
+	return nil
 }
 
 // buildKopiaPod constructs the core Pod resource shared between backup and restore.

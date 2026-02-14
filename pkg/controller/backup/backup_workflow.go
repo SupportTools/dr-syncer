@@ -345,8 +345,11 @@ func (bw *BackupWorkflow) executeRestore(ctx context.Context, operation *drv1alp
 		return bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
 	}
 
-	// Build the Kopia restore pod.
-	pod := BuildRestorePod(operation, repo, podConfig)
+	// Build the Kopia restore pod (validates snapshot ID and S3 config).
+	pod, err := BuildRestorePod(operation, repo, podConfig)
+	if err != nil {
+		return bw.failOperation(ctx, operation, fmt.Errorf("build restore pod: %w", err))
+	}
 
 	// Clean up pod on exit.
 	defer func() {

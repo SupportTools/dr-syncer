@@ -231,7 +231,10 @@ func TestBuildRestorePod(t *testing.T) {
 	repo := newTestBackupRepo()
 	cfg := DefaultKopiaPodConfig()
 
-	pod := BuildRestorePod(op, repo, cfg)
+	pod, err := BuildRestorePod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Restore pods should be in the destination PVC's namespace.
 	if pod.Namespace != "dest-ns" {
@@ -332,7 +335,10 @@ func TestBuildRestorePodFallsBackToSourcePVC(t *testing.T) {
 	repo := newTestBackupRepo()
 	cfg := DefaultKopiaPodConfig()
 
-	pod := BuildRestorePod(op, repo, cfg)
+	pod, err := BuildRestorePod(op, repo, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Should fall back to source PVC.
 	pvcSource := pod.Spec.Volumes[0].VolumeSource.PersistentVolumeClaim
@@ -594,6 +600,103 @@ func TestBuildAnnotations(t *testing.T) {
 	}
 	if _, ok := annotations[annotationKopiaCreatedAt]; !ok {
 		t.Error("expected created-at annotation")
+	}
+}
+
+// --- ValidateSnapshotID tests ---
+
+func TestValidateSnapshotID(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        string
+		expectErr bool
+	}{
+		{name: "valid hex ID", id: "k1234abcdef", expectErr: false},
+		{name: "valid with hyphens", id: "snap-abc-123", expectErr: false},
+		{name: "valid single char", id: "a", expectErr: false},
+		{name: "valid long ID", id: "kf1e8a2b3c4d5e6f7890abcdef1234567890abcdef", expectErr: false},
+		{name: "empty", id: "", expectErr: true},
+		{name: "semicolon injection", id: "abc; rm -rf /", expectErr: true},
+		{name: "pipe injection", id: "abc|cat /etc/passwd", expectErr: true},
+		{name: "ampersand injection", id: "abc&&evil", expectErr: true},
+		{name: "dollar injection", id: "abc$(evil)", expectErr: true},
+		{name: "backtick injection", id: "abc`evil`", expectErr: true},
+		{name: "newline injection", id: "abc\nevil", expectErr: true},
+		{name: "space in ID", id: "abc def", expectErr: true},
+		{name: "starts with hyphen", id: "-abc", expectErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSnapshotID(tt.id)
+			if tt.expectErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateS3Field(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     string
+		value     string
+		expectErr bool
+	}{
+		{name: "valid bucket", field: "bucket", value: "my-bucket", expectErr: false},
+		{name: "valid endpoint", field: "endpoint", value: "s3.amazonaws.com", expectErr: false},
+		{name: "valid endpoint with port", field: "endpoint", value: "minio.local:9000", expectErr: false},
+		{name: "valid region", field: "region", value: "us-west-2", expectErr: false},
+		{name: "valid prefix with slashes", field: "pathPrefix", value: "cluster-a/backups/data", expectErr: false},
+		{name: "valid with underscores", field: "bucket", value: "my_bucket_name", expectErr: false},
+		{name: "empty is ok", field: "region", value: "", expectErr: false},
+		{name: "semicolon injection", field: "bucket", value: "bucket; rm -rf /", expectErr: true},
+		{name: "pipe injection", field: "endpoint", value: "s3.com|evil", expectErr: true},
+		{name: "dollar injection", field: "region", value: "$(evil)", expectErr: true},
+		{name: "backtick injection", field: "bucket", value: "`evil`", expectErr: true},
+		{name: "starts with hyphen", field: "bucket", value: "-badname", expectErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateS3Field(tt.field, tt.value)
+			if tt.expectErr && err == nil {
+				t.Error("expected error, got nil")
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuildRestorePodRejectsInvalidSnapshotID(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeRestore, "; rm -rf /")
+	repo := newTestBackupRepo()
+	cfg := DefaultKopiaPodConfig()
+
+	_, err := BuildRestorePod(op, repo, cfg)
+	if err == nil {
+		t.Fatal("expected error for shell injection in snapshot ID")
+	}
+	if !strings.Contains(err.Error(), "invalid snapshot ID") {
+		t.Errorf("expected 'invalid snapshot ID' in error, got: %v", err)
+	}
+}
+
+func TestBuildRestorePodRejectsInvalidS3Config(t *testing.T) {
+	op := newTestOperation(drv1alpha1.OperationTypeRestore, "validsnap123")
+	repo := newTestBackupRepo()
+	repo.Spec.S3Config.Bucket = "bucket; evil"
+	cfg := DefaultKopiaPodConfig()
+
+	_, err := BuildRestorePod(op, repo, cfg)
+	if err == nil {
+		t.Fatal("expected error for shell injection in S3 bucket")
+	}
+	if !strings.Contains(err.Error(), "invalid S3 config") {
+		t.Errorf("expected 'invalid S3 config' in error, got: %v", err)
 	}
 }
 
