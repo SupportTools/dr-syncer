@@ -86,11 +86,11 @@ spec:
     region: us-east-1
     pathPrefix: cluster-prod/
     credentialsSecretRef:
-      name: s3-credentials          # Secret with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+      name: s3-credentials          # Secret with keys: accessKeyID, secretAccessKey
       namespace: dr-syncer-system
   kopiaConfig:
     encryptionSecretRef:
-      name: kopia-encryption        # Secret with KOPIA_PASSWORD
+      name: kopia-encryption        # Secret with key: password
       namespace: dr-syncer-system
     compressionAlgorithm: zstd
   retentionPolicy:
@@ -342,8 +342,9 @@ kopia snapshot restore <snapshot-id> /data \
 - Volumes: PVC at `/data`, EmptyDir for Kopia cache at `/home/kopia`, EmptyDir for temp at `/tmp/kopia`
 
 **Environment variables** (from Secrets):
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` from S3 credentials secret
-- `KOPIA_PASSWORD` from Kopia encryption secret
+- `AWS_ACCESS_KEY_ID` from S3 credentials secret key `accessKeyID`
+- `AWS_SECRET_ACCESS_KEY` from S3 credentials secret key `secretAccessKey`
+- `KOPIA_PASSWORD` from Kopia encryption secret key `password`
 
 **Input validation:**
 - S3 fields validated against `s3FieldPattern` (alphanumeric, hyphens, dots, slashes)

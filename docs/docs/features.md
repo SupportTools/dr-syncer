@@ -602,8 +602,8 @@ spec:
 ```
 
 Required secrets:
-- **S3 credentials**: Secret with `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys
-- **Kopia encryption**: Secret with `KOPIA_PASSWORD` key
+- **S3 credentials**: Secret with `accessKeyID` and `secretAccessKey` keys (mapped to env vars `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`)
+- **Kopia encryption**: Secret with `password` key (mapped to env var `KOPIA_PASSWORD`)
 
 ### Standby PVCs
 
