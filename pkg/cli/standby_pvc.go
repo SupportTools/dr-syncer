@@ -149,7 +149,7 @@ func updateWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 
 	for i := range statefulsets.Items {
 		sts := &statefulsets.Items[i]
-		if hasVolumeClaimTemplates(sts) {
+		if hasVolumeClaimTemplates(sts) && vctMappingOverlap(sts, pvcMapping) {
 			log.Warnf("StatefulSet %s uses volumeClaimTemplates which are immutable and cannot be rewritten during cutover; PVCs provisioned by volumeClaimTemplates require manual intervention", sts.Name)
 		}
 		if rewriteVolumes(&sts.Spec.Template.Spec, pvcMapping) {
@@ -211,7 +211,7 @@ func revertWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 
 	for i := range statefulsets.Items {
 		sts := &statefulsets.Items[i]
-		if hasVolumeClaimTemplates(sts) {
+		if hasVolumeClaimTemplates(sts) && vctMappingOverlap(sts, pvcMapping) {
 			log.Warnf("StatefulSet %s uses volumeClaimTemplates which are immutable and cannot be rewritten during failback; PVCs provisioned by volumeClaimTemplates require manual intervention", sts.Name)
 		}
 		if rewriteVolumes(&sts.Spec.Template.Spec, pvcMapping) {
@@ -230,6 +230,22 @@ func revertWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 // hasVolumeClaimTemplates checks if a StatefulSet defines volumeClaimTemplates.
 func hasVolumeClaimTemplates(sts *appsv1.StatefulSet) bool {
 	return len(sts.Spec.VolumeClaimTemplates) > 0
+}
+
+// vctMappingOverlap checks whether any VCT-provisioned PVC names for a StatefulSet
+// overlap with keys in pvcMapping. VCT PVCs follow the naming pattern
+// "<vct-name>-<sts-name>-<ordinal>", so we check if any mapping key has the prefix
+// "<vct-name>-<sts-name>-".
+func vctMappingOverlap(sts *appsv1.StatefulSet, pvcMapping map[string]string) bool {
+	for _, vct := range sts.Spec.VolumeClaimTemplates {
+		prefix := vct.Name + "-" + sts.Name + "-"
+		for key := range pvcMapping {
+			if strings.HasPrefix(key, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rewriteVolumes rewrites PVC claim names in a pod spec according to the given mapping.

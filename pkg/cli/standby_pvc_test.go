@@ -937,6 +937,92 @@ func TestRevertWorkloadPVCReferences_MixedVCTAndStaticPVC(t *testing.T) {
 	assert.Equal(t, "data", sts.Spec.VolumeClaimTemplates[0].Name)
 }
 
+// --- vctMappingOverlap tests ---
+
+func TestVctMappingOverlap_OverlapExists(t *testing.T) {
+	sts := newStatefulSetWithVCT("db", "test-ns")
+	// VCT template name is "data", STS name is "db", so VCT PVCs are "data-db-0", "data-db-1", etc.
+	mapping := map[string]string{
+		"data-db-0": "data-db-0-standby",
+	}
+	assert.True(t, vctMappingOverlap(sts, mapping))
+}
+
+func TestVctMappingOverlap_NoOverlap(t *testing.T) {
+	sts := newStatefulSetWithVCT("db", "test-ns")
+	// Mapping keys don't match VCT pattern "data-db-*".
+	mapping := map[string]string{
+		"shared-data": "shared-data-standby",
+		"logs":        "logs-standby",
+	}
+	assert.False(t, vctMappingOverlap(sts, mapping))
+}
+
+func TestVctMappingOverlap_EmptyVCTs(t *testing.T) {
+	sts := newStatefulSetWithPVC("db", "test-ns", "data")
+	mapping := map[string]string{
+		"data": "data-standby",
+	}
+	assert.False(t, vctMappingOverlap(sts, mapping))
+}
+
+func TestVctMappingOverlap_EmptyMapping(t *testing.T) {
+	sts := newStatefulSetWithVCT("db", "test-ns")
+	mapping := map[string]string{}
+	assert.False(t, vctMappingOverlap(sts, mapping))
+}
+
+func TestVctMappingOverlap_MultipleVCTs(t *testing.T) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "test-ns"},
+		Spec: appsv1.StatefulSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "db"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "postgres"}},
+				},
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "data"},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("10Gi"),
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "wal"},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("5Gi"),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Only second VCT ("wal") has an overlap.
+	mapping := map[string]string{
+		"wal-db-0": "wal-db-0-standby",
+	}
+	assert.True(t, vctMappingOverlap(sts, mapping))
+
+	// No VCT overlap.
+	mapping2 := map[string]string{
+		"other-pvc": "other-pvc-standby",
+	}
+	assert.False(t, vctMappingOverlap(sts, mapping2))
+}
+
 func TestValidateStandbyPVCsForCutover_MixedReadiness(t *testing.T) {
 	ns := "dr-ns"
 	objs := []runtime.Object{
