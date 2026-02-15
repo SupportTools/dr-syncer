@@ -142,6 +142,7 @@ run_all_tests() {
         "17_replication_modes"
         "21_clustermapping"
         "23_change_detection"
+        "25_backup-based-pvc-sync"
     )
     
     # Run each test case
