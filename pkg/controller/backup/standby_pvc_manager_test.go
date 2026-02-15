@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -471,5 +472,226 @@ func TestResolveResources_DefaultWhenMissing(t *testing.T) {
 	storageReq := result.Requests[corev1.ResourceStorage]
 	if storageReq.Cmp(resource.MustParse("1Gi")) != 0 {
 		t.Errorf("expected default 1Gi, got %s", storageReq.String())
+	}
+}
+
+func TestIsEnabled(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name   string
+		config *drv1alpha1.StandbyPVCConfig
+		want   bool
+	}{
+		{
+			name:   "nil config defaults to enabled",
+			config: nil,
+			want:   true,
+		},
+		{
+			name:   "config with nil Enabled defaults to enabled",
+			config: &drv1alpha1.StandbyPVCConfig{},
+			want:   true,
+		},
+		{
+			name:   "explicitly enabled",
+			config: &drv1alpha1.StandbyPVCConfig{Enabled: boolPtr(true)},
+			want:   true,
+		},
+		{
+			name:   "explicitly disabled",
+			config: &drv1alpha1.StandbyPVCConfig{Enabled: boolPtr(false)},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &StandbyPVCManagerImpl{StandbyConfig: tt.config}
+			if got := mgr.IsEnabled(); got != tt.want {
+				t.Errorf("IsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnsureStandbyPVC_NamingConvention(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	tests := []struct {
+		sourceName  string
+		wantStandby string
+	}{
+		{"my-data", "my-data-standby"},
+		{"postgres-db", "postgres-db-standby"},
+		{"a", "a-standby"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.sourceName, func(t *testing.T) {
+			ctx := context.Background()
+			sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: tt.sourceName}
+			spec := sourcePVCSpec("fast", corev1.ReadWriteOnce)
+
+			ref, _, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ref.Name != tt.wantStandby {
+				t.Errorf("got name %q, want %q", ref.Name, tt.wantStandby)
+			}
+			if !strings.HasSuffix(ref.Name, "-standby") {
+				t.Errorf("standby PVC name %q does not end with '-standby'", ref.Name)
+			}
+		})
+	}
+}
+
+func TestResolveStorageClass_NilStorageClassName(t *testing.T) {
+	mgr := &StandbyPVCManagerImpl{
+		StandbyConfig: nil,
+		PVCConfig:     nil,
+	}
+
+	spec := sourcePVCSpec("", corev1.ReadWriteOnce) // empty storage class → nil StorageClassName
+	result := mgr.resolveStorageClass(spec)
+
+	if result != "" {
+		t.Errorf("expected empty storage class, got %q", result)
+	}
+}
+
+func TestResolveStorageClass_MappingNoMatch(t *testing.T) {
+	mgr := &StandbyPVCManagerImpl{
+		StandbyConfig: nil,
+		PVCConfig: &drv1alpha1.PVCConfig{
+			StorageClassMappings: []drv1alpha1.StorageClassMapping{
+				{From: "gp2", To: "gp3"},
+			},
+		},
+	}
+
+	spec := sourcePVCSpec("ceph-rbd", corev1.ReadWriteOnce)
+	result := mgr.resolveStorageClass(spec)
+
+	if result != "ceph-rbd" {
+		t.Errorf("expected fallback to source 'ceph-rbd', got %q", result)
+	}
+}
+
+func TestResolveAccessModes_MappingNoMatch(t *testing.T) {
+	mgr := &StandbyPVCManagerImpl{
+		StandbyConfig: nil,
+		PVCConfig: &drv1alpha1.PVCConfig{
+			AccessModeMappings: []drv1alpha1.AccessModeMapping{
+				{From: "ReadWriteOnce", To: "ReadOnlyMany"},
+			},
+		},
+	}
+
+	spec := sourcePVCSpec("fast", corev1.ReadWriteMany)
+	result := mgr.resolveAccessModes(spec)
+
+	if len(result) != 1 || result[0] != corev1.ReadWriteMany {
+		t.Errorf("expected [ReadWriteMany] (unchanged), got %v", result)
+	}
+}
+
+func TestCleanupStandbyPVCs_EmptyNamespace(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	if err := mgr.CleanupStandbyPVCs(ctx, "empty-ns"); err != nil {
+		t.Fatalf("expected no error for empty namespace, got: %v", err)
+	}
+}
+
+func TestUpdateStandbyPVCStatus_PVCNotFound(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	pvcRef := drv1alpha1.PVCReference{Namespace: "dr-ns", Name: "nonexistent-standby"}
+
+	err := mgr.UpdateStandbyPVCStatus(ctx, pvcRef, "snap-123")
+	if err == nil {
+		t.Fatal("expected error when PVC not found")
+	}
+	if !strings.Contains(err.Error(), "get standby PVC") {
+		t.Errorf("expected error about getting standby PVC, got: %v", err)
+	}
+}
+
+func TestResolveResources_CopiesExistingStorage(t *testing.T) {
+	mgr := &StandbyPVCManagerImpl{}
+
+	spec := &corev1.PersistentVolumeClaimSpec{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("50Gi"),
+			},
+		},
+	}
+
+	result := mgr.resolveResources(spec)
+	storageReq := result.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("expected 50Gi, got %s", storageReq.String())
+	}
+}
+
+func TestEnsureStandbyPVC_CreatedAtAnnotation(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "ts-pvc"}
+	spec := sourcePVCSpec("fast", corev1.ReadWriteOnce)
+
+	ref, _, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := destClient.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ref.Namespace}, pvc); err != nil {
+		t.Fatalf("failed to get PVC: %v", err)
+	}
+
+	if pvc.Annotations[annotationCreatedAt] == "" {
+		t.Error("expected created-at annotation to be set")
+	}
+}
+
+func TestNewStandbyPVCManager(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	if mgr.DestClient != destClient {
+		t.Error("DestClient not set correctly")
+	}
+	if mgr.MappingName != "test-mapping" {
+		t.Errorf("expected mapping name 'test-mapping', got %q", mgr.MappingName)
+	}
+	if mgr.Log == nil {
+		t.Error("expected non-nil logger")
+	}
+	if mgr.StandbyConfig != nil {
+		t.Error("expected nil StandbyConfig")
+	}
+	if mgr.PVCConfig != nil {
+		t.Error("expected nil PVCConfig")
 	}
 }

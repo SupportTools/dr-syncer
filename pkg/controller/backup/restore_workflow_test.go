@@ -595,3 +595,424 @@ func TestAnnotateStandbyPVC(t *testing.T) {
 		t.Error("expected annotationLastRestoreTime to be set")
 	}
 }
+
+func TestAnnotateStandbyPVC_NonExistentPVC(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	rw := &RestoreWorkflow{
+		DestClient: destClient,
+		Log:        restoreTestLogger(),
+	}
+
+	// Should not panic; just logs a warning.
+	pvcRef := &drv1alpha1.PVCReference{Namespace: "dr-ns", Name: "nonexistent-pvc"}
+	rw.annotateStandbyPVC(context.Background(), pvcRef, "snap-123")
+}
+
+func TestUpdateCompletionStatus_WithStandbyPVCManager(t *testing.T) {
+	scheme := testScheme()
+	destNS := "dr-namespace"
+
+	// Create the restore operation and standby PVC on the dest cluster.
+	restoreOp := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-mapping-my-pvc-restore",
+			Namespace: destNS,
+		},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeRestore,
+			SnapshotID:    "snap-999",
+		},
+		Status: drv1alpha1.VolumeBackupOperationStatus{
+			Phase:            drv1alpha1.VolumeBackupPhaseRestoreComplete,
+			BytesTransferred: 1024 * 1024,
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(restoreOp).
+		WithStatusSubresource(restoreOp).
+		Build()
+
+	var updateCalled bool
+	var capturedSnapshotID string
+	mockMgr := &mockStandbyPVCManager{
+		updateFunc: func(ctx context.Context, pvcRef drv1alpha1.PVCReference, snapshotID string) error {
+			updateCalled = true
+			capturedSnapshotID = snapshotID
+			return nil
+		},
+	}
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		StandbyPVCMgr: mockMgr,
+		Log:           restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:   drv1alpha1.PVCReference{Namespace: "source-ns", Name: "my-pvc"},
+		MappingName: "test-mapping",
+	}
+	destPVCRef := &drv1alpha1.PVCReference{Namespace: destNS, Name: "my-pvc-standby"}
+
+	result, err := rw.updateCompletionStatus(context.Background(), req, "snap-999", destPVCRef, restoreOp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !updateCalled {
+		t.Error("expected StandbyPVCManager.UpdateStandbyPVCStatus to be called")
+	}
+	if capturedSnapshotID != "snap-999" {
+		t.Errorf("expected snapshot ID 'snap-999', got %q", capturedSnapshotID)
+	}
+	if result.SnapshotID != "snap-999" {
+		t.Errorf("expected result snapshot ID 'snap-999', got %q", result.SnapshotID)
+	}
+	if result.StandbyPVCRef.Name != "my-pvc-standby" {
+		t.Errorf("expected standby PVC name 'my-pvc-standby', got %q", result.StandbyPVCRef.Name)
+	}
+	if result.BytesRestored != 1024*1024 {
+		t.Errorf("expected bytes restored %d, got %d", 1024*1024, result.BytesRestored)
+	}
+}
+
+func TestUpdateCompletionStatus_WithoutStandbyPVCManager(t *testing.T) {
+	scheme := testScheme()
+	destNS := "dr-namespace"
+
+	restoreOp := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-mapping-my-pvc-restore",
+			Namespace: destNS,
+		},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeRestore,
+			SnapshotID:    "snap-888",
+		},
+		Status: drv1alpha1.VolumeBackupOperationStatus{
+			Phase:            drv1alpha1.VolumeBackupPhaseRestoreComplete,
+			BytesTransferred: 2048,
+		},
+	}
+
+	standbyPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-pvc-standby",
+			Namespace: destNS,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(restoreOp, standbyPVC).
+		WithStatusSubresource(restoreOp).
+		Build()
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		StandbyPVCMgr: nil, // no manager — should annotate directly
+		Log:           restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:   drv1alpha1.PVCReference{Namespace: "source-ns", Name: "my-pvc"},
+		MappingName: "test-mapping",
+	}
+	destPVCRef := &drv1alpha1.PVCReference{Namespace: destNS, Name: "my-pvc-standby"}
+
+	result, err := rw.updateCompletionStatus(context.Background(), req, "snap-888", destPVCRef, restoreOp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.BytesRestored != 2048 {
+		t.Errorf("expected bytes restored 2048, got %d", result.BytesRestored)
+	}
+
+	// Verify annotations were set directly on the PVC.
+	updated := &corev1.PersistentVolumeClaim{}
+	_ = destClient.Get(context.Background(), types.NamespacedName{Name: "my-pvc-standby", Namespace: destNS}, updated)
+
+	if updated.Annotations[annotationLastRestoreSnapID] != "snap-888" {
+		t.Errorf("expected annotation 'snap-888', got %q", updated.Annotations[annotationLastRestoreSnapID])
+	}
+}
+
+func TestUpdateCompletionStatus_ManagerUpdateFailsNonFatal(t *testing.T) {
+	scheme := testScheme()
+	destNS := "dr-namespace"
+
+	restoreOp := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-mapping-my-pvc-restore",
+			Namespace: destNS,
+		},
+		Status: drv1alpha1.VolumeBackupOperationStatus{
+			Phase: drv1alpha1.VolumeBackupPhaseRestoreComplete,
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(restoreOp).
+		WithStatusSubresource(restoreOp).
+		Build()
+
+	mockMgr := &mockStandbyPVCManager{
+		updateFunc: func(ctx context.Context, pvcRef drv1alpha1.PVCReference, snapshotID string) error {
+			return fmt.Errorf("PVC annotation update failed")
+		},
+	}
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		StandbyPVCMgr: mockMgr,
+		Log:           restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:   drv1alpha1.PVCReference{Namespace: "source-ns", Name: "my-pvc"},
+		MappingName: "test-mapping",
+	}
+	destPVCRef := &drv1alpha1.PVCReference{Namespace: destNS, Name: "my-pvc-standby"}
+
+	// StandbyPVCManager.UpdateStandbyPVCStatus failure is non-fatal.
+	result, err := rw.updateCompletionStatus(context.Background(), req, "snap-777", destPVCRef, restoreOp)
+	if err != nil {
+		t.Fatalf("expected no error (manager failure is non-fatal), got: %v", err)
+	}
+	if result.SnapshotID != "snap-777" {
+		t.Errorf("expected snapshot ID 'snap-777', got %q", result.SnapshotID)
+	}
+}
+
+func TestEnsureStandbyPVC_FetchesSourcePVCSpec(t *testing.T) {
+	scheme := testScheme()
+	sourceNS := "source-ns"
+	destNS := "dr-namespace"
+
+	// Source PVC exists in source cluster.
+	sourcePVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-pvc", Namespace: sourceNS},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("20Gi"),
+				},
+			},
+		},
+	}
+
+	var capturedSpec *corev1.PersistentVolumeClaimSpec
+	mockMgr := &mockStandbyPVCManager{
+		ensureFunc: func(ctx context.Context, src drv1alpha1.PVCReference, destNamespace string, spec *corev1.PersistentVolumeClaimSpec) (*drv1alpha1.PVCReference, bool, error) {
+			capturedSpec = spec
+			return &drv1alpha1.PVCReference{
+				Namespace: destNamespace,
+				Name:      src.Name + standbyPVCSuffix,
+			}, true, nil
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sourcePVC).Build()
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		SourceClient:  sourceClient,
+		StandbyPVCMgr: mockMgr,
+		Log:           restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:     drv1alpha1.PVCReference{Namespace: sourceNS, Name: "my-pvc"},
+		DestNamespace: destNS,
+		MappingName:   "test-mapping",
+		SourcePVCSpec: nil, // explicitly nil — workflow should fetch from source cluster
+	}
+
+	pvcRef, err := rw.ensureStandbyPVC(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pvcRef.Name != "my-pvc-standby" {
+		t.Errorf("expected PVC name 'my-pvc-standby', got %q", pvcRef.Name)
+	}
+	if capturedSpec == nil {
+		t.Fatal("expected spec to be fetched from source cluster")
+	}
+	storageReq := capturedSpec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("20Gi")) != 0 {
+		t.Errorf("expected fetched spec to have 20Gi storage, got %s", storageReq.String())
+	}
+}
+
+func TestEnsureStandbyPVC_SourcePVCNotFound(t *testing.T) {
+	scheme := testScheme()
+
+	mockMgr := &mockStandbyPVCManager{
+		ensureFunc: func(ctx context.Context, src drv1alpha1.PVCReference, destNamespace string, spec *corev1.PersistentVolumeClaimSpec) (*drv1alpha1.PVCReference, bool, error) {
+			return &drv1alpha1.PVCReference{Namespace: destNamespace, Name: src.Name + standbyPVCSuffix}, true, nil
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).Build() // no source PVC
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		SourceClient:  sourceClient,
+		StandbyPVCMgr: mockMgr,
+		Log:           restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:     drv1alpha1.PVCReference{Namespace: "source-ns", Name: "missing-pvc"},
+		DestNamespace: "dr-ns",
+		MappingName:   "test-mapping",
+		SourcePVCSpec: nil,
+	}
+
+	_, err := rw.ensureStandbyPVC(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error when source PVC not found")
+	}
+	if !strings.Contains(err.Error(), "get source PVC spec") {
+		t.Errorf("expected 'get source PVC spec' error, got: %v", err)
+	}
+}
+
+func TestNewRestoreWorkflow(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	rw := NewRestoreWorkflow(destClient, sourceClient)
+	if rw == nil {
+		t.Fatal("expected non-nil RestoreWorkflow")
+	}
+	if rw.DestClient != destClient {
+		t.Error("DestClient not set correctly")
+	}
+	if rw.SourceClient != sourceClient {
+		t.Error("SourceClient not set correctly")
+	}
+	if rw.BackupWf == nil {
+		t.Error("expected non-nil BackupWf")
+	}
+	if rw.Log == nil {
+		t.Error("expected non-nil Log")
+	}
+}
+
+func TestCleanupRestoreResources_NoOp(t *testing.T) {
+	scheme := testScheme()
+	destClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	rw := &RestoreWorkflow{
+		DestClient: destClient,
+		Log:        restoreTestLogger(),
+	}
+
+	op := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-restore-op", Namespace: "dr-ns"},
+	}
+
+	// Should not panic — currently a no-op.
+	rw.cleanupRestoreResources(context.Background(), op)
+}
+
+func TestResolveSnapshotID_BackupWithEmptySnapshotID(t *testing.T) {
+	scheme := testScheme()
+	sourceNS := "source-ns"
+
+	// Backup exists and is complete but has an empty KopiaSnapshotID.
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&drv1alpha1.VolumeBackupOperation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mapping-my-pvc-backup",
+				Namespace: sourceNS,
+				Labels: map[string]string{
+					labelMapping:   "test-mapping",
+					labelPVC:       "my-pvc",
+					labelOperation: "backup",
+				},
+			},
+			Status: drv1alpha1.VolumeBackupOperationStatus{
+				Phase:           drv1alpha1.VolumeBackupPhaseBackupComplete,
+				KopiaSnapshotID: "", // empty
+				CompletionTime:  &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+			},
+		},
+	).Build()
+
+	rw := &RestoreWorkflow{
+		SourceClient: sourceClient,
+		Log:          restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:   drv1alpha1.PVCReference{Namespace: sourceNS, Name: "my-pvc"},
+		MappingName: "test-mapping",
+	}
+
+	_, err := rw.resolveSnapshotID(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error when backup has empty snapshot ID")
+	}
+	if !strings.Contains(err.Error(), "no completed backup found") {
+		t.Errorf("expected 'no completed backup found' error, got: %v", err)
+	}
+}
+
+func TestResolveSnapshotID_BackupWithNilCompletionTime(t *testing.T) {
+	scheme := testScheme()
+	sourceNS := "source-ns"
+
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&drv1alpha1.VolumeBackupOperation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-mapping-my-pvc-backup",
+				Namespace: sourceNS,
+				Labels: map[string]string{
+					labelMapping:   "test-mapping",
+					labelPVC:       "my-pvc",
+					labelOperation: "backup",
+				},
+			},
+			Status: drv1alpha1.VolumeBackupOperationStatus{
+				Phase:           drv1alpha1.VolumeBackupPhaseBackupComplete,
+				KopiaSnapshotID: "snap-ok",
+				CompletionTime:  nil, // nil completion time
+			},
+		},
+	).Build()
+
+	rw := &RestoreWorkflow{
+		SourceClient: sourceClient,
+		Log:          restoreTestLogger(),
+	}
+
+	req := RestoreRequest{
+		SourcePVC:   drv1alpha1.PVCReference{Namespace: sourceNS, Name: "my-pvc"},
+		MappingName: "test-mapping",
+	}
+
+	_, err := rw.resolveSnapshotID(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error when backup has nil completion time")
+	}
+	if !strings.Contains(err.Error(), "no completed backup found") {
+		t.Errorf("expected 'no completed backup found' error, got: %v", err)
+	}
+}
