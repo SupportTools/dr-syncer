@@ -1019,6 +1019,36 @@ func TestEnsureStandbyPVC_ExpansionErrorReturnsExisting(t *testing.T) {
 	}
 }
 
+func TestCleanupStandbyPVCs_ListError(t *testing.T) {
+	scheme := testScheme()
+
+	// Intercept List calls: fail for PVC lists (used by ListStandbyPVCs),
+	// simulating API timeout, RBAC denial, or network failure.
+	destClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.PersistentVolumeClaimList); ok {
+					return fmt.Errorf("simulated API timeout listing PVCs")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	err := mgr.CleanupStandbyPVCs(ctx, "dr-ns")
+	if err == nil {
+		t.Fatal("expected error when ListStandbyPVCs fails")
+	}
+	if !strings.Contains(err.Error(), "list standby PVCs for cleanup") {
+		t.Errorf("expected error to contain 'list standby PVCs for cleanup', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "simulated API timeout listing PVCs") {
+		t.Errorf("expected wrapped cause in error, got: %v", err)
+	}
+}
+
 func TestEnsureStandbyPVC_NilSpecSkipsSizeCheck(t *testing.T) {
 	scheme := testScheme()
 	existingPVC := &corev1.PersistentVolumeClaim{
