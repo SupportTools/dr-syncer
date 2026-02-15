@@ -81,9 +81,30 @@ func (r *ModeReconciler) ReconcileScheduled(ctx context.Context, mapping *drv1al
 		mapping.Spec.SourceCluster, mapping.Spec.SourceNamespace,
 		mapping.Spec.DestinationCluster, mapping.Spec.DestinationNamespace))
 
+	// Check for sync-now annotation to force an immediate sync
+	syncNow := false
+	if mapping.ObjectMeta.Annotations != nil {
+		if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/sync-now"]; ok {
+			syncNow = true
+			log.Info(fmt.Sprintf("detected dr-syncer.io/sync-now annotation for scheduled mapping '%s', forcing immediate sync", mapping.Name))
+			delete(mapping.ObjectMeta.Annotations, "dr-syncer.io/sync-now")
+			if err := r.Client.Update(ctx, mapping); err != nil {
+				log.Errorf("failed to remove sync-now annotation: %v", err)
+			}
+		} else if _, ok := mapping.ObjectMeta.Annotations["dr-syncer.io/trigger-sync"]; ok {
+			syncNow = true
+			log.Info(fmt.Sprintf("detected deprecated dr-syncer.io/trigger-sync annotation for scheduled mapping '%s', forcing immediate sync", mapping.Name))
+			delete(mapping.ObjectMeta.Annotations, "dr-syncer.io/trigger-sync")
+			if err := r.Client.Update(ctx, mapping); err != nil {
+				log.Errorf("failed to remove trigger-sync annotation: %v", err)
+			}
+		}
+	}
+
 	// Check if we should skip this reconciliation because we already synced and next sync time is in the future
 	// This prevents status update watch events from triggering unnecessary reconciliations
-	if mapping.Status.Phase == drv1alpha1.SyncPhaseCompleted && mapping.Status.NextSyncTime != nil {
+	// Skip this check if sync-now was requested
+	if !syncNow && mapping.Status.Phase == drv1alpha1.SyncPhaseCompleted && mapping.Status.NextSyncTime != nil {
 		timeUntilNextSync := time.Until(mapping.Status.NextSyncTime.Time)
 		if timeUntilNextSync > 0 {
 			log.Info(fmt.Sprintf("skipping reconciliation for mapping '%s': already synced, next sync in %s",

@@ -168,6 +168,28 @@ cleanup_test_namespaces() {
     log_warning "Timeout waiting for namespace deletion, continuing anyway"
 }
 
+# Dump controller logs on test failure for diagnostics
+dump_controller_logs() {
+    local test_name="$1"
+    local logs_dir="${E2E_DIR}/logs"
+    mkdir -p "$logs_dir"
+
+    log_info "Dumping controller logs for failed test: $test_name"
+
+    # Controller pod logs (last 200 lines)
+    kubectl_controller -n dr-syncer logs -l app.kubernetes.io/name=dr-syncer --tail=200 \
+        > "${logs_dir}/${test_name}-controller.log" 2>&1 || true
+
+    # NamespaceMapping status
+    kubectl_controller -n dr-syncer get namespacemappings -o yaml \
+        > "${logs_dir}/${test_name}-namespacemappings.yaml" 2>&1 || true
+
+    # Print last few controller log lines to stdout for CI visibility
+    log_info "--- Controller logs (last 30 lines) ---"
+    kubectl_controller -n dr-syncer logs -l app.kubernetes.io/name=dr-syncer --tail=30 2>&1 || true
+    log_info "--- End controller logs ---"
+}
+
 # Run a single test case
 run_test_case() {
     local test_dir="$1"
@@ -216,6 +238,7 @@ run_test_case() {
             local duration
             duration=$(get_duration "$test_start")
             log_error "FAILED: $test_name ($duration)"
+            dump_controller_logs "$test_name"
             FAILED_TESTS=$((FAILED_TESTS + 1))
             return 1
         fi
@@ -230,6 +253,7 @@ run_test_case() {
             local duration
             duration=$(get_duration "$test_start")
             log_error "FAILED: $test_name ($duration)"
+            dump_controller_logs "$test_name"
             FAILED_TESTS=$((FAILED_TESTS + 1))
             return 1
         fi

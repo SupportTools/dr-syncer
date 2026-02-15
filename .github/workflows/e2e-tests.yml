@@ -41,8 +41,8 @@ on:
       - 'go.sum'
 
 concurrency:
-  group: e2e-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   e2e-tests:
@@ -136,8 +136,8 @@ jobs:
           E2E_DEBUG: ${{ github.event.inputs.debug == 'true' && 'true' || 'false' }}
           E2E_CLEANUP: 'false'
 
-      - name: Collect logs on failure
-        if: failure()
+      - name: Collect logs
+        if: always()
         run: |
           mkdir -p test-logs
 
