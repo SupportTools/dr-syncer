@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/supporttools/dr-syncer/pkg/agent/ssh"
+	"github.com/supporttools/dr-syncer/pkg/logging"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -81,8 +82,8 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to start SSH server: %v", err)
 	}
 
-	fmt.Println("Agent daemon started successfully")
-	fmt.Println("SSH proxy server running on port", d.sshServer.Port())
+	log.Info(logging.LogTagInfo + " Agent daemon started successfully")
+	log.WithField("port", d.sshServer.Port()).Info(logging.LogTagInfo + " SSH proxy server running")
 
 	return nil
 }
