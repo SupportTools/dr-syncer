@@ -32,7 +32,7 @@ The DR-Syncer controller resource needs scale with:
 
 | Cluster Size | Resources | Recommended CPU | Recommended Memory |
 |--------------|-----------|-----------------|-------------------|
-| **Small** | 1-2 clusters, <500 resources | 100m-200m | 128Mi-256Mi |
+| **Small** | 1-2 clusters, &lt;500 resources | 100m-200m | 128Mi-256Mi |
 | **Medium** | 3-5 clusters, 500-2000 resources | 200m-500m | 256Mi-512Mi |
 | **Large** | 5-10 clusters, 2000-10000 resources | 500m-1000m | 512Mi-1Gi |
 | **Enterprise** | 10+ clusters, 10000+ resources | 1000m-2000m | 1Gi-2Gi |
@@ -126,7 +126,7 @@ For large PVCs (10GB+), parallel rsync streams can significantly improve through
 
 | Streams | Best For | Throughput Improvement |
 |---------|----------|----------------------|
-| 1 (default) | PVCs < 10GB, simple directory structure | Baseline |
+| 1 (default) | PVCs under 10GB, simple directory structure | Baseline |
 | 2-3 | PVCs 10-50GB, moderate directory count | 1.5-2x |
 | 4-6 | PVCs 50-200GB, many top-level directories | 2-3x |
 | 7-8 | PVCs 200GB+, highly parallel workloads | 3-4x |
@@ -148,10 +148,10 @@ spec:
 
 | PVC Size | Directory Count | Recommended Streams |
 |----------|-----------------|---------------------|
-| < 10GB | Any | 1 (default) |
-| 10-50GB | < 10 | 2 |
+| Under 10GB | Any | 1 (default) |
+| 10-50GB | Under 10 | 2 |
 | 10-50GB | 10-50 | 3 |
-| 50-200GB | < 20 | 3 |
+| 50-200GB | Under 20 | 3 |
 | 50-200GB | 20-100 | 4-6 |
 | 200GB+ | 50+ | 6-8 |
 
@@ -262,7 +262,7 @@ spec:
       image: "supporttools/dr-syncer-rsync:latest"
 ```
 
-**Benefit**: Reduces sync initiation time from 1-5 minutes to <10 seconds.
+**Benefit**: Reduces sync initiation time from 1-5 minutes to under 10 seconds.
 
 ---
 
