@@ -323,7 +323,7 @@ func getWorkloadsUsingPVCs(ctx context.Context, client kubernetes.Interface, nam
 
 	var pvcSts []appsv1.StatefulSet
 	for _, sts := range statefulsets.Items {
-		if podSpecHasPVCs(&sts.Spec.Template.Spec) {
+		if podSpecHasPVCs(&sts.Spec.Template.Spec) || hasVolumeClaimTemplates(&sts) {
 			pvcSts = append(pvcSts, sts)
 		}
 	}

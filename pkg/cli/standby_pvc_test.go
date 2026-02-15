@@ -613,6 +613,38 @@ func TestGetWorkloadsUsingPVCs_FiltersCorrectly(t *testing.T) {
 	assert.Equal(t, "db", stsList[0].Name)
 }
 
+func TestGetWorkloadsUsingPVCs_VCTOnlyStatefulSet(t *testing.T) {
+	ns := "test-ns"
+	objs := []runtime.Object{
+		// VCT-only StatefulSet — should be returned.
+		newStatefulSetWithVCT("db", ns),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	deps, stsList, err := getWorkloadsUsingPVCs(ctx, client, ns)
+	require.NoError(t, err)
+	assert.Empty(t, deps)
+	assert.Len(t, stsList, 1)
+	assert.Equal(t, "db", stsList[0].Name)
+}
+
+func TestGetWorkloadsUsingPVCs_MixedVCTAndStaticPVC(t *testing.T) {
+	ns := "test-ns"
+	objs := []runtime.Object{
+		// StatefulSet with both VCTs and static PVCs — should be returned (only once).
+		newStatefulSetWithVCTAndPVC("db", ns, "shared-data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	deps, stsList, err := getWorkloadsUsingPVCs(ctx, client, ns)
+	require.NoError(t, err)
+	assert.Empty(t, deps)
+	assert.Len(t, stsList, 1)
+	assert.Equal(t, "db", stsList[0].Name)
+}
+
 func TestGetWorkloadsUsingPVCs_EmptyNamespace(t *testing.T) {
 	client := fakeclientset.NewSimpleClientset()
 	ctx := context.Background()
