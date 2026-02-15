@@ -1016,3 +1016,203 @@ func TestResolveSnapshotID_BackupWithNilCompletionTime(t *testing.T) {
 		t.Errorf("expected 'no completed backup found' error, got: %v", err)
 	}
 }
+
+// --- ExecuteRestore integration tests ---
+
+// TestExecuteRestore_HappyPath_FullWorkflow exercises the complete 8-step restore
+// workflow end-to-end with simulated pods and a mock StandbyPVCManager.
+//
+// Steps verified:
+//  1. Verify BackupRepository accessible on DR cluster
+//  2. Resolve snapshot ID from latest completed backup on source cluster
+//  3. Ensure standby PVC via StandbyPVCManager
+//  4. Create VolumeBackupOperation CR for restore on DR cluster
+//  5. Execute Kopia restore pod (simulated via goroutine)
+//  6. Progress monitoring (implicit in BackupWorkflow)
+//  7. Cleanup restore resources
+//  8. Update completion status and standby PVC annotations
+func TestExecuteRestore_HappyPath_FullWorkflow(t *testing.T) {
+	scheme := testScheme()
+	sourceNS := "source-ns"
+	destNS := "dr-namespace"
+
+	// --- Source cluster objects ---
+	// A completed backup operation with a valid snapshot ID.
+	completedBackup := &drv1alpha1.VolumeBackupOperation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-mapping-my-pvc-backup",
+			Namespace: sourceNS,
+			Labels: map[string]string{
+				labelMapping:   "test-mapping",
+				labelPVC:       "my-pvc",
+				labelOperation: "backup",
+			},
+		},
+		Spec: drv1alpha1.VolumeBackupOperationSpec{
+			OperationType: drv1alpha1.OperationTypeBackup,
+		},
+		Status: drv1alpha1.VolumeBackupOperationStatus{
+			Phase:           drv1alpha1.VolumeBackupPhaseBackupComplete,
+			KopiaSnapshotID: "snap-restore-001",
+			CompletionTime:  &metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+		},
+	}
+
+	sourceClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(completedBackup).
+		Build()
+
+	// --- Destination cluster objects ---
+	repo := restoreTestRepo(destNS)
+	secrets := restoreTestSecrets(destNS)
+
+	destObjs := []client.Object{repo}
+	for _, s := range secrets {
+		destObjs = append(destObjs, s)
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(destObjs...).
+		WithStatusSubresource(
+			&drv1alpha1.VolumeBackupOperation{},
+			&corev1.Pod{},
+		).
+		Build()
+
+	// --- Mock StandbyPVCManager ---
+	var ensureCalled bool
+	var updateCalled bool
+	var capturedSnapshotID string
+	mockMgr := &mockStandbyPVCManager{
+		ensureFunc: func(ctx context.Context, sourcePVC drv1alpha1.PVCReference, destNamespace string, spec *corev1.PersistentVolumeClaimSpec) (*drv1alpha1.PVCReference, bool, error) {
+			ensureCalled = true
+			return &drv1alpha1.PVCReference{
+				Namespace: destNamespace,
+				Name:      sourcePVC.Name + standbyPVCSuffix,
+			}, true, nil
+		},
+		updateFunc: func(ctx context.Context, pvcRef drv1alpha1.PVCReference, snapshotID string) error {
+			updateCalled = true
+			capturedSnapshotID = snapshotID
+			return nil
+		},
+	}
+
+	// --- Build RestoreWorkflow ---
+	// Create BackupWorkflow with fast poll interval pointing at the dest cluster.
+	backupWf := &BackupWorkflow{
+		Client:          destClient,
+		Log:             restoreTestLogger(),
+		PodPollInterval: 50 * time.Millisecond,
+	}
+
+	rw := &RestoreWorkflow{
+		DestClient:    destClient,
+		SourceClient:  sourceClient,
+		BackupWf:      backupWf,
+		StandbyPVCMgr: mockMgr,
+		Log:           restoreTestLogger(),
+	}
+
+	// Source PVC in source cluster (needed for fetching spec when SourcePVCSpec is nil).
+	sourcePVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-pvc", Namespace: sourceNS},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	if err := sourceClient.Create(context.Background(), sourcePVC); err != nil {
+		t.Fatalf("failed to create source PVC: %v", err)
+	}
+
+	req := RestoreRequest{
+		SourcePVC:     drv1alpha1.PVCReference{Namespace: sourceNS, Name: "my-pvc"},
+		DestNamespace: destNS,
+		MappingName:   "test-mapping",
+		Repository:    repo,
+		PodConfig:     DefaultKopiaPodConfig(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Simulate the Kopia restore pod reaching Succeeded state.
+	// The restore operation name will be "test-mapping-my-pvc-restore",
+	// so the pod name is "dr-syncer-kopia-restore-test-mapping-my-pvc-restore".
+	go simulatePodCompletion(ctx, destClient, destNS, "dr-syncer-kopia-restore-",
+		corev1.PodSucceeded, "")
+
+	// --- Execute ---
+	result, err := rw.ExecuteRestore(ctx, req)
+	if err != nil {
+		t.Fatalf("ExecuteRestore failed: %v", err)
+	}
+
+	// --- Verify result ---
+	if result.SnapshotID != "snap-restore-001" {
+		t.Errorf("expected snapshot ID 'snap-restore-001', got %q", result.SnapshotID)
+	}
+	if result.StandbyPVCRef == nil {
+		t.Fatal("expected non-nil StandbyPVCRef")
+	}
+	if result.StandbyPVCRef.Name != "my-pvc-standby" {
+		t.Errorf("expected standby PVC name 'my-pvc-standby', got %q", result.StandbyPVCRef.Name)
+	}
+	if result.StandbyPVCRef.Namespace != destNS {
+		t.Errorf("expected standby PVC namespace %q, got %q", destNS, result.StandbyPVCRef.Namespace)
+	}
+
+	// --- Verify Step 3: StandbyPVCManager.EnsureStandbyPVC was called ---
+	if !ensureCalled {
+		t.Error("expected StandbyPVCManager.EnsureStandbyPVC to be called")
+	}
+
+	// --- Verify Step 4: VolumeBackupOperation CR created on dest cluster ---
+	restoreOp := &drv1alpha1.VolumeBackupOperation{}
+	opKey := types.NamespacedName{
+		Name:      "test-mapping-my-pvc-restore",
+		Namespace: destNS,
+	}
+	if err := destClient.Get(ctx, opKey, restoreOp); err != nil {
+		t.Fatalf("expected restore VolumeBackupOperation to exist: %v", err)
+	}
+	if restoreOp.Spec.OperationType != drv1alpha1.OperationTypeRestore {
+		t.Errorf("expected operation type Restore, got %s", restoreOp.Spec.OperationType)
+	}
+	if restoreOp.Spec.SnapshotID != "snap-restore-001" {
+		t.Errorf("expected operation snapshot ID 'snap-restore-001', got %q", restoreOp.Spec.SnapshotID)
+	}
+	if restoreOp.Labels[labelOperation] != "restore" {
+		t.Errorf("expected label 'restore', got %q", restoreOp.Labels[labelOperation])
+	}
+
+	// --- Verify Step 5: Operation status after BackupWorkflow.Execute completed ---
+	if restoreOp.Status.Phase != drv1alpha1.VolumeBackupPhaseRestoreComplete {
+		t.Errorf("expected operation phase RestoreComplete, got %s", restoreOp.Status.Phase)
+	}
+	if restoreOp.Status.CompletionTime == nil {
+		t.Error("expected CompletionTime to be set on restore operation")
+	}
+	if restoreOp.Status.ProgressPercentage != 100 {
+		t.Errorf("expected progress 100, got %d", restoreOp.Status.ProgressPercentage)
+	}
+
+	// BytesRestored is 0 because BackupWorkflow.executeRestore does not extract
+	// bytes from restore pods (only backup operations extract snapshot stats).
+	if result.BytesRestored != 0 {
+		t.Errorf("expected BytesRestored 0 for restore operation, got %d", result.BytesRestored)
+	}
+
+	// --- Verify Step 8: StandbyPVCManager.UpdateStandbyPVCStatus was called ---
+	if !updateCalled {
+		t.Error("expected StandbyPVCManager.UpdateStandbyPVCStatus to be called")
+	}
+	if capturedSnapshotID != "snap-restore-001" {
+		t.Errorf("expected update snapshot ID 'snap-restore-001', got %q", capturedSnapshotID)
+	}
+}
