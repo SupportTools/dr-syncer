@@ -22,6 +22,7 @@ const (
 // executeStageModeSync handles the Stage mode operation:
 // 1. Synchronize resources from source to destination
 // 2. Scale down deployments in destination
+// 3. If using standby PVCs, report their readiness status
 func executeStageModeSync(
 	ctx context.Context,
 	sourceClient kubernetes.Interface,
@@ -44,8 +45,15 @@ func executeStageModeSync(
 		return fmt.Errorf("failed to scale down deployments in destination: %v", err)
 	}
 
-	// Handle PVC data migration if enabled
-	if config.MigratePVCData {
+	// Handle PVC data: standby PVC path or pv-migrate path
+	if config.UseStandbyPVCs {
+		log.Info("Standby PVC mode enabled - checking standby PVC readiness")
+		standbyPVCs, err := listStandbyPVCs(ctx, destClient, config.DestNamespace)
+		if err != nil {
+			return fmt.Errorf("failed to list standby PVCs: %v", err)
+		}
+		reportStandbyPVCStatus(standbyPVCs)
+	} else if config.MigratePVCData {
 		log.Info("PVC data migration is enabled")
 		if err := migratePVCData(ctx, sourceClient, destClient, config); err != nil {
 			return fmt.Errorf("failed to migrate PVC data: %v", err)
@@ -58,8 +66,9 @@ func executeStageModeSync(
 
 // executeCutoverModeSync handles the Cutover mode operation:
 // 1. Synchronize resources from source to destination
-// 2. Scale down deployments in source
-// 3. Scale up deployments in destination
+// 2. If using standby PVCs, update workload PVC references to standby PVCs
+// 3. Scale down deployments in source
+// 4. Scale up deployments in destination
 func executeCutoverModeSync(
 	ctx context.Context,
 	sourceClient kubernetes.Interface,
@@ -74,6 +83,23 @@ func executeCutoverModeSync(
 	// Sync resources from source to destination
 	if err := syncResources(ctx, sourceClient, destClient, sourceDynamicClient, destDynamicClient, config); err != nil {
 		return fmt.Errorf("failed to sync resources: %v", err)
+	}
+
+	// Handle standby PVC cutover: update workload volume references before scaling up
+	if config.UseStandbyPVCs {
+		log.Info("Standby PVC mode enabled - validating standby PVCs for cutover")
+		standbyPVCs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, config.SourceNamespace, config.DestNamespace)
+		if err != nil {
+			return fmt.Errorf("standby PVC validation failed: %v", err)
+		}
+		reportStandbyPVCStatus(standbyPVCs)
+
+		log.Info("Updating destination workloads to mount standby PVCs")
+		updated, err := updateWorkloadPVCReferences(ctx, destClient, config.DestNamespace, standbyPVCs)
+		if err != nil {
+			return fmt.Errorf("failed to update workload PVC references: %v", err)
+		}
+		log.Infof("Updated %d workload(s) to use standby PVCs", updated)
 	}
 
 	// Annotate source deployments with original replica counts before scaling down
@@ -94,8 +120,8 @@ func executeCutoverModeSync(
 		return fmt.Errorf("failed to scale up deployments in destination: %v", err)
 	}
 
-	// Handle final PVC data migration if enabled
-	if config.MigratePVCData {
+	// Handle final PVC data migration if enabled (only for non-standby path)
+	if !config.UseStandbyPVCs && config.MigratePVCData {
 		log.Info("PVC data migration is enabled")
 		if err := migratePVCData(ctx, sourceClient, destClient, config); err != nil {
 			return fmt.Errorf("failed to migrate PVC data: %v", err)
@@ -107,9 +133,10 @@ func executeCutoverModeSync(
 }
 
 // executeFailbackModeSync handles the Failback mode operation:
-// 1. Optionally reverse sync specific resources
-// 2. Scale down deployments in destination
-// 3. Scale up deployments in source
+// 1. If using standby PVCs, revert workload PVC references from standby back to originals
+// 2. Optionally reverse sync specific resources
+// 3. Scale down deployments in destination
+// 4. Scale up deployments in source
 func executeFailbackModeSync(
 	ctx context.Context,
 	sourceClient kubernetes.Interface,
@@ -121,8 +148,26 @@ func executeFailbackModeSync(
 	log := logging.SetupLogging()
 	log.Info("Executing Failback mode sync")
 
-	// Optionally reverse migrate PVC data
-	if config.ReverseMigratePVCData {
+	// Revert standby PVC references before scaling down destination
+	if config.UseStandbyPVCs {
+		log.Info("Standby PVC mode enabled - reverting workload PVC references to originals")
+		standbyPVCs, err := listStandbyPVCs(ctx, destClient, config.DestNamespace)
+		if err != nil {
+			return fmt.Errorf("failed to list standby PVCs: %v", err)
+		}
+		if len(standbyPVCs) > 0 {
+			reverted, err := revertWorkloadPVCReferences(ctx, destClient, config.DestNamespace, standbyPVCs)
+			if err != nil {
+				return fmt.Errorf("failed to revert workload PVC references: %v", err)
+			}
+			log.Infof("Reverted %d workload(s) from standby PVCs to originals", reverted)
+		} else {
+			log.Warn("No standby PVCs found to revert")
+		}
+	}
+
+	// Optionally reverse migrate PVC data (only for non-standby path)
+	if !config.UseStandbyPVCs && config.ReverseMigratePVCData {
 		log.Info("Reverse PVC data migration is enabled")
 		if err := migratePVCData(ctx, destClient, sourceClient, &Config{
 			SourceKubeconfig: config.DestKubeconfig,
@@ -130,7 +175,7 @@ func executeFailbackModeSync(
 			SourceNamespace:  config.DestNamespace,
 			DestNamespace:    config.SourceNamespace,
 			MigratePVCData:   true,
-			PVMigrateFlags:   config.PVMigrateFlags, // Pass the PV migrate flags to reverse migration
+			PVMigrateFlags:   config.PVMigrateFlags,
 		}); err != nil {
 			return fmt.Errorf("failed to reverse migrate PVC data: %v", err)
 		}

@@ -35,6 +35,7 @@ func main() {
 	resourceTypes := flag.String("resource-types", "", "Comma-separated list of resource types to include (overrides defaults)")
 	excludeResourceTypes := flag.String("exclude-resource-types", "", "Comma-separated list of resource types to exclude")
 	pvMigrateFlags := flag.String("pv-migrate-flags", "", "Additional flags to pass to pv-migrate (e.g. \"--strategy rsync --lbsvc-timeout 10m\")")
+	useStandbyPVCs := flag.Bool("use-standby-pvcs", false, "Use standby PVCs maintained by the controller for cutover/failback instead of pv-migrate")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 
 	// Parse command line flags
@@ -128,6 +129,7 @@ func main() {
 		ResourceTypes:          resourceTypesList,
 		ExcludeResourceTypes:   excludeResourceTypesList,
 		PVMigrateFlags:         *pvMigrateFlags,
+		UseStandbyPVCs:         *useStandbyPVCs,
 	}
 
 	// Log configuration

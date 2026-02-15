@@ -18,6 +18,9 @@ type Config struct {
 
 	// PV-migrate options
 	PVMigrateFlags string // Additional flags to pass to pv-migrate
+
+	// Standby PVC options (backup-based sync path)
+	UseStandbyPVCs bool // When true, use standby PVCs maintained by the controller for cutover/failback
 }
 
 // Standard Kubernetes resources to sync by default
