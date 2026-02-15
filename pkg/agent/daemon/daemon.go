@@ -49,10 +49,10 @@ func (d *Daemon) InitKeySystem(ctx context.Context, client kubernetes.Interface)
 	secretName := "pvc-syncer-agent-keys"
 	_, err := client.CoreV1().Secrets(d.namespace).Get(ctx, secretName, metav1.GetOptions{})
 	if err == nil {
-		fmt.Printf("SSH key secret %s already exists in namespace %s\n", secretName, d.namespace)
+		log.WithField("secret", secretName).WithField("namespace", d.namespace).Info(logging.LogTagInfo + " SSH key secret already exists")
 	} else {
 		// Keys don't exist, generate them
-		fmt.Printf("SSH key secret %s does not exist in namespace %s, will be created by leader\n", secretName, d.namespace)
+		log.WithField("secret", secretName).WithField("namespace", d.namespace).Info(logging.LogTagInfo + " SSH key secret does not exist, will be created by leader")
 	}
 
 	// Schedule key rotation
