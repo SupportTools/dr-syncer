@@ -862,3 +862,210 @@ func TestCleanupStandbyPVCs_MultipleDeleteErrors(t *testing.T) {
 		t.Errorf("expected error about 2 failed PVCs, got: %v", err)
 	}
 }
+
+func TestEnsureStandbyPVC_ExistingSameSize(t *testing.T) {
+	scheme := testScheme()
+	existingPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:   "true",
+				labelManagedBy: labelManagedByValue,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+
+	patchCalled := false
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingPVC).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchCalled = true
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
+	spec := sourcePVCSpec("fast", corev1.ReadWriteOnce) // 10Gi — same as existing
+
+	ref, created, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatal("expected PVC to not be newly created")
+	}
+	if ref.Name != "data-pvc-standby" {
+		t.Fatalf("expected name 'data-pvc-standby', got %q", ref.Name)
+	}
+	if patchCalled {
+		t.Error("expected no patch when sizes match")
+	}
+}
+
+func TestEnsureStandbyPVC_ExistingSmallerExpands(t *testing.T) {
+	scheme := testScheme()
+	existingPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:   "true",
+				labelManagedBy: labelManagedByValue,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingPVC).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
+	// Source PVC grew to 20Gi.
+	spec := &corev1.PersistentVolumeClaimSpec{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("20Gi"),
+			},
+		},
+	}
+
+	ref, created, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", spec)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatal("expected PVC to not be newly created")
+	}
+	if ref.Name != "data-pvc-standby" {
+		t.Fatalf("expected name 'data-pvc-standby', got %q", ref.Name)
+	}
+
+	// Verify the standby PVC was patched to the new size.
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := destClient.Get(ctx, types.NamespacedName{Name: "data-pvc-standby", Namespace: "dr-ns"}, pvc); err != nil {
+		t.Fatalf("failed to get PVC: %v", err)
+	}
+	storageReq := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if storageReq.Cmp(resource.MustParse("20Gi")) != 0 {
+		t.Errorf("expected storage request 20Gi after expansion, got %s", storageReq.String())
+	}
+}
+
+func TestEnsureStandbyPVC_ExpansionErrorReturnsExisting(t *testing.T) {
+	scheme := testScheme()
+	existingPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:   "true",
+				labelManagedBy: labelManagedByValue,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("5Gi"),
+				},
+			},
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingPVC).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				return fmt.Errorf("volume expansion not supported")
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
+	spec := sourcePVCSpec("fast", corev1.ReadWriteOnce) // 10Gi > 5Gi existing
+
+	// Should NOT return an error — expansion failure is non-fatal.
+	ref, created, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", spec)
+	if err != nil {
+		t.Fatalf("expected no error on expansion failure, got: %v", err)
+	}
+	if created {
+		t.Fatal("expected PVC to not be newly created")
+	}
+	if ref.Name != "data-pvc-standby" {
+		t.Fatalf("expected name 'data-pvc-standby', got %q", ref.Name)
+	}
+}
+
+func TestEnsureStandbyPVC_NilSpecSkipsSizeCheck(t *testing.T) {
+	scheme := testScheme()
+	existingPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:   "true",
+				labelManagedBy: labelManagedByValue,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+
+	patchCalled := false
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingPVC).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchCalled = true
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
+
+	// Nil spec — should skip size check entirely.
+	ref, created, err := mgr.EnsureStandbyPVC(ctx, sourcePVC, "dr-ns", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if created {
+		t.Fatal("expected PVC to not be newly created")
+	}
+	if ref.Name != "data-pvc-standby" {
+		t.Fatalf("expected name 'data-pvc-standby', got %q", ref.Name)
+	}
+	if patchCalled {
+		t.Error("expected no patch when sourcePVCSpec is nil")
+	}
+}

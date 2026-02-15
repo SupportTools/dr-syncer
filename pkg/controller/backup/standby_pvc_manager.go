@@ -101,6 +101,7 @@ func (m *StandbyPVCManagerImpl) EnsureStandbyPVC(
 	err := m.DestClient.Get(ctx, key, existing)
 	if err == nil {
 		log.Debug("Standby PVC already exists")
+		m.validateAndExpandSize(ctx, existing, sourcePVCSpec, log)
 		return &drv1alpha1.PVCReference{
 			Namespace: destNamespace,
 			Name:      standbyName,
@@ -153,6 +154,48 @@ func (m *StandbyPVCManagerImpl) EnsureStandbyPVC(
 		Namespace: destNamespace,
 		Name:      standbyName,
 	}, true, nil
+}
+
+// validateAndExpandSize compares the existing standby PVC size against the source PVC spec.
+// If the source PVC has grown, it attempts to expand the standby PVC to match.
+// Errors are logged as warnings — a failed expansion does not block the sync.
+func (m *StandbyPVCManagerImpl) validateAndExpandSize(
+	ctx context.Context,
+	existing *corev1.PersistentVolumeClaim,
+	sourcePVCSpec *corev1.PersistentVolumeClaimSpec,
+	log *logrus.Entry,
+) {
+	if sourcePVCSpec == nil {
+		return
+	}
+
+	sourceStorage, sourceOK := sourcePVCSpec.Resources.Requests[corev1.ResourceStorage]
+	existingStorage, existingOK := existing.Spec.Resources.Requests[corev1.ResourceStorage]
+	if !sourceOK || !existingOK {
+		return
+	}
+
+	// Cmp returns -1 if existingStorage < sourceStorage.
+	if existingStorage.Cmp(sourceStorage) >= 0 {
+		return
+	}
+
+	log.WithFields(logrus.Fields{
+		"existing_size": existingStorage.String(),
+		"source_size":   sourceStorage.String(),
+	}).Warn("Standby PVC is smaller than source PVC, attempting expansion")
+
+	patch := existing.DeepCopy()
+	patch.Spec.Resources.Requests[corev1.ResourceStorage] = sourceStorage.DeepCopy()
+
+	if err := m.DestClient.Patch(ctx, patch, client.MergeFrom(existing)); err != nil {
+		RecordStandbyPVCResizeFailed(existing.Namespace)
+		log.WithError(err).Warn("Failed to expand standby PVC — StorageClass may not support expansion")
+		return
+	}
+
+	RecordStandbyPVCResized(existing.Namespace)
+	log.WithField("new_size", sourceStorage.String()).Info("Standby PVC expanded to match source")
 }
 
 // UpdateStandbyPVCStatus updates the standby PVC annotations after a restore.

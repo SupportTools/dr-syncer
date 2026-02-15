@@ -90,6 +90,15 @@ var (
 		},
 		[]string{"repository_name"},
 	)
+
+	// BackupStandbyPVCResizeTotal counts standby PVC resize attempts.
+	BackupStandbyPVCResizeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dr_syncer_backup_standby_pvc_resize_total",
+			Help: "Total number of standby PVC resize attempts due to source PVC growth",
+		},
+		[]string{"namespace", "status"},
+	)
 )
 
 func init() {
@@ -103,6 +112,7 @@ func init() {
 		BackupLastSuccessfulTimestamp,
 		BackupRepositorySizeBytes,
 		BackupRepositorySnapshotCount,
+		BackupStandbyPVCResizeTotal,
 	)
 }
 
@@ -142,6 +152,16 @@ func RecordStandbyPVCCreated(namespace string) {
 // RecordStandbyPVCDeleted decrements the standby PVC count for the "created" state.
 func RecordStandbyPVCDeleted(namespace string) {
 	BackupStandbyPVCCount.WithLabelValues(namespace, "created").Dec()
+}
+
+// RecordStandbyPVCResized records a successful standby PVC resize.
+func RecordStandbyPVCResized(namespace string) {
+	BackupStandbyPVCResizeTotal.WithLabelValues(namespace, "success").Inc()
+}
+
+// RecordStandbyPVCResizeFailed records a failed standby PVC resize attempt.
+func RecordStandbyPVCResizeFailed(namespace string) {
+	BackupStandbyPVCResizeTotal.WithLabelValues(namespace, "failure").Inc()
 }
 
 // RecordRepositoryStats updates the repository metrics from BackupRepository status.
