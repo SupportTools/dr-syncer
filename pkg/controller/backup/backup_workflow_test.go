@@ -103,6 +103,93 @@ func TestParseKopiaSnapshotID(t *testing.T) {
 	}
 }
 
+// --- parseKopiaSnapshotOutput tests (bytes extraction) ---
+
+func TestParseKopiaSnapshotOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantID    string
+		wantBytes int64
+		wantErr   bool
+	}{
+		{
+			name:      "stats with hashedBytes",
+			input:     `{"id":"snap-1","stats":{"content":{"hashedBytes":1048576,"readBytes":2097152},"totalSize":3145728}}`,
+			wantID:    "snap-1",
+			wantBytes: 1048576,
+		},
+		{
+			name:      "stats with totalSize only (no content)",
+			input:     `{"id":"snap-2","stats":{"totalSize":5242880}}`,
+			wantID:    "snap-2",
+			wantBytes: 5242880,
+		},
+		{
+			name:      "rootEntry summ size as fallback",
+			input:     `{"id":"snap-3","rootEntry":{"obj":"obj1","summ":{"size":999999}}}`,
+			wantID:    "snap-3",
+			wantBytes: 999999,
+		},
+		{
+			name:      "no stats returns 0 bytes",
+			input:     `{"id":"snap-4","rootEntry":{"obj":"obj1"}}`,
+			wantID:    "snap-4",
+			wantBytes: 0,
+		},
+		{
+			name:      "hashedBytes preferred over totalSize",
+			input:     `{"id":"snap-5","stats":{"content":{"hashedBytes":100},"totalSize":200},"rootEntry":{"obj":"o","summ":{"size":300}}}`,
+			wantID:    "snap-5",
+			wantBytes: 100,
+		},
+		{
+			name:      "totalSize preferred over rootEntry summ",
+			input:     `{"id":"snap-6","stats":{"totalSize":500},"rootEntry":{"obj":"o","summ":{"size":300}}}`,
+			wantID:    "snap-6",
+			wantBytes: 500,
+		},
+		{
+			name:      "zero hashedBytes falls through to totalSize",
+			input:     `{"id":"snap-7","stats":{"content":{"hashedBytes":0},"totalSize":400}}`,
+			wantID:    "snap-7",
+			wantBytes: 400,
+		},
+		{
+			name:      "stats with progress lines before JSON",
+			input:     "Uploading...\nProgress 50%\n" + `{"id":"snap-8","stats":{"content":{"hashedBytes":2048}}}`,
+			wantID:    "snap-8",
+			wantBytes: 2048,
+		},
+		{
+			name:    "error on empty output",
+			input:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, bytes, err := parseKopiaSnapshotOutput(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("expected ID %q, got %q", tt.wantID, id)
+			}
+			if bytes != tt.wantBytes {
+				t.Errorf("expected bytes %d, got %d", tt.wantBytes, bytes)
+			}
+		})
+	}
+}
+
 // --- findPVCNode tests ---
 
 func TestFindPVCNode(t *testing.T) {
@@ -557,6 +644,78 @@ func TestExtractSnapshotIDFromPodLogs_PodLogReaderError(t *testing.T) {
 	}
 }
 
+// --- extractSnapshotDataFromPodLogs tests ---
+
+func TestExtractSnapshotDataFromPodLogs_WithBytes(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  `{"id":"snap-bytes","stats":{"content":{"hashedBytes":512000},"totalSize":1024000}}`,
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	id, bytes, err := bw.extractSnapshotDataFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "snap-bytes" {
+		t.Errorf("expected 'snap-bytes', got %q", id)
+	}
+	if bytes != 512000 {
+		t.Errorf("expected 512000 bytes, got %d", bytes)
+	}
+}
+
+func TestExtractSnapshotDataFromPodLogs_FallbackToLogReader(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "kopia-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "",
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{
+		Client:       k8sClient,
+		Log:          logrusTestEntry(),
+		podLogReader: &mockPodLogReader{logs: `{"id":"snap-log","stats":{"totalSize":768000}}`},
+	}
+
+	id, bytes, err := bw.extractSnapshotDataFromPodLogs(context.Background(), "test-ns", "kopia-pod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "snap-log" {
+		t.Errorf("expected 'snap-log', got %q", id)
+	}
+	if bytes != 768000 {
+		t.Errorf("expected 768000 bytes, got %d", bytes)
+	}
+}
+
 // --- resolveDataAccessStrategy tests ---
 
 func TestResolveDataAccessStrategy_Live(t *testing.T) {
@@ -1000,8 +1159,9 @@ func TestExecute_BackupLivePath(t *testing.T) {
 	defer cancel()
 
 	// Simulate pod completion in background — the kopia backup pod has prefix "dr-syncer-kopia-backup-".
+	// Include stats in JSON to verify bytes are extracted and propagated.
 	go simulatePodCompletion(ctx, k8sClient, "test-ns", "dr-syncer-kopia-backup-",
-		corev1.PodSucceeded, `{"id":"snap-live-001","rootEntry":{"obj":"obj1"}}`)
+		corev1.PodSucceeded, `{"id":"snap-live-001","rootEntry":{"obj":"obj1"},"stats":{"content":{"hashedBytes":1048576},"totalSize":2097152}}`)
 
 	err := bw.Execute(ctx, op, repo, DefaultKopiaPodConfig())
 	if err != nil {
@@ -1018,6 +1178,9 @@ func TestExecute_BackupLivePath(t *testing.T) {
 	}
 	if latest.Status.KopiaSnapshotID != "snap-live-001" {
 		t.Errorf("expected snapshot ID 'snap-live-001', got %q", latest.Status.KopiaSnapshotID)
+	}
+	if latest.Status.BytesTransferred != 1048576 {
+		t.Errorf("expected BytesTransferred 1048576, got %d", latest.Status.BytesTransferred)
 	}
 	if latest.Status.ProgressPercentage != 100 {
 		t.Errorf("expected progress 100, got %d", latest.Status.ProgressPercentage)
@@ -1457,9 +1620,9 @@ func TestExecute_BackupSnapshotPath_FullFlow(t *testing.T) {
 	// Background: simulate the temp PVC (restored from snapshot) becoming bound.
 	go simulatePVCBound(ctx, k8sClient, namespace, "dr-syncer-snap-restore-")
 
-	// Background: simulate the Kopia backup pod succeeding.
+	// Background: simulate the Kopia backup pod succeeding with stats.
 	go simulatePodCompletion(ctx, k8sClient, namespace, "dr-syncer-kopia-backup-",
-		corev1.PodSucceeded, `{"id":"snap-csi-001","rootEntry":{"obj":"objA"}}`)
+		corev1.PodSucceeded, `{"id":"snap-csi-001","rootEntry":{"obj":"objA","summ":{"size":5242880}},"stats":{"content":{"hashedBytes":4194304},"totalSize":5242880}}`)
 
 	err := bw.Execute(ctx, op, repo, DefaultKopiaPodConfig())
 	if err != nil {
@@ -1476,6 +1639,9 @@ func TestExecute_BackupSnapshotPath_FullFlow(t *testing.T) {
 	}
 	if latest.Status.KopiaSnapshotID != "snap-csi-001" {
 		t.Errorf("expected snapshot ID 'snap-csi-001', got %q", latest.Status.KopiaSnapshotID)
+	}
+	if latest.Status.BytesTransferred != 4194304 {
+		t.Errorf("expected BytesTransferred 4194304, got %d", latest.Status.BytesTransferred)
 	}
 	if latest.Status.ProgressPercentage != 100 {
 		t.Errorf("expected progress 100, got %d", latest.Status.ProgressPercentage)

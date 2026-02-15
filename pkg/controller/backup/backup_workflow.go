@@ -75,10 +75,11 @@ func (bw *BackupWorkflow) Execute(ctx context.Context, operation *drv1alpha1.Vol
 	}
 
 	var execErr error
+	var bytesTransferred int64
 	switch operation.Spec.OperationType {
 	case drv1alpha1.OperationTypeBackup:
 		log.Info("Starting backup workflow")
-		execErr = bw.executeBackup(ctx, operation, repo, podConfig)
+		bytesTransferred, execErr = bw.executeBackup(ctx, operation, repo, podConfig)
 	case drv1alpha1.OperationTypeRestore:
 		log.Info("Starting restore workflow")
 		execErr = bw.executeRestore(ctx, operation, repo, podConfig)
@@ -91,14 +92,14 @@ func (bw *BackupWorkflow) Execute(ctx context.Context, operation *drv1alpha1.Vol
 	if execErr != nil {
 		RecordBackupFailure(opType, dataAccess, duration)
 	} else {
-		RecordBackupComplete(opType, dataAccess, duration, 0)
+		RecordBackupComplete(opType, dataAccess, duration, bytesTransferred)
 	}
 	return execErr
 }
 
 // executeBackup runs the backup workflow, selecting between snapshot and live paths
-// based on the DataAccessStrategy.
-func (bw *BackupWorkflow) executeBackup(ctx context.Context, operation *drv1alpha1.VolumeBackupOperation, repo *drv1alpha1.BackupRepository, podConfig KopiaPodConfig) error {
+// based on the DataAccessStrategy. Returns bytes transferred from the Kopia operation.
+func (bw *BackupWorkflow) executeBackup(ctx context.Context, operation *drv1alpha1.VolumeBackupOperation, repo *drv1alpha1.BackupRepository, podConfig KopiaPodConfig) (int64, error) {
 	log := bw.Log.WithFields(logrus.Fields{
 		"operation": operation.Name,
 		"pvc":       operation.Spec.SourcePVC.Name,
@@ -107,7 +108,7 @@ func (bw *BackupWorkflow) executeBackup(ctx context.Context, operation *drv1alph
 
 	strategy, snapshotClassName, err := bw.resolveDataAccessStrategy(ctx, operation)
 	if err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("resolve data access strategy: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("resolve data access strategy: %w", err))
 	}
 
 	log.WithFields(logrus.Fields{
@@ -121,7 +122,7 @@ func (bw *BackupWorkflow) executeBackup(ctx context.Context, operation *drv1alph
 	case drv1alpha1.DataAccessStrategyLive:
 		return bw.executeLiveBackup(ctx, operation, repo, podConfig)
 	default:
-		return bw.failOperation(ctx, operation, fmt.Errorf("invalid resolved strategy: %s", strategy))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("invalid resolved strategy: %s", strategy))
 	}
 }
 
@@ -181,7 +182,7 @@ func (bw *BackupWorkflow) executeSnapshotBackup(
 	repo *drv1alpha1.BackupRepository,
 	podConfig KopiaPodConfig,
 	snapshotClassName string,
-) error {
+) (int64, error) {
 	log := bw.Log.WithField("operation", operation.Name)
 	pvcRef := operation.Spec.SourcePVC
 
@@ -196,7 +197,7 @@ func (bw *BackupWorkflow) executeSnapshotBackup(
 	log.Info("Creating VolumeSnapshot for snapshot-based backup")
 	snapshot, err := bw.SnapshotManager.CreateSnapshot(ctx, pvcRef.Namespace, pvcRef.Name, snapshotClassName)
 	if err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("create snapshot: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("create snapshot: %w", err))
 	}
 	snapshotName = snapshot.Name
 
@@ -204,12 +205,12 @@ func (bw *BackupWorkflow) executeSnapshotBackup(
 		status.Phase = drv1alpha1.VolumeBackupPhaseSnapshotCreated
 		status.Message = fmt.Sprintf("VolumeSnapshot %s created, waiting for ready", snapshotName)
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update snapshot created status: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("update snapshot created status: %w", err))
 	}
 
 	// Step 2: Wait for snapshot to be ready.
 	if err := bw.SnapshotManager.WaitForSnapshotReady(ctx, pvcRef.Namespace, snapshotName, snapshotTimeout); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("wait for snapshot ready: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("wait for snapshot ready: %w", err))
 	}
 
 	// Step 3: Create temp PVC from snapshot.
@@ -219,12 +220,12 @@ func (bw *BackupWorkflow) executeSnapshotBackup(
 		Namespace: pvcRef.Namespace,
 		Name:      pvcRef.Name,
 	}, originalPVC); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("get source PVC: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("get source PVC: %w", err))
 	}
 
 	tempPVC, err := bw.SnapshotManager.RestoreSnapshotToPVC(ctx, pvcRef.Namespace, snapshotName, originalPVC)
 	if err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("restore snapshot to temp PVC: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("restore snapshot to temp PVC: %w", err))
 	}
 	tempPVCName = tempPVC.Name
 
@@ -232,7 +233,7 @@ func (bw *BackupWorkflow) executeSnapshotBackup(
 		status.Phase = drv1alpha1.VolumeBackupPhaseDataAccessReady
 		status.Message = fmt.Sprintf("Temporary PVC %s ready from snapshot", tempPVCName)
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
 	}
 
 	// Step 4: Create a modified operation that points to the temp PVC for the backup pod.
@@ -256,7 +257,7 @@ func (bw *BackupWorkflow) executeLiveBackup(
 	operation *drv1alpha1.VolumeBackupOperation,
 	repo *drv1alpha1.BackupRepository,
 	podConfig KopiaPodConfig,
-) error {
+) (int64, error) {
 	log := bw.Log.WithField("operation", operation.Name)
 	pvcRef := operation.Spec.SourcePVC
 
@@ -275,29 +276,29 @@ func (bw *BackupWorkflow) executeLiveBackup(
 		status.Phase = drv1alpha1.VolumeBackupPhaseDataAccessReady
 		status.Message = "Live PVC access ready"
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
 	}
 
 	// Step 2-4: Run Kopia pod and extract snapshot ID.
 	return bw.runBackupPod(ctx, operation, operation, repo, podConfig)
 }
 
-// runBackupPod creates the Kopia backup pod, waits for completion, extracts the snapshot ID,
-// and updates the operation status. The statusOperation is used for status updates,
-// while podOperation is used for building the pod spec (may differ if using temp PVC).
+// runBackupPod creates the Kopia backup pod, waits for completion, extracts the snapshot ID
+// and bytes transferred, and updates the operation status. The statusOperation is used for
+// status updates, while podOperation is used for building the pod spec (may differ if using temp PVC).
 func (bw *BackupWorkflow) runBackupPod(
 	ctx context.Context,
 	statusOperation *drv1alpha1.VolumeBackupOperation,
 	podOperation *drv1alpha1.VolumeBackupOperation,
 	repo *drv1alpha1.BackupRepository,
 	podConfig KopiaPodConfig,
-) error {
+) (int64, error) {
 	log := bw.Log.WithField("operation", statusOperation.Name)
 
 	// Build the Kopia backup pod (validates S3 config).
 	pod, err := BuildBackupPod(podOperation, repo, podConfig)
 	if err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("build backup pod: %w", err))
+		return 0, bw.failOperation(ctx, statusOperation, fmt.Errorf("build backup pod: %w", err))
 	}
 
 	// Clean up pod on exit.
@@ -308,42 +309,46 @@ func (bw *BackupWorkflow) runBackupPod(
 	// Create the pod.
 	log.WithField("pod", pod.Name).Info("Creating Kopia backup pod")
 	if err := bw.Client.Create(ctx, pod); err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("create backup pod: %w", err))
+		return 0, bw.failOperation(ctx, statusOperation, fmt.Errorf("create backup pod: %w", err))
 	}
 
 	if err := bw.updateStatus(ctx, statusOperation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
 		status.Phase = drv1alpha1.VolumeBackupPhaseBackupInProgress
 		status.Message = fmt.Sprintf("Kopia backup pod %s running", pod.Name)
 	}); err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("update backup in progress status: %w", err))
+		return 0, bw.failOperation(ctx, statusOperation, fmt.Errorf("update backup in progress status: %w", err))
 	}
 
 	// Wait for pod to complete.
 	if err := bw.waitForPodCompletion(ctx, pod.Namespace, pod.Name, defaultPodTimeout); err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("backup pod failed: %w", err))
+		return 0, bw.failOperation(ctx, statusOperation, fmt.Errorf("backup pod failed: %w", err))
 	}
 
-	// Extract Kopia snapshot ID from pod logs.
-	snapshotID, err := bw.extractSnapshotIDFromPodLogs(ctx, pod.Namespace, pod.Name)
+	// Extract Kopia snapshot ID and bytes transferred from pod logs.
+	snapshotID, bytesTransferred, err := bw.extractSnapshotDataFromPodLogs(ctx, pod.Namespace, pod.Name)
 	if err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("extract snapshot ID: %w", err))
+		return 0, bw.failOperation(ctx, statusOperation, fmt.Errorf("extract snapshot ID: %w", err))
 	}
 
-	log.WithField("snapshot_id", snapshotID).Info("Backup completed, snapshot ID extracted")
+	log.WithFields(logrus.Fields{
+		"snapshot_id":       snapshotID,
+		"bytes_transferred": bytesTransferred,
+	}).Info("Backup completed, snapshot data extracted")
 
-	// Update status with completion.
+	// Update status with completion and bytes transferred.
 	now := metav1.Now()
 	if err := bw.updateStatus(ctx, statusOperation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
 		status.Phase = drv1alpha1.VolumeBackupPhaseBackupComplete
 		status.KopiaSnapshotID = snapshotID
+		status.BytesTransferred = bytesTransferred
 		status.CompletionTime = &now
 		status.ProgressPercentage = 100
 		status.Message = "Backup completed successfully"
 	}); err != nil {
-		return bw.failOperation(ctx, statusOperation, fmt.Errorf("update backup complete status: %w", err))
+		return bytesTransferred, bw.failOperation(ctx, statusOperation, fmt.Errorf("update backup complete status: %w", err))
 	}
 
-	return nil
+	return bytesTransferred, nil
 }
 
 // executeRestore runs the restore workflow:
@@ -481,47 +486,62 @@ func (bw *BackupWorkflow) waitForPodCompletion(ctx context.Context, namespace, p
 type kopiaSnapshotOutput struct {
 	RootEntry *struct {
 		ObjID string `json:"obj"`
+		Summ  *struct {
+			Size int64 `json:"size"`
+		} `json:"summ"`
 	} `json:"rootEntry"`
 	ID          string `json:"id"`
 	Description string `json:"description"`
+	Stats       *struct {
+		Content *struct {
+			HashedBytes int64 `json:"hashedBytes"`
+			ReadBytes   int64 `json:"readBytes"`
+		} `json:"content"`
+		TotalSize int64 `json:"totalSize"`
+	} `json:"stats"`
 }
 
 // extractSnapshotIDFromPodLogs reads the Kopia pod logs and extracts the snapshot ID
 // from the JSON output of `kopia snapshot create --json`.
 func (bw *BackupWorkflow) extractSnapshotIDFromPodLogs(ctx context.Context, namespace, podName string) (string, error) {
-	// First, try the termination message from the container status.
+	id, _, err := bw.extractSnapshotDataFromPodLogs(ctx, namespace, podName)
+	return id, err
+}
+
+// extractSnapshotDataFromPodLogs reads the Kopia pod logs and extracts the snapshot ID
+// and bytes transferred from the JSON output of `kopia snapshot create --json`.
+func (bw *BackupWorkflow) extractSnapshotDataFromPodLogs(ctx context.Context, namespace, podName string) (string, int64, error) {
 	pod := &corev1.Pod{}
 	if err := bw.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: podName}, pod); err != nil {
-		return "", fmt.Errorf("get pod for log extraction: %w", err)
+		return "", 0, fmt.Errorf("get pod for log extraction: %w", err)
 	}
 
 	if len(pod.Status.ContainerStatuses) > 0 {
 		cs := pod.Status.ContainerStatuses[0]
 		if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
-			snapshotID, err := parseKopiaSnapshotID(cs.State.Terminated.Message)
+			snapshotID, bytes, err := parseKopiaSnapshotOutput(cs.State.Terminated.Message)
 			if err == nil && snapshotID != "" {
-				return snapshotID, nil
+				return snapshotID, bytes, nil
 			}
 		}
 	}
 
-	// Fall back to the external pod log reader if available.
 	if bw.podLogReader != nil {
 		logs, err := bw.podLogReader.GetPodLogs(ctx, namespace, podName, "kopia")
 		if err != nil {
-			return "", fmt.Errorf("get pod logs: %w", err)
+			return "", 0, fmt.Errorf("get pod logs: %w", err)
 		}
 
-		snapshotID, err := parseKopiaSnapshotID(logs)
+		snapshotID, bytes, err := parseKopiaSnapshotOutput(logs)
 		if err != nil {
-			return "", fmt.Errorf("parse snapshot ID from logs: %w", err)
+			return "", 0, fmt.Errorf("parse snapshot data from logs: %w", err)
 		}
 		if snapshotID != "" {
-			return snapshotID, nil
+			return snapshotID, bytes, nil
 		}
 	}
 
-	return "", fmt.Errorf("no snapshot ID found in pod %s/%s output", namespace, podName)
+	return "", 0, fmt.Errorf("no snapshot ID found in pod %s/%s output", namespace, podName)
 }
 
 // PodLogReader is an interface for reading pod logs. This allows tests to inject
@@ -537,10 +557,17 @@ func (bw *BackupWorkflow) SetPodLogReader(reader PodLogReader) {
 }
 
 // parseKopiaSnapshotID extracts the snapshot ID from Kopia's JSON output.
-// Kopia's `snapshot create --json` outputs a JSON object with the snapshot manifest.
+// This is a backward-compatible wrapper around parseKopiaSnapshotOutput.
 func parseKopiaSnapshotID(output string) (string, error) {
-	// Try to find the JSON object in the output.
-	// Kopia may output progress lines before the final JSON.
+	id, _, err := parseKopiaSnapshotOutput(output)
+	return id, err
+}
+
+// parseKopiaSnapshotOutput extracts the snapshot ID and bytes transferred from Kopia's JSON output.
+// Kopia's `snapshot create --json` outputs a JSON object with the snapshot manifest.
+// Bytes are extracted from stats.content.hashedBytes, falling back to stats.totalSize,
+// then rootEntry.summ.size. Returns 0 bytes if no stats are present.
+func parseKopiaSnapshotOutput(output string) (string, int64, error) {
 	lines := strings.Split(output, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -548,24 +575,35 @@ func parseKopiaSnapshotID(output string) (string, error) {
 			continue
 		}
 
-		// Try parsing as Kopia snapshot JSON.
 		var snapshotOut kopiaSnapshotOutput
 		if err := json.Unmarshal([]byte(line), &snapshotOut); err != nil {
 			continue
 		}
 
-		// The snapshot ID is in the "id" field.
-		if snapshotOut.ID != "" {
-			return snapshotOut.ID, nil
+		// Extract snapshot ID.
+		id := snapshotOut.ID
+		if id == "" && snapshotOut.RootEntry != nil {
+			id = snapshotOut.RootEntry.ObjID
+		}
+		if id == "" {
+			continue
 		}
 
-		// Fallback: check rootEntry.obj for the root object ID.
-		if snapshotOut.RootEntry != nil && snapshotOut.RootEntry.ObjID != "" {
-			return snapshotOut.RootEntry.ObjID, nil
+		// Extract bytes transferred — prefer stats.content.hashedBytes (actual data processed),
+		// then stats.totalSize, then rootEntry.summ.size.
+		var bytes int64
+		if snapshotOut.Stats != nil && snapshotOut.Stats.Content != nil && snapshotOut.Stats.Content.HashedBytes > 0 {
+			bytes = snapshotOut.Stats.Content.HashedBytes
+		} else if snapshotOut.Stats != nil && snapshotOut.Stats.TotalSize > 0 {
+			bytes = snapshotOut.Stats.TotalSize
+		} else if snapshotOut.RootEntry != nil && snapshotOut.RootEntry.Summ != nil && snapshotOut.RootEntry.Summ.Size > 0 {
+			bytes = snapshotOut.RootEntry.Summ.Size
 		}
+
+		return id, bytes, nil
 	}
 
-	return "", fmt.Errorf("no valid Kopia snapshot JSON found in output")
+	return "", 0, fmt.Errorf("no valid Kopia snapshot JSON found in output")
 }
 
 // updateStatus performs a get-then-update on the VolumeBackupOperation status subresource.
