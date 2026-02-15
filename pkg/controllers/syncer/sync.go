@@ -189,7 +189,7 @@ func syncCustomResourceDefinitions(ctx context.Context, syncer *ResourceSyncer, 
 }
 
 // SyncNamespaceResources synchronizes resources between source and destination namespaces
-func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig, namespaceMappingSpec *drv1alpha1.NamespaceMappingSpec, sourceConfig, destConfig *rest.Config) ([]DeploymentScale, error) {
+func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubernetes.Interface, sourceDynamic, destDynamic dynamic.Interface, ctrlClient client.Client, srcNamespace, dstNamespace string, resourceTypes []string, scaleToZero bool, namespaceScopedResources []string, pvcConfig *drv1alpha1.PVCConfig, immutableConfig *drv1alpha1.ImmutableResourceConfig, mapping *drv1alpha1.NamespaceMapping, sourceConfig, destConfig *rest.Config, backupSyncFunc BackupPVCSyncFunc) ([]DeploymentScale, error) {
 	var deploymentScales []DeploymentScale
 
 	// Create resource syncer using the passed-in clients
@@ -199,7 +199,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 	syncer.SetConfigs(sourceConfig, destConfig)
 
 	// If SyncCRDs is enabled, sync CRDs first
-	if namespaceMappingSpec != nil && namespaceMappingSpec.SyncCRDs != nil && *namespaceMappingSpec.SyncCRDs {
+	if mapping != nil && mapping.Spec.SyncCRDs != nil && *mapping.Spec.SyncCRDs {
 		log.Info("syncing CRDs")
 		if err := syncCustomResourceDefinitions(ctx, syncer, sourceClient, sourceDynamic); err != nil {
 			return nil, fmt.Errorf("failed to sync CRDs: %w", err)
@@ -334,8 +334,7 @@ func SyncNamespaceResources(ctx context.Context, sourceClient, destClient kubern
 				return nil, fmt.Errorf("failed to sync Ingresses: %w", err)
 			}
 		case "persistentvolumeclaims", "persistentvolumeclaim", "pvc":
-			// Use the new PVC handler with mounting support
-			if err := syncPersistentVolumeClaimsWithMounting(ctx, syncer, sourceClient, destClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig); err != nil {
+			if err := routePVCSync(ctx, syncer, sourceClient, destClient, srcNamespace, dstNamespace, pvcConfig, immutableConfig, mapping, backupSyncFunc); err != nil {
 				return nil, fmt.Errorf("failed to sync PVCs: %w", err)
 			}
 		}

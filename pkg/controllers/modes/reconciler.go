@@ -42,6 +42,11 @@ type ModeReconciler struct {
 	watchManager      *watch.WatchManager
 	sourceClusterName string
 	destClusterName   string
+
+	// BackupSyncFunc is an optional function for backup-based PVC sync.
+	// When set, PVC sync routes to this function when BackupConfig.Enabled is true.
+	// Injected at controller setup to avoid import cycles with the backup package.
+	BackupSyncFunc syncer.BackupPVCSyncFunc
 }
 
 // NewModeReconciler creates a new ModeReconciler
@@ -585,9 +590,10 @@ func (r *ModeReconciler) syncResources(ctx context.Context, mapping *drv1alpha1.
 		mapping.Spec.NamespaceScopedResources,
 		mapping.Spec.PVCConfig,
 		mapping.Spec.ImmutableResourceConfig,
-		&mapping.Spec,
+		mapping,
 		r.sourceConfig,
 		r.destConfig,
+		r.BackupSyncFunc,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sync namespace resources: %w", err)

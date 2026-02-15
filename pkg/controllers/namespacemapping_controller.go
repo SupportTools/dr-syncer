@@ -6,9 +6,16 @@ import (
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers/modes"
+	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
 	"github.com/supporttools/dr-syncer/pkg/logging"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -23,7 +30,10 @@ const (
 type NamespaceMappingReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// No longer storing modeHandler as a field since we'll create a new one for each reconciliation
+
+	// BackupSyncFunc is an optional function for backup-based PVC sync.
+	// Set by main.go to inject the backup.VolumeBackupSyncer dependency.
+	BackupSyncFunc syncer.BackupPVCSyncFunc
 }
 
 // SetupWithManager sets up the controller with the manager
@@ -161,17 +171,30 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 
 	logging.LogInfo(nil, fmt.Sprintf("initializing destination cluster connection for cleanup: %s", destCluster))
 
-	// Create a new mode handler with only destination cluster clients
+	// Get the destination cluster's dynamic client for cleanup
+	destDynamicClient, err := r.getClusterDynamicClient(ctx, destCluster, namespacemapping.Namespace)
+	if err != nil {
+		// If we can't get the client (e.g., RemoteCluster deleted), skip cleanup
+		logging.LogInfo(nil, fmt.Sprintf("skipping cleanup as destination cluster client unavailable: %v", err))
+		namespacemapping.Finalizers = removeString(namespacemapping.Finalizers, NamespaceMappingFinalizerName)
+		if err := r.Update(ctx, namespacemapping); err != nil {
+			logging.LogError(nil, fmt.Sprintf("failed to remove finalizer: %v", err))
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Create a new mode handler with the destination cluster dynamic client
 	cleanupModeHandler := modes.NewModeReconciler(
 		r.Client,
-		nil,         // No source dynamic client needed for cleanup
-		nil,         // No destination dynamic client needed for cleanup
-		nil,         // No source client needed for cleanup
-		nil,         // No destination client needed for cleanup
-		nil,         // No source config needed for cleanup
-		nil,         // No dest config needed for CleanupResources
-		"",          // No source cluster name needed for cleanup
-		destCluster, // Pass destination cluster name for logging
+		nil,               // No source dynamic client needed for cleanup
+		destDynamicClient, // Destination dynamic client for cleanup
+		nil,               // No source client needed for cleanup
+		nil,               // No destination client needed for cleanup
+		nil,               // No source config needed for cleanup
+		nil,               // No dest config needed for CleanupResources
+		"",                // No source cluster name needed for cleanup
+		destCluster,       // Pass destination cluster name for logging
 	)
 
 	// Clean up synced resources in destination cluster
@@ -237,18 +260,40 @@ func (r *NamespaceMappingReconciler) setupModeHandlerForNamespaceMapping(
 		destCluster = namespacemapping.Spec.DestinationCluster
 	}
 
-	// Create a new mode handler to use in the reconciliation
-	return modes.NewModeReconciler(
+	logging.LogInfo(nil, fmt.Sprintf("creating clients for source cluster: %s", sourceCluster))
+
+	// Get source cluster clients
+	sourceDynamicClient, sourceKubeClient, sourceConfig, err := r.getClusterClients(ctx, sourceCluster, namespacemapping.Namespace)
+	if err != nil {
+		logging.LogError(nil, fmt.Sprintf("failed to create source cluster clients: %v", err))
+		return nil, err
+	}
+
+	logging.LogInfo(nil, fmt.Sprintf("creating clients for destination cluster: %s", destCluster))
+
+	// Get destination cluster clients
+	destDynamicClient, destKubeClient, destConfig, err := r.getClusterClients(ctx, destCluster, namespacemapping.Namespace)
+	if err != nil {
+		logging.LogError(nil, fmt.Sprintf("failed to create destination cluster clients: %v", err))
+		return nil, err
+	}
+
+	logging.LogInfo(nil, "cluster connections initialized successfully")
+
+	// Create a new mode handler with all the required clients
+	mr := modes.NewModeReconciler(
 		r.Client,
-		nil, // Source dynamic client
-		nil, // Destination dynamic client
-		nil, // Source client
-		nil, // Destination client
-		nil, // Source config
-		nil, // Destination config
+		sourceDynamicClient,
+		destDynamicClient,
+		sourceKubeClient,
+		destKubeClient,
+		sourceConfig,
+		destConfig,
 		sourceCluster,
 		destCluster,
-	), nil
+	)
+	mr.BackupSyncFunc = r.BackupSyncFunc
+	return mr, nil
 }
 
 // Helper functions
@@ -271,4 +316,66 @@ func removeString(slice []string, s string) []string {
 		}
 	}
 	return result
+}
+
+// getClusterDynamicClient gets a dynamic client for the specified cluster
+func (r *NamespaceMappingReconciler) getClusterDynamicClient(ctx context.Context, clusterName, namespace string) (dynamic.Interface, error) {
+	dynamicClient, _, _, err := r.getClusterClients(ctx, clusterName, namespace)
+	return dynamicClient, err
+}
+
+// getClusterClients gets all client types for the specified cluster
+func (r *NamespaceMappingReconciler) getClusterClients(ctx context.Context, clusterName, namespace string) (dynamic.Interface, kubernetes.Interface, *rest.Config, error) {
+	// Fetch the RemoteCluster
+	var remoteCluster drv1alpha1.RemoteCluster
+	if err := r.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, &remoteCluster); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get RemoteCluster %s: %w", clusterName, err)
+	}
+
+	// Get kubeconfig secret
+	secret := &corev1.Secret{}
+	secretNamespace := remoteCluster.Spec.KubeconfigSecretRef.Namespace
+	if secretNamespace == "" {
+		secretNamespace = namespace
+	}
+
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      remoteCluster.Spec.KubeconfigSecretRef.Name,
+		Namespace: secretNamespace,
+	}, secret)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to get kubeconfig secret: %w", err)
+	}
+
+	// Get kubeconfig key
+	key := "kubeconfig"
+	if remoteCluster.Spec.KubeconfigSecretRef.Key != "" {
+		key = remoteCluster.Spec.KubeconfigSecretRef.Key
+	}
+
+	// Get kubeconfig data
+	kubeconfigData, ok := secret.Data[key]
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("kubeconfig key %s not found in secret", key)
+	}
+
+	// Create rest config
+	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create rest config: %w", err)
+	}
+
+	// Create dynamic client
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	// Create kubernetes client
+	kubeClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	return dynamicClient, kubeClient, config, nil
 }

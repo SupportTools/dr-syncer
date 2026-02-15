@@ -19,6 +19,187 @@ var (
 	pvcClusterKey = controller.PVCClusterKey
 )
 
+// BackupPVCSyncResult holds the outcome of syncing a single PVC via backup.
+type BackupPVCSyncResult struct {
+	PVCName    string
+	SnapshotID string
+	Err        error
+}
+
+// BackupPVCSyncFunc is a function that performs backup-based PVC data sync.
+// It is injected by the caller to avoid import cycles between syncer and backup packages.
+type BackupPVCSyncFunc func(ctx context.Context, mapping *drv1alpha1.NamespaceMapping,
+	pvcs []corev1.PersistentVolumeClaim, backupConfig *drv1alpha1.BackupConfig) []BackupPVCSyncResult
+
+// isBackupPathEnabled returns true if the PVC config has backup-based sync enabled.
+func isBackupPathEnabled(pvcConfig *drv1alpha1.PVCConfig) bool {
+	return pvcConfig != nil &&
+		pvcConfig.DataSyncConfig != nil &&
+		pvcConfig.DataSyncConfig.BackupConfig != nil &&
+		pvcConfig.DataSyncConfig.BackupConfig.Enabled
+}
+
+// routePVCSync routes PVC synchronization to either the Kopia backup path or the
+// existing rsync path based on PVCConfig.DataSyncConfig.BackupConfig.Enabled.
+// When BackupConfig is nil or Enabled is false, the rsync path is used (unchanged default).
+func routePVCSync(ctx context.Context, syncer *ResourceSyncer, sourceClient, destClient kubernetes.Interface,
+	srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig, config *drv1alpha1.ImmutableResourceConfig,
+	mapping *drv1alpha1.NamespaceMapping, backupSyncFunc BackupPVCSyncFunc) error {
+
+	if isBackupPathEnabled(pvcConfig) {
+		if backupSyncFunc == nil {
+			return syncerrors.NewNonRetryableError(
+				fmt.Errorf("backup sync path enabled but no backup sync function provided"),
+				"PVCBackupSync",
+			)
+		}
+		log.Info(fmt.Sprintf("PVC sync path: backup (Kopia) for %s -> %s", srcNamespace, dstNamespace))
+		return syncPVCsViaBackup(ctx, syncer, sourceClient, srcNamespace, dstNamespace, pvcConfig, mapping, backupSyncFunc)
+	}
+
+	log.Info(fmt.Sprintf("PVC sync path: rsync for %s -> %s", srcNamespace, dstNamespace))
+	return syncPersistentVolumeClaimsWithMounting(ctx, syncer, sourceClient, destClient, srcNamespace, dstNamespace, pvcConfig, config)
+}
+
+// syncPVCsViaBackup handles PVC synchronization using the Kopia backup/restore path.
+// It lists source PVCs, creates/updates destination PVC resources, then delegates data
+// sync to the provided backupSyncFunc.
+func syncPVCsViaBackup(ctx context.Context, syncer *ResourceSyncer, sourceClient kubernetes.Interface,
+	srcNamespace, dstNamespace string, pvcConfig *drv1alpha1.PVCConfig,
+	mapping *drv1alpha1.NamespaceMapping, backupSyncFunc BackupPVCSyncFunc) error {
+
+	log.Info(fmt.Sprintf("Syncing PVCs via backup path from %s to %s", srcNamespace, dstNamespace))
+
+	// List source PVCs
+	pvcs, err := sourceClient.CoreV1().PersistentVolumeClaims(srcNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return syncerrors.NewRetryableError(
+			fmt.Errorf("failed to list PVCs: %w", err),
+			"PersistentVolumeClaims",
+		)
+	}
+
+	// Create/update PVC resources in destination (same as rsync path)
+	var pvcList []corev1.PersistentVolumeClaim
+	for _, pvc := range pvcs.Items {
+		if utils.ShouldIgnoreResource(&pvc) {
+			continue
+		}
+
+		destPVC := pvc.DeepCopy()
+		destPVC.Namespace = dstNamespace
+
+		// Apply storage class mapping
+		if pvcConfig != nil && len(pvcConfig.StorageClassMappings) > 0 {
+			if override, exists := destPVC.Labels["dr-syncer.io/storage-class"]; exists {
+				storageClass := override
+				destPVC.Spec.StorageClassName = &storageClass
+			} else {
+				for _, m := range pvcConfig.StorageClassMappings {
+					if destPVC.Spec.StorageClassName != nil && *destPVC.Spec.StorageClassName == m.From {
+						storageClass := m.To
+						destPVC.Spec.StorageClassName = &storageClass
+						break
+					}
+				}
+			}
+		}
+
+		// Apply access mode mapping
+		if pvcConfig != nil && len(pvcConfig.AccessModeMappings) > 0 {
+			for _, m := range pvcConfig.AccessModeMappings {
+				for i, mode := range destPVC.Spec.AccessModes {
+					if string(mode) == m.From {
+						destPVC.Spec.AccessModes[i] = corev1.PersistentVolumeAccessMode(m.To)
+					}
+				}
+			}
+		}
+
+		// Check if PVC exists in destination
+		existingPVC, getErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Get(ctx, destPVC.Name, metav1.GetOptions{})
+		pvcExists := getErr == nil
+
+		syncPV := false
+		if pvcConfig != nil {
+			syncPV = pvcConfig.SyncPersistentVolumes
+		}
+
+		if !pvcExists {
+			if !syncPV {
+				destPVC.Spec.VolumeName = ""
+			}
+			if destPVC.Annotations == nil {
+				destPVC.Annotations = make(map[string]string)
+			}
+			delete(destPVC.Annotations, "pv.kubernetes.io/bind-completed")
+			delete(destPVC.Annotations, "pv.kubernetes.io/bound-by-controller")
+			delete(destPVC.Annotations, "volume.kubernetes.io/selected-node")
+
+			if (pvcConfig == nil || !pvcConfig.PreserveVolumeAttributes) && !syncPV {
+				destPVC.Spec.VolumeMode = nil
+				destPVC.Spec.Selector = nil
+				destPVC.Spec.DataSource = nil
+				destPVC.Spec.DataSourceRef = nil
+			}
+
+			destPVC.ResourceVersion = ""
+			createdPVC, createErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, destPVC, metav1.CreateOptions{})
+			if createErr != nil {
+				return syncerrors.NewRetryableError(
+					fmt.Errorf("failed to create PVC %s: %w", destPVC.Name, createErr),
+					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
+				)
+			}
+			pvcList = append(pvcList, *createdPVC)
+		} else {
+			updatePVC := existingPVC.DeepCopy()
+			updatePVC.Spec.Resources = destPVC.Spec.Resources
+			updatedPVC, updateErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
+			if updateErr != nil {
+				return syncerrors.NewRetryableError(
+					fmt.Errorf("failed to update PVC %s: %w", destPVC.Name, updateErr),
+					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
+				)
+			}
+			pvcList = append(pvcList, *updatedPVC)
+		}
+	}
+
+	// If data sync is not enabled or no PVCs to sync, we're done
+	if pvcConfig == nil || !pvcConfig.SyncData || len(pvcList) == 0 {
+		log.Info(fmt.Sprintf("Backup PVC resource sync complete (%d PVCs), data sync not needed", len(pvcList)))
+		return nil
+	}
+
+	// Delegate data sync to the injected backup sync function
+	backupConfig := pvcConfig.DataSyncConfig.BackupConfig
+	results := backupSyncFunc(ctx, mapping, pvcList, backupConfig)
+
+	// Check results for failures
+	var failCount int
+	for _, r := range results {
+		if r.Err != nil {
+			failCount++
+			log.Errorf("Backup sync failed for PVC %s: %v", r.PVCName, r.Err)
+		}
+	}
+
+	if failCount > 0 && failCount == len(results) {
+		return syncerrors.NewRetryableError(
+			fmt.Errorf("all %d PVC backup syncs failed", failCount),
+			"PVCBackupSync",
+		)
+	}
+
+	if failCount > 0 {
+		log.Errorf("Backup sync partial failure: %d of %d PVCs failed", failCount, len(results))
+	}
+
+	log.Info(fmt.Sprintf("Backup PVC sync complete: %d succeeded, %d failed", len(results)-failCount, failCount))
+	return nil
+}
+
 // syncPersistentVolumeClaimsWithMounting synchronizes PVCs between namespaces
 // This uses the rsync deployment to handle direct mounting and data transfer
 func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *ResourceSyncer, sourceClient, targetClient kubernetes.Interface,

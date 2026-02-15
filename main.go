@@ -19,11 +19,15 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	corev1 "k8s.io/api/core/v1"
+
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 	"github.com/supporttools/dr-syncer/pkg/controllers"
+	"github.com/supporttools/dr-syncer/pkg/controllers/syncer"
 )
 
 var scheme = runtime.NewScheme()
@@ -98,10 +102,12 @@ func main() {
 	}
 	log.Info("configured RemoteCluster controller")
 
-	// Set up NamespaceMapping controller
+	// Set up NamespaceMapping controller with backup sync support
+	backupSyncFunc := newBackupSyncFunc(mgr.GetClient())
 	if err = (&controllers.NamespaceMappingReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		BackupSyncFunc: backupSyncFunc,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error("unable to create NamespaceMapping controller")
 		os.Exit(1)
@@ -154,5 +160,27 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error("problem running manager")
 		os.Exit(1)
+	}
+}
+
+// newBackupSyncFunc creates a BackupPVCSyncFunc that wraps backup.VolumeBackupSyncer.
+// This adapter lives in main.go to break the import cycle between syncer and backup packages.
+func newBackupSyncFunc(ctrlClient client.Client) syncer.BackupPVCSyncFunc {
+	return func(ctx context.Context, mapping *drv1alpha1.NamespaceMapping,
+		pvcs []corev1.PersistentVolumeClaim, backupConfig *drv1alpha1.BackupConfig) []syncer.BackupPVCSyncResult {
+
+		vbs := backup.NewVolumeBackupSyncer(ctrlClient, ctrlClient)
+		results := vbs.SyncPVCsWithBackup(ctx, mapping, pvcs, backupConfig)
+
+		// Convert backup.PVCSyncResult to syncer.BackupPVCSyncResult
+		syncResults := make([]syncer.BackupPVCSyncResult, len(results))
+		for i, r := range results {
+			syncResults[i] = syncer.BackupPVCSyncResult{
+				PVCName:    r.PVCName,
+				SnapshotID: r.SnapshotID,
+				Err:        r.Err,
+			}
+		}
+		return syncResults
 	}
 }
