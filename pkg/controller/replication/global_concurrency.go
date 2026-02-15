@@ -90,11 +90,16 @@ func (m *GlobalConcurrencyManager) Acquire(ctx context.Context, namespace, pvcNa
 	PVCSyncQueueDepth.Set(float64(waitingNow))
 
 	startWait := time.Now()
-	m.log.WithFields(logrus.Fields{
+	logEntry := m.log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc":       pvcName,
 		"waiting":   waitingNow,
-	}).Debug("Waiting for concurrency slot")
+	})
+	if waitingNow > 1 {
+		logEntry.Info("Waiting for concurrency slot (queued)")
+	} else {
+		logEntry.Debug("Waiting for concurrency slot")
+	}
 
 	err := m.semaphore.Acquire(ctx, 1)
 
@@ -212,11 +217,16 @@ func (m *BackupConcurrencyManager) Acquire(ctx context.Context, namespace, pvcNa
 	BackupQueueDepth.Set(float64(waitingNow))
 
 	startWait := time.Now()
-	m.log.WithFields(logrus.Fields{
+	logEntry := m.log.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"pvc":       pvcName,
 		"waiting":   waitingNow,
-	}).Debug("Waiting for backup concurrency slot")
+	})
+	if waitingNow > 1 {
+		logEntry.Info("Waiting for backup concurrency slot (queued)")
+	} else {
+		logEntry.Debug("Waiting for backup concurrency slot")
+	}
 
 	err := m.semaphore.Acquire(ctx, 1)
 
