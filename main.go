@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -104,10 +105,12 @@ func main() {
 
 	// Set up NamespaceMapping controller with backup sync support
 	backupSyncFunc := newBackupSyncFunc(mgr.GetClient())
+	standbyCleanupFunc := newStandbyPVCCleanupFunc()
 	if err = (&controllers.NamespaceMappingReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		BackupSyncFunc: backupSyncFunc,
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		BackupSyncFunc:        backupSyncFunc,
+		StandbyPVCCleanupFunc: standbyCleanupFunc,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error("unable to create NamespaceMapping controller")
 		os.Exit(1)
@@ -160,6 +163,40 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error("problem running manager")
 		os.Exit(1)
+	}
+}
+
+// newStandbyPVCCleanupFunc creates a StandbyPVCCleanupFunc that wraps backup.StandbyPVCManager.
+// This adapter lives in main.go to break the import cycle between controllers and backup packages.
+func newStandbyPVCCleanupFunc() controllers.StandbyPVCCleanupFunc {
+	return func(ctx context.Context, destConfig *rest.Config, scheme *runtime.Scheme,
+		mapping *drv1alpha1.NamespaceMapping) error {
+
+		destRuntimeClient, err := client.New(destConfig, client.Options{Scheme: scheme})
+		if err != nil {
+			return fmt.Errorf("create destination runtime client: %w", err)
+		}
+
+		destNamespace := mapping.Spec.DestinationNamespace
+		if destNamespace == "" {
+			destNamespace = mapping.Spec.SourceNamespace
+		}
+
+		var standbyConfig *drv1alpha1.StandbyPVCConfig
+		if mapping.Spec.PVCConfig != nil &&
+			mapping.Spec.PVCConfig.DataSyncConfig != nil &&
+			mapping.Spec.PVCConfig.DataSyncConfig.BackupConfig != nil {
+			standbyConfig = mapping.Spec.PVCConfig.DataSyncConfig.BackupConfig.StandbyPVCConfig
+		}
+
+		standbyMgr := backup.NewStandbyPVCManager(
+			destRuntimeClient,
+			standbyConfig,
+			mapping.Spec.PVCConfig,
+			mapping.Name,
+		)
+
+		return standbyMgr.CleanupStandbyPVCs(ctx, destNamespace)
 	}
 }
 

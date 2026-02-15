@@ -26,6 +26,11 @@ const (
 	NamespaceMappingFinalizerName = "dr-syncer.io/cleanup-namespacemapping"
 )
 
+// StandbyPVCCleanupFunc is a function that cleans up standby PVCs for a given mapping.
+// It is injected by main.go to avoid import cycles between controllers and backup packages.
+type StandbyPVCCleanupFunc func(ctx context.Context, destConfig *rest.Config, scheme *runtime.Scheme,
+	mapping *drv1alpha1.NamespaceMapping) error
+
 // NamespaceMappingReconciler reconciles a NamespaceMapping object
 type NamespaceMappingReconciler struct {
 	client.Client
@@ -34,6 +39,10 @@ type NamespaceMappingReconciler struct {
 	// BackupSyncFunc is an optional function for backup-based PVC sync.
 	// Set by main.go to inject the backup.VolumeBackupSyncer dependency.
 	BackupSyncFunc syncer.BackupPVCSyncFunc
+
+	// StandbyPVCCleanupFunc is an optional function for cleaning up standby PVCs on deletion.
+	// Set by main.go to inject the backup.StandbyPVCManager dependency.
+	StandbyPVCCleanupFunc StandbyPVCCleanupFunc
 }
 
 // SetupWithManager sets up the controller with the manager
@@ -171,8 +180,8 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 
 	logging.LogInfo(nil, fmt.Sprintf("initializing destination cluster connection for cleanup: %s", destCluster))
 
-	// Get the destination cluster's dynamic client for cleanup
-	destDynamicClient, err := r.getClusterDynamicClient(ctx, destCluster, namespacemapping.Namespace)
+	// Get all destination cluster clients for cleanup
+	destDynamicClient, _, destConfig, err := r.getClusterClients(ctx, destCluster, namespacemapping.Namespace)
 	if err != nil {
 		// If we can't get the client (e.g., RemoteCluster deleted), skip cleanup
 		logging.LogInfo(nil, fmt.Sprintf("skipping cleanup as destination cluster client unavailable: %v", err))
@@ -182,6 +191,19 @@ func (r *NamespaceMappingReconciler) handleDeletion(ctx context.Context, namespa
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// Clean up standby PVCs if backup-based sync is configured and cleanup func is injected
+	if r.StandbyPVCCleanupFunc != nil && namespacemapping.Spec.PVCConfig != nil &&
+		namespacemapping.Spec.PVCConfig.DataSyncConfig != nil &&
+		namespacemapping.Spec.PVCConfig.DataSyncConfig.BackupConfig != nil {
+
+		if err := r.StandbyPVCCleanupFunc(ctx, destConfig, r.Scheme, namespacemapping); err != nil {
+			logging.LogError(nil, fmt.Sprintf("failed to cleanup standby PVCs: %v", err))
+			// Don't fail the finalizer - log and continue with resource cleanup
+		} else {
+			logging.LogInfo(nil, "standby PVC cleanup complete")
+		}
 	}
 
 	// Create a new mode handler with the destination cluster dynamic client
@@ -316,12 +338,6 @@ func removeString(slice []string, s string) []string {
 		}
 	}
 	return result
-}
-
-// getClusterDynamicClient gets a dynamic client for the specified cluster
-func (r *NamespaceMappingReconciler) getClusterDynamicClient(ctx context.Context, clusterName, namespace string) (dynamic.Interface, error) {
-	dynamicClient, _, _, err := r.getClusterClients(ctx, clusterName, namespace)
-	return dynamicClient, err
 }
 
 // getClusterClients gets all client types for the specified cluster

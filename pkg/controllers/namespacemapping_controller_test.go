@@ -1,12 +1,15 @@
 package controllers
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	drsyncerio "github.com/supporttools/dr-syncer/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
 )
 
 func TestNamespaceMappingReconciler_Struct(t *testing.T) {
@@ -497,4 +500,67 @@ func TestRemoveString_RealisticFinalizers(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestStandbyPVCCleanupFunc_Type(t *testing.T) {
+	// Verify StandbyPVCCleanupFunc can be assigned and called
+	called := false
+	var capturedMapping *drsyncerio.NamespaceMapping
+
+	fn := StandbyPVCCleanupFunc(func(ctx context.Context, destConfig *rest.Config, scheme *runtime.Scheme,
+		mapping *drsyncerio.NamespaceMapping) error {
+		called = true
+		capturedMapping = mapping
+		return nil
+	})
+
+	mapping := &drsyncerio.NamespaceMapping{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-mapping",
+			Namespace: "default",
+		},
+	}
+
+	err := fn(context.Background(), nil, nil, mapping)
+	assert.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "test-mapping", capturedMapping.Name)
+}
+
+func TestStandbyPVCCleanupFunc_Error(t *testing.T) {
+	fn := StandbyPVCCleanupFunc(func(ctx context.Context, destConfig *rest.Config, scheme *runtime.Scheme,
+		mapping *drsyncerio.NamespaceMapping) error {
+		return errors.New("cleanup failed")
+	})
+
+	err := fn(context.Background(), nil, nil, &drsyncerio.NamespaceMapping{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup failed")
+}
+
+func TestNamespaceMappingReconciler_WithStandbyCleanup(t *testing.T) {
+	scheme := runtime.NewScheme()
+
+	cleanupCalled := false
+	reconciler := &NamespaceMappingReconciler{
+		Scheme: scheme,
+		StandbyPVCCleanupFunc: func(ctx context.Context, destConfig *rest.Config, scheme *runtime.Scheme,
+			mapping *drsyncerio.NamespaceMapping) error {
+			cleanupCalled = true
+			return nil
+		},
+	}
+
+	assert.NotNil(t, reconciler.StandbyPVCCleanupFunc)
+	assert.False(t, cleanupCalled)
+}
+
+func TestNamespaceMappingReconciler_WithoutStandbyCleanup(t *testing.T) {
+	scheme := runtime.NewScheme()
+
+	reconciler := &NamespaceMappingReconciler{
+		Scheme: scheme,
+	}
+
+	assert.Nil(t, reconciler.StandbyPVCCleanupFunc)
 }

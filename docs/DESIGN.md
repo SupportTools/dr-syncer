@@ -188,6 +188,8 @@ type StandbyPVCManager interface {
 
 Implementation in `pkg/controller/backup/standby_pvc_manager.go`.
 
+The concrete implementation (`StandbyPVCManagerImpl`) also provides `CleanupStandbyPVCs(ctx, destNamespace) error` for cleanup during NamespaceMapping deletion. This method is not part of the interface because it is used only by the finalizer cleanup path (injected via `StandbyPVCCleanupFunc` to avoid import cycles), not by the sync workflow.
+
 ### Storage Class Resolution
 
 When creating a standby PVC, storage class is resolved with this priority:
@@ -200,6 +202,7 @@ Access modes follow the same priority pattern using `StandbyPVCConfig.AccessMode
 
 ### Lifecycle
 
+**Sync cycle:**
 ```
 1. Controller sync cycle triggers
 2. VolumeBackupSyncer.SyncPVCsWithBackup() iterates PVCs
@@ -209,6 +212,19 @@ Access modes follow the same priority pattern using `StandbyPVCConfig.AccessMode
    c. Restore operation runs on DR cluster (Kopia restore from S3 to standby PVC)
    d. StandbyPVCManager.UpdateStandbyPVCStatus() annotates with restore metadata
 4. Repeat on schedule
+```
+
+**Cleanup on NamespaceMapping deletion:**
+```
+1. NamespaceMapping deletion triggers finalizer (handleDeletion)
+2. If backup-based sync is configured (PVCConfig.DataSyncConfig.BackupConfig != nil):
+   a. Create controller-runtime client for destination cluster
+   b. Create StandbyPVCManager with mapping name for label filtering
+   c. Call CleanupStandbyPVCs() — deletes standby PVCs with matching
+      dr-syncer.io/mapping label, skips PVCs mounted by pods
+   d. Errors are logged but do not block finalizer removal (graceful degradation)
+3. CleanupResources() deletes other synced resources
+4. Finalizer removed
 ```
 
 ## VolumeBackupSyncer Orchestration
