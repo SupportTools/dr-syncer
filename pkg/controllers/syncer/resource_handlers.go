@@ -246,40 +246,14 @@ func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sou
 
 		pvc.Namespace = dstNamespace
 
-		// Apply storage class mapping if configured
-		if pvcConfig != nil && len(pvcConfig.StorageClassMappings) > 0 {
-			// Check if PVC has a storage class override label
-			if override, exists := pvc.Labels["dr-syncer.io/storage-class"]; exists {
-				storageClass := override
-				pvc.Spec.StorageClassName = &storageClass
-			} else {
-				// Apply storage class mapping
-				for _, mapping := range pvcConfig.StorageClassMappings {
-					if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == mapping.From {
-						storageClass := mapping.To
-						pvc.Spec.StorageClassName = &storageClass
-						break
-					}
-				}
-			}
-		}
+		applyStorageClassMapping(&pvc, pvcConfig)
+		applyAccessModeMapping(&pvc, pvcConfig)
 
 		// Log PVC details for debugging
 		log.Info(fmt.Sprintf("PVC %s/%s: StorageClassName=%v, Resources=%v",
 			pvc.Namespace, pvc.Name,
 			pvc.Spec.StorageClassName,
 			pvc.Spec.Resources))
-
-		// Apply access mode mapping if configured
-		if pvcConfig != nil && len(pvcConfig.AccessModeMappings) > 0 {
-			for _, mapping := range pvcConfig.AccessModeMappings {
-				for i, mode := range pvc.Spec.AccessModes {
-					if string(mode) == mapping.From {
-						pvc.Spec.AccessModes[i] = corev1.PersistentVolumeAccessMode(mapping.To)
-					}
-				}
-			}
-		}
 
 		// Validate storage class exists in destination cluster
 		if err := validation.ValidateStorageClass(ctx, syncer.destClient, pvc.Spec.StorageClassName); err != nil {
@@ -289,77 +263,11 @@ func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sou
 			)
 		}
 
-		// Check if PVC already exists in destination cluster
-		existingPVC, err := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
-		pvcExists := err == nil
-
-		// Handle volume attributes and PV syncing
-		syncPV := false
-		if pvcConfig != nil {
-			syncPV = pvcConfig.SyncPersistentVolumes
+		resultPVC, err := createOrUpdateDestPVC(ctx, syncer.destClient, &pvc, dstNamespace, pvcConfig)
+		if err != nil {
+			return err
 		}
-
-		if !pvcExists {
-			// For new PVCs, clear volumeName to allow dynamic provisioning in destination cluster
-			if !syncPV {
-				pvc.Spec.VolumeName = ""
-			}
-
-			// Clear binding annotations that might cause issues
-			if pvc.Annotations == nil {
-				pvc.Annotations = make(map[string]string)
-			}
-			delete(pvc.Annotations, "pv.kubernetes.io/bind-completed")
-			delete(pvc.Annotations, "pv.kubernetes.io/bound-by-controller")
-			delete(pvc.Annotations, "volume.kubernetes.io/selected-node")
-
-			// Clear volume attributes if PreserveVolumeAttributes is false
-			if (pvcConfig == nil || !pvcConfig.PreserveVolumeAttributes) && !syncPV {
-				pvc.Spec.VolumeMode = nil
-				pvc.Spec.Selector = nil
-				pvc.Spec.DataSource = nil
-				pvc.Spec.DataSourceRef = nil
-			}
-
-			// Create the PVC in the destination cluster
-			log.Info(fmt.Sprintf("creating new PVC %s in namespace %s", pvc.Name, dstNamespace))
-
-			// Clear resourceVersion before creating
-			pvc.ResourceVersion = ""
-
-			createdPVC, err := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, &pvc, metav1.CreateOptions{})
-			if err != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to create PVC %s: %w", pvc.Name, err),
-					fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name),
-				)
-			}
-
-			// Add to synced PVCs list for data sync
-			syncedPVCs = append(syncedPVCs, *createdPVC)
-		} else {
-			// For existing PVCs, we need to be careful with immutable fields
-			log.Info(fmt.Sprintf("PVC %s already exists in namespace %s", pvc.Name, dstNamespace))
-
-			// Only update mutable fields
-			updatePVC := existingPVC.DeepCopy()
-
-			// Update resources.requests (mutable field)
-			updatePVC.Spec.Resources = pvc.Spec.Resources
-
-			// Update the PVC in the destination cluster
-			log.Info(fmt.Sprintf("updating existing PVC %s in namespace %s", pvc.Name, dstNamespace))
-			updatedPVC, err := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
-			if err != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to update PVC %s: %w", pvc.Name, err),
-					fmt.Sprintf("PersistentVolumeClaim/%s", pvc.Name),
-				)
-			}
-
-			// Add to synced PVCs list for data sync
-			syncedPVCs = append(syncedPVCs, *updatedPVC)
-		}
+		syncedPVCs = append(syncedPVCs, *resultPVC)
 	}
 
 	// Log PVC config details for debugging

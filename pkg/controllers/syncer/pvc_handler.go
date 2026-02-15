@@ -79,7 +79,7 @@ func syncPVCsViaBackup(ctx context.Context, syncer *ResourceSyncer, sourceClient
 		)
 	}
 
-	// Create/update PVC resources in destination (same as rsync path)
+	// Create/update PVC resources in destination using shared helpers
 	var pvcList []corev1.PersistentVolumeClaim
 	for _, pvc := range pvcs.Items {
 		if utils.ShouldIgnoreResource(&pvc) {
@@ -89,81 +89,14 @@ func syncPVCsViaBackup(ctx context.Context, syncer *ResourceSyncer, sourceClient
 		destPVC := pvc.DeepCopy()
 		destPVC.Namespace = dstNamespace
 
-		// Apply storage class mapping
-		if pvcConfig != nil && len(pvcConfig.StorageClassMappings) > 0 {
-			if override, exists := destPVC.Labels["dr-syncer.io/storage-class"]; exists {
-				storageClass := override
-				destPVC.Spec.StorageClassName = &storageClass
-			} else {
-				for _, m := range pvcConfig.StorageClassMappings {
-					if destPVC.Spec.StorageClassName != nil && *destPVC.Spec.StorageClassName == m.From {
-						storageClass := m.To
-						destPVC.Spec.StorageClassName = &storageClass
-						break
-					}
-				}
-			}
+		applyStorageClassMapping(destPVC, pvcConfig)
+		applyAccessModeMapping(destPVC, pvcConfig)
+
+		resultPVC, err := createOrUpdateDestPVC(ctx, syncer.destClient, destPVC, dstNamespace, pvcConfig)
+		if err != nil {
+			return err
 		}
-
-		// Apply access mode mapping
-		if pvcConfig != nil && len(pvcConfig.AccessModeMappings) > 0 {
-			for _, m := range pvcConfig.AccessModeMappings {
-				for i, mode := range destPVC.Spec.AccessModes {
-					if string(mode) == m.From {
-						destPVC.Spec.AccessModes[i] = corev1.PersistentVolumeAccessMode(m.To)
-					}
-				}
-			}
-		}
-
-		// Check if PVC exists in destination
-		existingPVC, getErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Get(ctx, destPVC.Name, metav1.GetOptions{})
-		pvcExists := getErr == nil
-
-		syncPV := false
-		if pvcConfig != nil {
-			syncPV = pvcConfig.SyncPersistentVolumes
-		}
-
-		if !pvcExists {
-			if !syncPV {
-				destPVC.Spec.VolumeName = ""
-			}
-			if destPVC.Annotations == nil {
-				destPVC.Annotations = make(map[string]string)
-			}
-			delete(destPVC.Annotations, "pv.kubernetes.io/bind-completed")
-			delete(destPVC.Annotations, "pv.kubernetes.io/bound-by-controller")
-			delete(destPVC.Annotations, "volume.kubernetes.io/selected-node")
-
-			if (pvcConfig == nil || !pvcConfig.PreserveVolumeAttributes) && !syncPV {
-				destPVC.Spec.VolumeMode = nil
-				destPVC.Spec.Selector = nil
-				destPVC.Spec.DataSource = nil
-				destPVC.Spec.DataSourceRef = nil
-			}
-
-			destPVC.ResourceVersion = ""
-			createdPVC, createErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, destPVC, metav1.CreateOptions{})
-			if createErr != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to create PVC %s: %w", destPVC.Name, createErr),
-					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
-				)
-			}
-			pvcList = append(pvcList, *createdPVC)
-		} else {
-			updatePVC := existingPVC.DeepCopy()
-			updatePVC.Spec.Resources = destPVC.Spec.Resources
-			updatedPVC, updateErr := syncer.destClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
-			if updateErr != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to update PVC %s: %w", destPVC.Name, updateErr),
-					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
-				)
-			}
-			pvcList = append(pvcList, *updatedPVC)
-		}
+		pvcList = append(pvcList, *resultPVC)
 	}
 
 	// If data sync is not enabled or no PVCs to sync, we're done
@@ -219,116 +152,23 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 	// Track synced PVCs for data synchronization
 	var syncedPVCs []corev1.PersistentVolumeClaim
 
-	// Process each PVC
+	// Process each PVC using shared helpers
 	for _, pvc := range pvcs.Items {
 		if utils.ShouldIgnoreResource(&pvc) {
 			continue
 		}
 
-		// Copy the PVC for the destination namespace
 		destPVC := pvc.DeepCopy()
 		destPVC.Namespace = dstNamespace
 
-		// Apply storage class mapping if configured
-		if pvcConfig != nil && len(pvcConfig.StorageClassMappings) > 0 {
-			// Check if PVC has a storage class override label
-			if override, exists := destPVC.Labels["dr-syncer.io/storage-class"]; exists {
-				storageClass := override
-				destPVC.Spec.StorageClassName = &storageClass
-			} else {
-				// Apply storage class mapping
-				for _, mapping := range pvcConfig.StorageClassMappings {
-					if destPVC.Spec.StorageClassName != nil && *destPVC.Spec.StorageClassName == mapping.From {
-						storageClass := mapping.To
-						destPVC.Spec.StorageClassName = &storageClass
-						break
-					}
-				}
-			}
+		applyStorageClassMapping(destPVC, pvcConfig)
+		applyAccessModeMapping(destPVC, pvcConfig)
+
+		resultPVC, err := createOrUpdateDestPVC(ctx, targetClient, destPVC, dstNamespace, pvcConfig)
+		if err != nil {
+			return err
 		}
-
-		// Apply access mode mapping if configured
-		if pvcConfig != nil && len(pvcConfig.AccessModeMappings) > 0 {
-			for _, mapping := range pvcConfig.AccessModeMappings {
-				for i, mode := range destPVC.Spec.AccessModes {
-					if string(mode) == mapping.From {
-						destPVC.Spec.AccessModes[i] = corev1.PersistentVolumeAccessMode(mapping.To)
-					}
-				}
-			}
-		}
-
-		// Handle volume attributes and PV syncing
-		syncPV := false
-		if pvcConfig != nil {
-			syncPV = pvcConfig.SyncPersistentVolumes
-		}
-
-		// Check if PVC already exists in destination cluster
-		existingPVC, err := targetClient.CoreV1().PersistentVolumeClaims(dstNamespace).Get(ctx, destPVC.Name, metav1.GetOptions{})
-		pvcExists := err == nil
-
-		if !pvcExists {
-			// For new PVCs, clear volumeName to allow dynamic provisioning in destination cluster
-			if !syncPV {
-				destPVC.Spec.VolumeName = ""
-			}
-
-			// Clear binding annotations that might cause issues
-			if destPVC.Annotations == nil {
-				destPVC.Annotations = make(map[string]string)
-			}
-			delete(destPVC.Annotations, "pv.kubernetes.io/bind-completed")
-			delete(destPVC.Annotations, "pv.kubernetes.io/bound-by-controller")
-			delete(destPVC.Annotations, "volume.kubernetes.io/selected-node")
-
-			// Clear volume attributes if PreserveVolumeAttributes is false
-			if (pvcConfig == nil || !pvcConfig.PreserveVolumeAttributes) && !syncPV {
-				destPVC.Spec.VolumeMode = nil
-				destPVC.Spec.Selector = nil
-				destPVC.Spec.DataSource = nil
-				destPVC.Spec.DataSourceRef = nil
-			}
-
-			// Create the PVC in the destination cluster
-			log.Info(fmt.Sprintf("Creating new PVC %s in namespace %s", destPVC.Name, dstNamespace))
-
-			// Clear resourceVersion before creating
-			destPVC.ResourceVersion = ""
-
-			createdPVC, err := targetClient.CoreV1().PersistentVolumeClaims(dstNamespace).Create(ctx, destPVC, metav1.CreateOptions{})
-			if err != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to create PVC %s: %w", destPVC.Name, err),
-					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
-				)
-			}
-
-			// Add to synced PVCs list for data sync
-			syncedPVCs = append(syncedPVCs, *createdPVC)
-		} else {
-			// For existing PVCs, we need to be careful with immutable fields
-			log.Info(fmt.Sprintf("PVC %s already exists in namespace %s", destPVC.Name, dstNamespace))
-
-			// Only update mutable fields
-			updatePVC := existingPVC.DeepCopy()
-
-			// Update resources.requests (mutable field)
-			updatePVC.Spec.Resources = destPVC.Spec.Resources
-
-			// Update the PVC in the destination cluster
-			log.Info(fmt.Sprintf("Updating existing PVC %s in namespace %s", destPVC.Name, dstNamespace))
-			updatedPVC, err := targetClient.CoreV1().PersistentVolumeClaims(dstNamespace).Update(ctx, updatePVC, metav1.UpdateOptions{})
-			if err != nil {
-				return syncerrors.NewRetryableError(
-					fmt.Errorf("failed to update PVC %s: %w", destPVC.Name, err),
-					fmt.Sprintf("PersistentVolumeClaim/%s", destPVC.Name),
-				)
-			}
-
-			// Add to synced PVCs list for data sync
-			syncedPVCs = append(syncedPVCs, *updatedPVC)
-		}
+		syncedPVCs = append(syncedPVCs, *resultPVC)
 	}
 
 	// Log PVC config details for debugging
