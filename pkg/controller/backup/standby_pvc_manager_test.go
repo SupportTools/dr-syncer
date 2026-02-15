@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,7 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
@@ -693,5 +696,169 @@ func TestNewStandbyPVCManager(t *testing.T) {
 	}
 	if mgr.PVCConfig != nil {
 		t.Error("expected nil PVCConfig")
+	}
+}
+
+func TestCleanupStandbyPVCs_IsInUseCheckError(t *testing.T) {
+	scheme := testScheme()
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "data-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:    "true",
+				labelManagedBy:  labelManagedByValue,
+				labelMappingRef: "test-mapping",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+
+	// Intercept List calls: fail only for Pod lists (used by isStandbyPVCInUse),
+	// allow PVC lists (used by ListStandbyPVCs) to pass through.
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.PodList); ok {
+					return fmt.Errorf("simulated pod list error")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	err := mgr.CleanupStandbyPVCs(ctx, "dr-ns")
+	// When isStandbyPVCInUse errors, the PVC is skipped (not deleted), no error returned.
+	if err != nil {
+		t.Fatalf("expected no error (PVC skipped on in-use check failure), got: %v", err)
+	}
+
+	// Verify the PVC was NOT deleted (skipped due to in-use check error).
+	existing := &corev1.PersistentVolumeClaim{}
+	if getErr := destClient.Get(ctx, types.NamespacedName{Name: "data-pvc-standby", Namespace: "dr-ns"}, existing); getErr != nil {
+		t.Fatalf("expected PVC to still exist (skipped), but got: %v", getErr)
+	}
+}
+
+func TestCleanupStandbyPVCs_DeleteError(t *testing.T) {
+	scheme := testScheme()
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fail-delete-pvc-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:    "true",
+				labelManagedBy:  labelManagedByValue,
+				labelMappingRef: "test-mapping",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return fmt.Errorf("simulated delete error")
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	err := mgr.CleanupStandbyPVCs(ctx, "dr-ns")
+	if err == nil {
+		t.Fatal("expected error from failed PVC deletion")
+	}
+	if !strings.Contains(err.Error(), "failed to delete") {
+		t.Errorf("expected 'failed to delete' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "fail-delete-pvc-standby") {
+		t.Errorf("expected PVC name in error, got: %v", err)
+	}
+}
+
+func TestCleanupStandbyPVCs_MultipleDeleteErrors(t *testing.T) {
+	scheme := testScheme()
+	pvc1 := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pvc-a-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:    "true",
+				labelManagedBy:  labelManagedByValue,
+				labelMappingRef: "test-mapping",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("5Gi"),
+				},
+			},
+		},
+	}
+	pvc2 := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pvc-b-standby",
+			Namespace: "dr-ns",
+			Labels: map[string]string{
+				labelStandby:    "true",
+				labelManagedBy:  labelManagedByValue,
+				labelMappingRef: "test-mapping",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("5Gi"),
+				},
+			},
+		},
+	}
+
+	// Track how many delete attempts are made.
+	deleteAttempts := 0
+	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pvc1, pvc2).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				deleteAttempts++
+				return fmt.Errorf("simulated delete error for %s", obj.GetName())
+			},
+		}).Build()
+
+	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	ctx := context.Background()
+	err := mgr.CleanupStandbyPVCs(ctx, "dr-ns")
+	if err == nil {
+		t.Fatal("expected error from multiple failed PVC deletions")
+	}
+
+	// Both PVCs should have been attempted for deletion.
+	if deleteAttempts != 2 {
+		t.Errorf("expected 2 delete attempts, got %d", deleteAttempts)
+	}
+
+	// Error message should report the count of failures.
+	if !strings.Contains(err.Error(), "failed to delete 2 standby PVCs") {
+		t.Errorf("expected error about 2 failed PVCs, got: %v", err)
 	}
 }
