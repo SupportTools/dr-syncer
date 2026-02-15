@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/sirupsen/logrus" // used by captureLogOutput to set formatter
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/supporttools/dr-syncer/pkg/logging"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -1204,4 +1207,113 @@ func TestUpdateWorkloadPVCReferences_StatefulSetUpdateFails(t *testing.T) {
 	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
 	require.NoError(t, err)   // StatefulSet update failure is logged, not returned.
 	assert.Equal(t, 1, count) // Only deployment update succeeded.
+}
+
+// --- Log capture tests for VCT warning emission ---
+
+// captureLogOutput redirects the package-level logrus logger to a buffer,
+// returning the buffer for assertion and registering cleanup to restore stdout.
+//
+// WARNING: This mutates the global logger singleton. Tests using this helper
+// MUST NOT use t.Parallel() and must run sequentially within the package.
+func captureLogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	logger := logging.SetupLogging()
+	origOutput := logger.Out
+	origFormatter := logger.Formatter
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	logger.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true, DisableColors: true})
+	t.Cleanup(func() {
+		logger.SetOutput(origOutput)
+		logger.SetFormatter(origFormatter)
+	})
+	return &buf
+}
+
+func TestUpdateWorkloadPVCReferences_VCTWarningEmitted(t *testing.T) {
+	buf := captureLogOutput(t)
+
+	ns := "dr-ns"
+	// StatefulSet with VCT named "data" and STS name "db".
+	// VCT-provisioned PVCs follow pattern: data-db-<ordinal>
+	sts := newStatefulSetWithVCT("db", ns)
+	client := fakeclientset.NewSimpleClientset(sts)
+	ctx := context.Background()
+
+	// Mapping key "data-db-0" overlaps with VCT pattern "data-db-".
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-db-0-standby", SourcePVCName: "data-db-0"},
+	}
+
+	_, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "volumeClaimTemplates which are immutable")
+	assert.Contains(t, output, "StatefulSet db")
+}
+
+func TestUpdateWorkloadPVCReferences_VCTWarningNotEmitted(t *testing.T) {
+	buf := captureLogOutput(t)
+
+	ns := "dr-ns"
+	// StatefulSet with VCT named "data" and STS name "db".
+	// Mapping key "shared-data" does NOT overlap with VCT pattern "data-db-".
+	sts := newStatefulSetWithVCTAndPVC("db", ns, "shared-data")
+	client := fakeclientset.NewSimpleClientset(sts)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "shared-data-standby", SourcePVCName: "shared-data"},
+	}
+
+	_, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.NotContains(t, output, "volumeClaimTemplates which are immutable")
+}
+
+func TestRevertWorkloadPVCReferences_VCTWarningEmitted(t *testing.T) {
+	buf := captureLogOutput(t)
+
+	ns := "dr-ns"
+	sts := newStatefulSetWithVCT("db", ns)
+	client := fakeclientset.NewSimpleClientset(sts)
+	ctx := context.Background()
+
+	// In revert, pvcMapping key = spvc.Name (the standby name).
+	// Name "data-db-0" has prefix "data-db-" matching the VCT pattern.
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-db-0", SourcePVCName: "data-db-0-original"},
+	}
+
+	_, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "volumeClaimTemplates which are immutable")
+	assert.Contains(t, output, "failback")
+}
+
+func TestRevertWorkloadPVCReferences_VCTWarningNotEmitted(t *testing.T) {
+	buf := captureLogOutput(t)
+
+	ns := "dr-ns"
+	// StatefulSet with VCT and static PVC. Revert mapping uses standby name as key.
+	sts := newStatefulSetWithVCTAndPVC("db", ns, "shared-data-standby")
+	client := fakeclientset.NewSimpleClientset(sts)
+	ctx := context.Background()
+
+	// Mapping key is "shared-data-standby" which does NOT overlap with VCT "data-db-" pattern.
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "shared-data-standby", SourcePVCName: "shared-data"},
+	}
+
+	_, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.NotContains(t, output, "volumeClaimTemplates which are immutable")
 }
