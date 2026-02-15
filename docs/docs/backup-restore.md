@@ -47,6 +47,105 @@ Kopia uses content-defined chunking (~4MB blocks) with deduplication:
 - **Restore**: Only changed files are overwritten on the standby PVC
 - **Storage**: Full deduplication across all snapshots, typically 70-90% savings for incremental backups
 
+## Backup Orchestration Architecture
+
+The backup pipeline is composed of three layers: **orchestration**, **workflow execution**, and **pod management**.
+
+### Component Flow
+
+```
+NamespaceMapping Reconciler
+         │
+         │  (BackupConfig.Enabled == true)
+         ▼
+VolumeBackupSyncer.SyncPVCsWithBackup()
+    │
+    ├─ Validate BackupConfig + resolve BackupRepository (must be Ready)
+    ├─ Update NamespaceMapping annotations → "Running"
+    │
+    ├─ For each PVC:
+    │   ├─ BackupConcurrencyManager.Acquire()
+    │   │
+    │   ├─ Create VolumeBackupOperation CR (type=Backup, source cluster)
+    │   │   └─ BackupWorkflow.Execute()
+    │   │       ├─ resolveDataAccessStrategy()
+    │   │       ├─ Snapshot path: CSI snapshot → temp PVC → Kopia pod
+    │   │       └─ Live path: find PVC node → pin Kopia pod → read live
+    │   │
+    │   ├─ Poll VBO status → wait for BackupComplete
+    │   │   └─ Extract KopiaSnapshotID
+    │   │
+    │   ├─ Create VolumeBackupOperation CR (type=Restore, dest cluster)
+    │   │   └─ BackupWorkflow.Execute()
+    │   │       └─ Run Kopia restore pod → write to standby PVC
+    │   │
+    │   ├─ Poll VBO status → wait for RestoreComplete
+    │   │
+    │   └─ BackupConcurrencyManager.Release()
+    │
+    └─ Update NamespaceMapping annotations → "Completed" / "PartialFailure" / "Failed"
+```
+
+**VolumeBackupSyncer** (`pkg/controller/backup/volume_backup_syncer.go`) is the top-level orchestrator. It accepts a list of PVCs from the NamespaceMapping reconciler and coordinates backup + restore for each one. Individual PVC failures are tolerated — partial success is reported rather than aborting the entire batch.
+
+**BackupWorkflow** (`pkg/controller/backup/backup_workflow.go`) handles the pod-level execution. It resolves the data access strategy (snapshot vs live), manages CSI snapshots when applicable, builds Kopia pod specs, and monitors pod completion.
+
+**KopiaPod** (`pkg/controller/backup/kopia_pod.go`) constructs Kubernetes Pod specs for Kopia operations, handling volume mounts, S3 credentials, node affinity, and resource limits.
+
+### VolumeBackupOperation Lifecycle
+
+Each PVC sync creates two VolumeBackupOperation CRs — one for backup (source cluster) and one for restore (destination cluster).
+
+**Backup phases:**
+
+```
+Pending → SnapshotCreated → DataAccessReady → BackupInProgress → BackupComplete
+```
+
+**Restore phases:**
+
+```
+Pending → DataAccessReady → RestoreInProgress → RestoreComplete
+```
+
+Any phase can transition to `Failed` with an error message in `status.errorMessage`.
+
+### Rsync vs Backup Path Comparison
+
+| Aspect | Rsync (PVCSyncer) | Backup (VolumeBackupSyncer) |
+|--------|-------------------|----------------------------|
+| **Transport** | Direct SSH between clusters | S3 (async, via Kopia repository) |
+| **Consistency** | Live data (files may change during sync) | Point-in-time via CSI snapshot |
+| **Incrementality** | File-level delta (rsync algorithm) | Block-level dedup (content-defined chunking) |
+| **Concurrency control** | GlobalConcurrencyManager | BackupConcurrencyManager (isolated) |
+| **Cluster connectivity** | Requires SSH path between clusters | Only needs shared S3 access |
+| **Failover speed** | Requires final sync at cutover time | Standby PVC ready instantly |
+| **Storage overhead** | None (direct transfer) | S3 bucket for deduplicated snapshots |
+| **Best for** | Small PVCs, simple setups | Large PVCs, cross-region DR, strict RPO |
+
+### Concurrency Model
+
+Backup and rsync operations use **independent semaphores** to prevent resource contention:
+
+- **GlobalConcurrencyManager**: Controls rsync pod concurrency. Default limit configurable per cluster.
+- **BackupConcurrencyManager**: Controls Kopia backup/restore pod concurrency. Default limit: 3 concurrent operations.
+
+The two pools are fully isolated — running backup operations does not consume rsync slots and vice versa. This allows operators to tune each path independently based on cluster resources and I/O capacity.
+
+When the backup concurrency limit is reached, new operations queue with an Info-level log message showing the current queue depth. Prometheus metrics expose `BackupConcurrentCount`, `BackupQueueDepth`, and `BackupQueueWaitDuration` for monitoring.
+
+### NamespaceMapping Status for Backup Operations
+
+The VolumeBackupSyncer updates NamespaceMapping annotations to reflect backup sync progress. These annotations supplement the standard `status` subresource for quick observability:
+
+| Annotation | Values | Description |
+|------------|--------|-------------|
+| `dr-syncer.io/last-backup-sync-time` | RFC 3339 timestamp | When the last backup sync completed |
+| `dr-syncer.io/last-backup-sync-status` | `Running`, `Completed`, `PartialFailure`, `Failed` | Outcome of the last backup sync |
+| `dr-syncer.io/last-backup-sync-error` | Error message string | Set on failure, cleared on success |
+
+The orchestrator uses a **get-then-update** pattern to avoid etcd conflicts when updating annotations. The latest NamespaceMapping is fetched before each annotation update to ensure no concurrent modifications are lost.
+
 ## Custom Resource Definitions
 
 ### BackupRepository
