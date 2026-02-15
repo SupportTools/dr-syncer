@@ -51,11 +51,6 @@ type VolumeBackupSyncer struct {
 	// Defaults to defaultPollInterval if zero.
 	PollInterval time.Duration
 
-	// StandbyPVCMgr manages standby PVC lifecycle on the DR cluster.
-	// When non-nil, restore operations target standby PVCs instead of
-	// direct destination PVCs. Constructed per-sync from BackupConfig.
-	StandbyPVCMgr StandbyPVCManager
-
 	Log *logrus.Entry
 }
 
@@ -110,13 +105,14 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 		return nil
 	}
 
-	// Construct StandbyPVCManager if standby PVCs are enabled.
+	// Construct StandbyPVCManager as a local variable if standby PVCs are enabled.
 	// StandbyPVCConfig defaults to enabled when nil, matching StandbyPVCManagerImpl.IsEnabled().
+	var standbyPVCMgr StandbyPVCManager
 	standbyEnabled := backupConfig.StandbyPVCConfig == nil ||
 		backupConfig.StandbyPVCConfig.Enabled == nil ||
 		*backupConfig.StandbyPVCConfig.Enabled
 	if standbyEnabled {
-		vbs.StandbyPVCMgr = NewStandbyPVCManager(
+		standbyPVCMgr = NewStandbyPVCManager(
 			vbs.DestinationClient,
 			backupConfig.StandbyPVCConfig,
 			mapping.Spec.PVCConfig,
@@ -124,7 +120,6 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 		)
 		log.Info("Standby PVC management enabled for backup sync")
 	} else {
-		vbs.StandbyPVCMgr = nil
 		log.Info("Standby PVC management disabled for backup sync")
 	}
 
@@ -136,7 +131,7 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 
 	for i := range pvcs {
 		pvc := &pvcs[i]
-		result := vbs.syncSinglePVC(ctx, mapping, pvc, backupConfig, repo)
+		result := vbs.syncSinglePVC(ctx, mapping, pvc, backupConfig, repo, standbyPVCMgr)
 		results = append(results, result)
 
 		if result.Err != nil {
@@ -176,12 +171,14 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 }
 
 // syncSinglePVC performs the backup→restore cycle for one PVC, respecting concurrency limits.
+// standbyPVCMgr is passed as a parameter to avoid struct field mutation (concurrency-safe).
 func (vbs *VolumeBackupSyncer) syncSinglePVC(
 	ctx context.Context,
 	mapping *drv1alpha1.NamespaceMapping,
 	pvc *corev1.PersistentVolumeClaim,
 	backupConfig *drv1alpha1.BackupConfig,
 	repo *drv1alpha1.BackupRepository,
+	standbyPVCMgr StandbyPVCManager,
 ) PVCSyncResult {
 	log := vbs.Log.WithFields(logrus.Fields{
 		"mapping": mapping.Name,
@@ -229,12 +226,12 @@ func (vbs *VolumeBackupSyncer) syncSinglePVC(
 		Namespace: mapping.Spec.DestinationNamespace,
 		Name:      pvc.Name,
 	}
-	if vbs.StandbyPVCMgr != nil {
+	if standbyPVCMgr != nil {
 		sourcePVCRef := drv1alpha1.PVCReference{
 			Namespace: pvc.Namespace,
 			Name:      pvc.Name,
 		}
-		standbyRef, created, err := vbs.StandbyPVCMgr.EnsureStandbyPVC(
+		standbyRef, created, err := standbyPVCMgr.EnsureStandbyPVC(
 			ctx, sourcePVCRef, mapping.Spec.DestinationNamespace, &pvc.Spec,
 		)
 		if err != nil {
@@ -266,8 +263,8 @@ func (vbs *VolumeBackupSyncer) syncSinglePVC(
 	}
 
 	// Step 6: Update standby PVC status after successful restore.
-	if vbs.StandbyPVCMgr != nil {
-		if err := vbs.StandbyPVCMgr.UpdateStandbyPVCStatus(ctx, *destPVCRef, snapshotID); err != nil {
+	if standbyPVCMgr != nil {
+		if err := standbyPVCMgr.UpdateStandbyPVCStatus(ctx, *destPVCRef, snapshotID); err != nil {
 			log.WithError(err).Warn("Failed to update standby PVC status; restore data is intact")
 		}
 	}
