@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestListStandbyPVCs_NoResults(t *testing.T) {
@@ -964,4 +966,156 @@ func TestValidateStandbyPVCsForCutover_MixedReadiness(t *testing.T) {
 
 	assert.Equal(t, corev1.ClaimBound, pvcMap["cache-standby"].Phase)
 	assert.Nil(t, pvcMap["cache-standby"].LastRestoreTime)
+}
+
+// --- Error path tests for updateWorkloadPVCReferences / revertWorkloadPVCReferences ---
+
+func TestUpdateWorkloadPVCReferences_DeploymentUpdatePartialFailure(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web-ok", ns, "data"),
+		newDeploymentWithPVC("web-fail", ns, "data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Inject error only when updating the "web-fail" deployment.
+	client.PrependReactor("update", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		updateAction := action.(k8stesting.UpdateAction)
+		dep := updateAction.GetObject().(*appsv1.Deployment)
+		if dep.Name == "web-fail" {
+			return true, nil, fmt.Errorf("simulated API conflict")
+		}
+		return false, nil, nil
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)   // Function logs warning but doesn't return error.
+	assert.Equal(t, 1, count) // Only the successful update is counted.
+}
+
+func TestUpdateWorkloadPVCReferences_StatefulSetListFails(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Inject error on listing statefulsets.
+	client.PrependReactor("list", "statefulsets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated RBAC denial")
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list statefulsets")
+	// Deployment was already updated successfully before the error.
+	assert.Equal(t, 1, count)
+}
+
+func TestUpdateWorkloadPVCReferences_AllDeploymentUpdatesFail(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web1", ns, "data"),
+		newDeploymentWithPVC("web2", ns, "data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Fail all deployment updates.
+	client.PrependReactor("update", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated network timeout")
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)   // Warnings logged, no error returned.
+	assert.Equal(t, 0, count) // No updates succeeded.
+}
+
+func TestRevertWorkloadPVCReferences_DeploymentUpdatePartialFailure(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web-ok", ns, "data-standby"),
+		newDeploymentWithPVC("web-fail", ns, "data-standby"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Inject error only when reverting the "web-fail" deployment.
+	client.PrependReactor("update", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		updateAction := action.(k8stesting.UpdateAction)
+		dep := updateAction.GetObject().(*appsv1.Deployment)
+		if dep.Name == "web-fail" {
+			return true, nil, fmt.Errorf("simulated API conflict")
+		}
+		return false, nil, nil
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)   // Function logs warning but doesn't return error.
+	assert.Equal(t, 1, count) // Only the successful revert is counted.
+}
+
+func TestRevertWorkloadPVCReferences_StatefulSetListFails(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data-standby"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Inject error on listing statefulsets.
+	client.PrependReactor("list", "statefulsets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated RBAC denial")
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list statefulsets")
+	// Deployment was already reverted successfully before the error.
+	assert.Equal(t, 1, count)
+}
+
+func TestUpdateWorkloadPVCReferences_StatefulSetUpdateFails(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data"),
+		newStatefulSetWithPVC("db", ns, "data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+
+	// Fail only statefulset updates.
+	client.PrependReactor("update", "statefulsets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated API error")
+	})
+
+	ctx := context.Background()
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)   // StatefulSet update failure is logged, not returned.
+	assert.Equal(t, 1, count) // Only deployment update succeeded.
 }
