@@ -1141,11 +1141,11 @@ func TestExecuteRestore_HappyPath_FullWorkflow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Simulate the Kopia restore pod reaching Succeeded state.
+	// Simulate the Kopia restore pod reaching Succeeded state with restore summary.
 	// The restore operation name will be "test-mapping-my-pvc-restore",
 	// so the pod name is "dr-syncer-kopia-restore-test-mapping-my-pvc-restore".
 	go simulatePodCompletion(ctx, destClient, destNS, "dr-syncer-kopia-restore-",
-		corev1.PodSucceeded, "")
+		corev1.PodSucceeded, "Restored 15 files, 3 directories and 0 symbolic links (1.5 MB)")
 
 	// --- Execute ---
 	result, err := rw.ExecuteRestore(ctx, req)
@@ -1202,10 +1202,11 @@ func TestExecuteRestore_HappyPath_FullWorkflow(t *testing.T) {
 		t.Errorf("expected progress 100, got %d", restoreOp.Status.ProgressPercentage)
 	}
 
-	// BytesRestored is 0 because BackupWorkflow.executeRestore does not extract
-	// bytes from restore pods (only backup operations extract snapshot stats).
-	if result.BytesRestored != 0 {
-		t.Errorf("expected BytesRestored 0 for restore operation, got %d", result.BytesRestored)
+	// BytesRestored is extracted from the Kopia restore pod's summary output.
+	// "1.5 MB" = 1.5 * 1024 * 1024 = 1572864 bytes
+	expectedBytes := int64(1572864)
+	if result.BytesRestored != expectedBytes {
+		t.Errorf("expected BytesRestored %d, got %d", expectedBytes, result.BytesRestored)
 	}
 
 	// --- Verify Step 8: StandbyPVCManager.UpdateStandbyPVCStatus was called ---

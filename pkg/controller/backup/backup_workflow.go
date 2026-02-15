@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,7 +84,7 @@ func (bw *BackupWorkflow) Execute(ctx context.Context, operation *drv1alpha1.Vol
 		bytesTransferred, execErr = bw.executeBackup(ctx, operation, repo, podConfig)
 	case drv1alpha1.OperationTypeRestore:
 		log.Info("Starting restore workflow")
-		execErr = bw.executeRestore(ctx, operation, repo, podConfig)
+		bytesTransferred, execErr = bw.executeRestore(ctx, operation, repo, podConfig)
 	default:
 		RecordBackupFailure(opType, dataAccess, time.Since(startTime).Seconds())
 		return bw.failOperation(ctx, operation, fmt.Errorf("unknown operation type: %s", operation.Spec.OperationType))
@@ -354,25 +356,26 @@ func (bw *BackupWorkflow) runBackupPod(
 // executeRestore runs the restore workflow:
 // 1. Build Kopia restore pod with destination PVC mounted
 // 2. Wait for pod completion
-// 3. Update status
-func (bw *BackupWorkflow) executeRestore(ctx context.Context, operation *drv1alpha1.VolumeBackupOperation, repo *drv1alpha1.BackupRepository, podConfig KopiaPodConfig) error {
+// 3. Extract bytes transferred from pod output
+// 4. Update status with bytes transferred
+func (bw *BackupWorkflow) executeRestore(ctx context.Context, operation *drv1alpha1.VolumeBackupOperation, repo *drv1alpha1.BackupRepository, podConfig KopiaPodConfig) (int64, error) {
 	log := bw.Log.WithField("operation", operation.Name)
 
 	if operation.Spec.SnapshotID == "" {
-		return bw.failOperation(ctx, operation, fmt.Errorf("snapshotID is required for restore operations"))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("snapshotID is required for restore operations"))
 	}
 
 	if err := bw.updateStatus(ctx, operation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
 		status.Phase = drv1alpha1.VolumeBackupPhaseDataAccessReady
 		status.Message = "Destination PVC ready for restore"
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("update data access ready status: %w", err))
 	}
 
 	// Build the Kopia restore pod (validates snapshot ID and S3 config).
 	pod, err := BuildRestorePod(operation, repo, podConfig)
 	if err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("build restore pod: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("build restore pod: %w", err))
 	}
 
 	// Clean up pod on exit.
@@ -385,34 +388,40 @@ func (bw *BackupWorkflow) executeRestore(ctx context.Context, operation *drv1alp
 		"snapshot_id": operation.Spec.SnapshotID,
 	}).Info("Creating Kopia restore pod")
 	if err := bw.Client.Create(ctx, pod); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("create restore pod: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("create restore pod: %w", err))
 	}
 
 	if err := bw.updateStatus(ctx, operation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
 		status.Phase = drv1alpha1.VolumeBackupPhaseRestoreInProgress
 		status.Message = fmt.Sprintf("Kopia restore pod %s running", pod.Name)
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update restore in progress status: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("update restore in progress status: %w", err))
 	}
 
 	// Wait for pod to complete.
 	if err := bw.waitForPodCompletion(ctx, pod.Namespace, pod.Name, defaultPodTimeout); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("restore pod failed: %w", err))
+		return 0, bw.failOperation(ctx, operation, fmt.Errorf("restore pod failed: %w", err))
 	}
 
-	// Update status with completion.
+	// Extract bytes transferred from restore pod output.
+	bytesTransferred := bw.extractRestoreBytesFromPodLogs(ctx, pod.Namespace, pod.Name)
+
+	log.WithField("bytes_transferred", bytesTransferred).Info("Restore completed, bytes extracted")
+
+	// Update status with completion and bytes transferred.
 	now := metav1.Now()
 	if err := bw.updateStatus(ctx, operation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
 		status.Phase = drv1alpha1.VolumeBackupPhaseRestoreComplete
+		status.BytesTransferred = bytesTransferred
 		status.CompletionTime = &now
 		status.ProgressPercentage = 100
 		status.Message = "Restore completed successfully"
 	}); err != nil {
-		return bw.failOperation(ctx, operation, fmt.Errorf("update restore complete status: %w", err))
+		return bytesTransferred, bw.failOperation(ctx, operation, fmt.Errorf("update restore complete status: %w", err))
 	}
 
 	log.Info("Restore completed successfully")
-	return nil
+	return bytesTransferred, nil
 }
 
 // findPVCNode finds which node a PVC is currently mounted on by checking pods
@@ -604,6 +613,102 @@ func parseKopiaSnapshotOutput(output string) (string, int64, error) {
 	}
 
 	return "", 0, fmt.Errorf("no valid Kopia snapshot JSON found in output")
+}
+
+// extractRestoreBytesFromPodLogs attempts to extract bytes transferred from the Kopia
+// restore pod output. Unlike backup pods which emit structured JSON, restore pods output
+// a text summary line like: "Restored 2 files, 1 directories and 0 symbolic links (7.8 MB)"
+// This is best-effort — returns 0 if parsing fails (restore still succeeds).
+func (bw *BackupWorkflow) extractRestoreBytesFromPodLogs(ctx context.Context, namespace, podName string) int64 {
+	pod := &corev1.Pod{}
+	if err := bw.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: podName}, pod); err != nil {
+		bw.Log.WithError(err).Debug("Could not get pod for restore bytes extraction")
+		return 0
+	}
+
+	// Try termination message first.
+	if len(pod.Status.ContainerStatuses) > 0 {
+		cs := pod.Status.ContainerStatuses[0]
+		if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
+			if bytes, err := parseKopiaRestoreOutput(cs.State.Terminated.Message); err == nil && bytes > 0 {
+				return bytes
+			}
+		}
+	}
+
+	// Try pod logs via log reader.
+	if bw.podLogReader != nil {
+		logs, err := bw.podLogReader.GetPodLogs(ctx, namespace, podName, "kopia")
+		if err != nil {
+			bw.Log.WithError(err).Debug("Could not read pod logs for restore bytes extraction")
+			return 0
+		}
+		if bytes, err := parseKopiaRestoreOutput(logs); err == nil {
+			return bytes
+		}
+	}
+
+	return 0
+}
+
+// kopiaRestorePattern matches Kopia restore summary output.
+// Example: "Restored 2 files, 1 directories and 0 symbolic links (7.8 MB)"
+var kopiaRestorePattern = regexp.MustCompile(`Restored \d+ files.*\(([^)]+)\)`)
+
+// parseKopiaRestoreOutput extracts bytes transferred from Kopia's restore text output.
+// Kopia's `snapshot restore` outputs a summary line like:
+//
+//	"Restored 2 files, 1 directories and 0 symbolic links (7.8 MB)"
+//
+// Returns the byte count parsed from the human-readable size in parentheses.
+func parseKopiaRestoreOutput(output string) (int64, error) {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if matches := kopiaRestorePattern.FindStringSubmatch(line); len(matches) == 2 {
+			return parseHumanReadableBytes(matches[1])
+		}
+	}
+	return 0, fmt.Errorf("no Kopia restore summary found in output")
+}
+
+// parseHumanReadableBytes converts a human-readable byte string to int64.
+// Supports formats like "53 B", "7.8 KB", "1.2 MB", "3.5 GB", "1.1 TB".
+func parseHumanReadableBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty size string")
+	}
+
+	// Split into number and unit parts.
+	parts := strings.Fields(s)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid size format: %q", s)
+	}
+
+	value, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid number %q: %w", parts[0], err)
+	}
+
+	unit := strings.ToUpper(parts[1])
+	var multiplier float64
+	switch unit {
+	case "B":
+		multiplier = 1
+	case "KB":
+		multiplier = 1024
+	case "MB":
+		multiplier = 1024 * 1024
+	case "GB":
+		multiplier = 1024 * 1024 * 1024
+	case "TB":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("unknown unit %q", unit)
+	}
+
+	return int64(value * multiplier), nil
 }
 
 // updateStatus performs a get-then-update on the VolumeBackupOperation status subresource.

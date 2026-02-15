@@ -190,6 +190,224 @@ func TestParseKopiaSnapshotOutput(t *testing.T) {
 	}
 }
 
+// --- parseKopiaRestoreOutput tests ---
+
+func TestParseKopiaRestoreOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantBytes int64
+		wantErr   bool
+	}{
+		{
+			name:      "standard restore output with MB",
+			input:     "Restored 15 files, 3 directories and 0 symbolic links (7.8 MB)",
+			wantBytes: 8178892, // 7.8 * 1024 * 1024 truncated to int64
+		},
+		{
+			name:      "restore output with bytes",
+			input:     "Restored 2 files, 1 directories and 0 symbolic links (53 B)",
+			wantBytes: 53,
+		},
+		{
+			name:      "restore output with KB",
+			input:     "Restored 1 files, 0 directories and 0 symbolic links (512 KB)",
+			wantBytes: 512 * 1024,
+		},
+		{
+			name:      "restore output with GB",
+			input:     "Restored 100 files, 10 directories and 2 symbolic links (2.5 GB)",
+			wantBytes: 2684354560, // 2.5 * 1024^3
+		},
+		{
+			name:      "restore output with TB",
+			input:     "Restored 1000 files, 50 directories and 0 symbolic links (1.2 TB)",
+			wantBytes: 1319413953331, // 1.2 * 1024^4
+		},
+		{
+			name:      "restore output after progress lines",
+			input:     "Restoring...\nProcessing objects...\nRestored 5 files, 2 directories and 0 symbolic links (100 MB)",
+			wantBytes: 100 * 1024 * 1024,
+		},
+		{
+			name:      "restore output with trailing newline",
+			input:     "Restored 1 files, 0 directories and 0 symbolic links (1 KB)\n",
+			wantBytes: 1024,
+		},
+		{
+			name:    "no restore summary in output",
+			input:   "just some progress text\nno restore summary here",
+			wantErr: true,
+		},
+		{
+			name:    "empty output",
+			input:   "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bytes, err := parseKopiaRestoreOutput(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if bytes != tt.wantBytes {
+				t.Errorf("expected %d bytes, got %d", tt.wantBytes, bytes)
+			}
+		})
+	}
+}
+
+// --- parseHumanReadableBytes tests ---
+
+func TestParseHumanReadableBytes(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantBytes int64
+		wantErr   bool
+	}{
+		{name: "bytes", input: "53 B", wantBytes: 53},
+		{name: "kilobytes", input: "512 KB", wantBytes: 512 * 1024},
+		{name: "megabytes", input: "100 MB", wantBytes: 100 * 1024 * 1024},
+		{name: "gigabytes", input: "2 GB", wantBytes: 2 * 1024 * 1024 * 1024},
+		{name: "terabytes", input: "1 TB", wantBytes: 1024 * 1024 * 1024 * 1024},
+		{name: "fractional MB", input: "7.8 MB", wantBytes: 8178892},    // 7.8 * 1024^2
+		{name: "fractional GB", input: "1.5 GB", wantBytes: 1610612736}, // 1.5 * 1024^3
+		{name: "lowercase unit", input: "100 mb", wantBytes: 100 * 1024 * 1024},
+		{name: "leading whitespace", input: "  100 MB  ", wantBytes: 100 * 1024 * 1024},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "no unit", input: "100", wantErr: true},
+		{name: "unknown unit", input: "100 PB", wantErr: true},
+		{name: "invalid number", input: "abc MB", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bytes, err := parseHumanReadableBytes(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if bytes != tt.wantBytes {
+				t.Errorf("expected %d bytes, got %d", tt.wantBytes, bytes)
+			}
+		})
+	}
+}
+
+// --- extractRestoreBytesFromPodLogs tests ---
+
+func TestExtractRestoreBytesFromPodLogs_FromTerminationMessage(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "Restored 5 files, 2 directories and 0 symbolic links (10 MB)",
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	bytes := bw.extractRestoreBytesFromPodLogs(context.Background(), "test-ns", "restore-pod")
+	expected := int64(10 * 1024 * 1024)
+	if bytes != expected {
+		t.Errorf("expected %d bytes, got %d", expected, bytes)
+	}
+}
+
+func TestExtractRestoreBytesFromPodLogs_FromLogReader(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "", // empty
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{
+		Client:       k8sClient,
+		Log:          logrusTestEntry(),
+		podLogReader: &mockPodLogReader{logs: "Restoring...\nRestored 3 files, 1 directories and 0 symbolic links (500 KB)"},
+	}
+
+	bytes := bw.extractRestoreBytesFromPodLogs(context.Background(), "test-ns", "restore-pod")
+	expected := int64(500 * 1024)
+	if bytes != expected {
+		t.Errorf("expected %d bytes, got %d", expected, bytes)
+	}
+}
+
+func TestExtractRestoreBytesFromPodLogs_NoOutput_ReturnsZero(t *testing.T) {
+	scheme := workflowTestScheme()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-pod", Namespace: "test-ns"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					State: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{
+							ExitCode: 0,
+							Message:  "",
+						},
+					},
+				},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	bytes := bw.extractRestoreBytesFromPodLogs(context.Background(), "test-ns", "restore-pod")
+	if bytes != 0 {
+		t.Errorf("expected 0 bytes when no restore output available, got %d", bytes)
+	}
+}
+
+func TestExtractRestoreBytesFromPodLogs_PodNotFound_ReturnsZero(t *testing.T) {
+	scheme := workflowTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	bw := &BackupWorkflow{Client: k8sClient, Log: logrusTestEntry()}
+
+	bytes := bw.extractRestoreBytesFromPodLogs(context.Background(), "test-ns", "nonexistent")
+	if bytes != 0 {
+		t.Errorf("expected 0 bytes for non-existent pod, got %d", bytes)
+	}
+}
+
 // --- findPVCNode tests ---
 
 func TestFindPVCNode(t *testing.T) {
@@ -1213,9 +1431,9 @@ func TestExecute_RestoreSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Simulate restore pod completion (restore pods don't need termination messages for snapshot ID).
+	// Simulate restore pod completion with restore summary in termination message.
 	go simulatePodCompletion(ctx, k8sClient, "test-ns", "dr-syncer-kopia-restore-",
-		corev1.PodSucceeded, "")
+		corev1.PodSucceeded, "Restored 10 files, 2 directories and 0 symbolic links (5 MB)")
 
 	err := bw.Execute(ctx, op, repo, DefaultKopiaPodConfig())
 	if err != nil {
@@ -1234,6 +1452,10 @@ func TestExecute_RestoreSuccess(t *testing.T) {
 	}
 	if latest.Status.CompletionTime == nil {
 		t.Error("expected CompletionTime to be set")
+	}
+	expectedBytes := int64(5 * 1024 * 1024)
+	if latest.Status.BytesTransferred != expectedBytes {
+		t.Errorf("expected BytesTransferred %d, got %d", expectedBytes, latest.Status.BytesTransferred)
 	}
 }
 
