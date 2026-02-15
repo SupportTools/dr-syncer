@@ -41,7 +41,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "dr_syncer_backup_size_bytes",
 			Help:    "Size of backup and restore operations in bytes",
-			Buckets: prometheus.ExponentialBuckets(1024, 4, 12), // 1KB to ~16TB
+			Buckets: prometheus.ExponentialBuckets(1024, 4, 12), // 1KB to ~4GB
 		},
 		[]string{"operation_type"},
 	)
