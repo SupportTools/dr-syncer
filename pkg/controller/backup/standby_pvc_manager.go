@@ -16,6 +16,9 @@ import (
 	drv1alpha1 "github.com/supporttools/dr-syncer/api/v1alpha1"
 )
 
+// Compile-time interface assertion.
+var _ StandbyPVCManager = (*StandbyPVCManagerImpl)(nil)
+
 const (
 	// Labels applied to standby PVCs for identification and filtering.
 	labelManagedBy      = "dr-syncer.io/managed-by"
@@ -62,6 +65,18 @@ func NewStandbyPVCManager(
 		MappingName:   mappingName,
 		Log:           logrus.WithField("component", "standby-pvc-manager"),
 	}
+}
+
+// IsEnabled returns true if standby PVC management is enabled.
+// Defaults to true when StandbyConfig is nil or Enabled is nil.
+func (m *StandbyPVCManagerImpl) IsEnabled() bool {
+	if m.StandbyConfig == nil {
+		return true
+	}
+	if m.StandbyConfig.Enabled == nil {
+		return true
+	}
+	return *m.StandbyConfig.Enabled
 }
 
 // EnsureStandbyPVC creates or verifies a standby PVC on the DR cluster.
