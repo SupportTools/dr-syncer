@@ -149,6 +149,9 @@ func updateWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 
 	for i := range statefulsets.Items {
 		sts := &statefulsets.Items[i]
+		if hasVolumeClaimTemplates(sts) {
+			log.Warnf("StatefulSet %s uses volumeClaimTemplates which are immutable and cannot be rewritten during cutover; PVCs provisioned by volumeClaimTemplates require manual intervention", sts.Name)
+		}
 		if rewriteVolumes(&sts.Spec.Template.Spec, pvcMapping) {
 			if _, err := client.AppsV1().StatefulSets(namespace).Update(ctx, sts, metav1.UpdateOptions{}); err != nil {
 				log.Warnf("Failed to update statefulset %s: %v", sts.Name, err)
@@ -208,6 +211,9 @@ func revertWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 
 	for i := range statefulsets.Items {
 		sts := &statefulsets.Items[i]
+		if hasVolumeClaimTemplates(sts) {
+			log.Warnf("StatefulSet %s uses volumeClaimTemplates which are immutable and cannot be rewritten during failback; PVCs provisioned by volumeClaimTemplates require manual intervention", sts.Name)
+		}
 		if rewriteVolumes(&sts.Spec.Template.Spec, pvcMapping) {
 			if _, err := client.AppsV1().StatefulSets(namespace).Update(ctx, sts, metav1.UpdateOptions{}); err != nil {
 				log.Warnf("Failed to revert statefulset %s: %v", sts.Name, err)
@@ -219,6 +225,11 @@ func revertWorkloadPVCReferences(ctx context.Context, client kubernetes.Interfac
 	}
 
 	return updated, nil
+}
+
+// hasVolumeClaimTemplates checks if a StatefulSet defines volumeClaimTemplates.
+func hasVolumeClaimTemplates(sts *appsv1.StatefulSet) bool {
+	return len(sts.Spec.VolumeClaimTemplates) > 0
 }
 
 // rewriteVolumes rewrites PVC claim names in a pod spec according to the given mapping.

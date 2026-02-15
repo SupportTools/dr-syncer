@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
@@ -745,6 +746,161 @@ func TestRevertWorkloadPVCReferences_PartialMatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "data", got.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
 	assert.Equal(t, "other-pvc", got.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName)
+}
+
+// newStatefulSetWithVCT creates a statefulset that uses volumeClaimTemplates (no static PVC volumes).
+func newStatefulSetWithVCT(name, namespace string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: appsv1.StatefulSetSpec{
+			Selector:    &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			ServiceName: name,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+				},
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "data"},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("10Gi"),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newStatefulSetWithVCTAndPVC creates a statefulset that uses both volumeClaimTemplates AND static PVC volumes.
+func newStatefulSetWithVCTAndPVC(name, namespace, pvcName string) *appsv1.StatefulSet {
+	sts := newStatefulSetWithVCT(name, namespace)
+	sts.Spec.Template.Spec.Volumes = []corev1.Volume{
+		{
+			Name: "static-vol",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvcName,
+				},
+			},
+		},
+	}
+	return sts
+}
+
+func TestHasVolumeClaimTemplates_WithVCTs(t *testing.T) {
+	sts := newStatefulSetWithVCT("db", "test-ns")
+	assert.True(t, hasVolumeClaimTemplates(sts))
+}
+
+func TestHasVolumeClaimTemplates_WithoutVCTs(t *testing.T) {
+	sts := newStatefulSetWithPVC("db", "test-ns", "data")
+	assert.False(t, hasVolumeClaimTemplates(sts))
+}
+
+func TestHasVolumeClaimTemplates_EmptyVCTs(t *testing.T) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "test-ns"},
+		Spec: appsv1.StatefulSetSpec{
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{},
+		},
+	}
+	assert.False(t, hasVolumeClaimTemplates(sts))
+}
+
+func TestUpdateWorkloadPVCReferences_VCTOnlyStatefulSet(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStatefulSetWithVCT("db", ns),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	// VCT-only StatefulSet has no static PVC volumes to rewrite, so count should be 0.
+	// Warning is logged but does not cause an error.
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestUpdateWorkloadPVCReferences_MixedVCTAndStaticPVC(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStatefulSetWithVCTAndPVC("db", ns, "shared-data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "shared-data-standby", SourcePVCName: "shared-data"},
+	}
+
+	// The static PVC volume should be rewritten even though VCTs are present.
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// Verify the static volume was rewritten.
+	sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, "db", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "shared-data-standby", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+	// VCTs should remain unchanged (immutable).
+	assert.Len(t, sts.Spec.VolumeClaimTemplates, 1)
+	assert.Equal(t, "data", sts.Spec.VolumeClaimTemplates[0].Name)
+}
+
+func TestRevertWorkloadPVCReferences_VCTOnlyStatefulSet(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStatefulSetWithVCT("db", ns),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	// VCT-only StatefulSet has no static PVC volumes to revert.
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestRevertWorkloadPVCReferences_MixedVCTAndStaticPVC(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStatefulSetWithVCTAndPVC("db", ns, "shared-data-standby"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "shared-data-standby", SourcePVCName: "shared-data"},
+	}
+
+	// The static PVC volume pointing to standby should be reverted.
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// Verify the static volume was reverted.
+	sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, "db", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "shared-data", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+	// VCTs should remain unchanged.
+	assert.Len(t, sts.Spec.VolumeClaimTemplates, 1)
+	assert.Equal(t, "data", sts.Spec.VolumeClaimTemplates[0].Name)
 }
 
 func TestValidateStandbyPVCsForCutover_MixedReadiness(t *testing.T) {
