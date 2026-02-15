@@ -51,6 +51,11 @@ type VolumeBackupSyncer struct {
 	// Defaults to defaultPollInterval if zero.
 	PollInterval time.Duration
 
+	// StandbyPVCMgr manages standby PVC lifecycle on the DR cluster.
+	// When non-nil, restore operations target standby PVCs instead of
+	// direct destination PVCs. Constructed per-sync from BackupConfig.
+	StandbyPVCMgr StandbyPVCManager
+
 	Log *logrus.Entry
 }
 
@@ -103,6 +108,24 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 		log.WithError(err).Error("Repository not ready")
 		vbs.updateMappingAnnotations(ctx, mapping, "Failed", err)
 		return nil
+	}
+
+	// Construct StandbyPVCManager if standby PVCs are enabled.
+	// StandbyPVCConfig defaults to enabled when nil, matching StandbyPVCManagerImpl.IsEnabled().
+	standbyEnabled := backupConfig.StandbyPVCConfig == nil ||
+		backupConfig.StandbyPVCConfig.Enabled == nil ||
+		*backupConfig.StandbyPVCConfig.Enabled
+	if standbyEnabled {
+		vbs.StandbyPVCMgr = NewStandbyPVCManager(
+			vbs.DestinationClient,
+			backupConfig.StandbyPVCConfig,
+			mapping.Spec.PVCConfig,
+			mapping.Name,
+		)
+		log.Info("Standby PVC management enabled for backup sync")
+	} else {
+		vbs.StandbyPVCMgr = nil
+		log.Info("Standby PVC management disabled for backup sync")
 	}
 
 	log.Info("Starting backup-based PVC sync")
@@ -201,11 +224,31 @@ func (vbs *VolumeBackupSyncer) syncSinglePVC(
 
 	log.WithField("snapshot_id", snapshotID).Info("Backup operation completed")
 
-	// Step 3: Create restore operation on destination cluster.
+	// Step 3: Ensure standby PVC exists (if StandbyPVCManager is configured).
 	destPVCRef := &drv1alpha1.PVCReference{
 		Namespace: mapping.Spec.DestinationNamespace,
 		Name:      pvc.Name,
 	}
+	if vbs.StandbyPVCMgr != nil {
+		sourcePVCRef := drv1alpha1.PVCReference{
+			Namespace: pvc.Namespace,
+			Name:      pvc.Name,
+		}
+		standbyRef, created, err := vbs.StandbyPVCMgr.EnsureStandbyPVC(
+			ctx, sourcePVCRef, mapping.Spec.DestinationNamespace, &pvc.Spec,
+		)
+		if err != nil {
+			return PVCSyncResult{PVCName: pvc.Name, SnapshotID: snapshotID, Err: fmt.Errorf("ensure standby PVC: %w", err)}
+		}
+		destPVCRef = standbyRef
+		if created {
+			log.WithField("standby_pvc", standbyRef.Name).Info("Standby PVC created for restore target")
+		} else {
+			log.WithField("standby_pvc", standbyRef.Name).Info("Standby PVC already exists, using as restore target")
+		}
+	}
+
+	// Step 4: Create restore operation on destination cluster.
 	restoreOp := vbs.buildRestoreOperation(mapping, destPVCRef, repo, backupConfig, snapshotID)
 	log.Info("Creating restore operation on destination cluster")
 
@@ -213,13 +256,20 @@ func (vbs *VolumeBackupSyncer) syncSinglePVC(
 		return PVCSyncResult{PVCName: pvc.Name, SnapshotID: snapshotID, Err: fmt.Errorf("create restore operation: %w", err)}
 	}
 
-	// Step 4: Wait for restore to complete.
+	// Step 5: Wait for restore to complete.
 	_, err = vbs.waitForOperationPhase(
 		ctx, vbs.DestinationClient, restoreOp,
 		drv1alpha1.VolumeBackupPhaseRestoreComplete, timeout,
 	)
 	if err != nil {
 		return PVCSyncResult{PVCName: pvc.Name, SnapshotID: snapshotID, Err: fmt.Errorf("restore operation: %w", err)}
+	}
+
+	// Step 6: Update standby PVC status after successful restore.
+	if vbs.StandbyPVCMgr != nil {
+		if err := vbs.StandbyPVCMgr.UpdateStandbyPVCStatus(ctx, *destPVCRef, snapshotID); err != nil {
+			log.WithError(err).Warn("Failed to update standby PVC status; restore data is intact")
+		}
 	}
 
 	return PVCSyncResult{PVCName: pvc.Name, SnapshotID: snapshotID}
