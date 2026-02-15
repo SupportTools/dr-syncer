@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -246,4 +247,310 @@ func TestConfig_UseStandbyPVCs(t *testing.T) {
 
 	config2 := &Config{}
 	assert.False(t, config2.UseStandbyPVCs)
+}
+
+// --- Integration tests for Kubernetes API functions ---
+
+// newDeploymentWithPVC creates a deployment with a PVC volume for testing.
+func newDeploymentWithPVC(name, namespace, pvcName string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+					Volumes: []corev1.Volume{
+						{
+							Name: "data-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: pvcName,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newStatefulSetWithPVC creates a statefulset with a PVC volume for testing.
+func newStatefulSetWithPVC(name, namespace, pvcName string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: appsv1.StatefulSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+					Volumes: []corev1.Volume{
+						{
+							Name: "data-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: pvcName,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newStandbyPVC creates a standby PVC object with standard labels/annotations.
+func newStandbyPVC(name, namespace, sourceName string, phase corev1.PersistentVolumeClaimPhase, restored bool) *corev1.PersistentVolumeClaim {
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				labelStandby:   "true",
+				labelManagedBy: managedByValue,
+				labelSourcePVC: sourceName,
+			},
+		},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: phase},
+	}
+	if restored {
+		pvc.Annotations = map[string]string{
+			annoLastRestoreTime: time.Now().UTC().Format(time.RFC3339),
+			annoLastRestoreSnap: "snap-test-123",
+		}
+	}
+	return pvc
+}
+
+func TestUpdateWorkloadPVCReferences_DeploymentAndStatefulSet(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data"),
+		newStatefulSetWithPVC("db", ns, "dbdata"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+		{Name: "dbdata-standby", SourcePVCName: "dbdata"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// Verify deployment was updated.
+	dep, err := client.AppsV1().Deployments(ns).Get(ctx, "web", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "data-standby", dep.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+
+	// Verify statefulset was updated.
+	sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, "db", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "dbdata-standby", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+}
+
+func TestUpdateWorkloadPVCReferences_EmptyNamespace(t *testing.T) {
+	client := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, "empty-ns", standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestUpdateWorkloadPVCReferences_NoMatchingPVCs(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "other-pvc"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestUpdateWorkloadPVCReferences_EmptyMappings(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	// Standby PVCs with no source names produce empty mapping.
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: ""},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestRevertWorkloadPVCReferences_DeploymentAndStatefulSet(t *testing.T) {
+	ns := "dr-ns"
+	// Start with workloads already pointing to standby PVCs.
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data-standby"),
+		newStatefulSetWithPVC("db", ns, "dbdata-standby"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+		{Name: "dbdata-standby", SourcePVCName: "dbdata"},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// Verify deployment was reverted.
+	dep, err := client.AppsV1().Deployments(ns).Get(ctx, "web", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "data", dep.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+
+	// Verify statefulset was reverted.
+	sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, "db", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "dbdata", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+}
+
+func TestRevertWorkloadPVCReferences_EmptyNamespace(t *testing.T) {
+	client := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, "empty-ns", standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestRevertWorkloadPVCReferences_EmptyMappings(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data-standby"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: ""},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestValidateStandbyPVCsForCutover_AllReady(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStandbyPVC("data-standby", ns, "data", corev1.ClaimBound, true),
+		newStandbyPVC("logs-standby", ns, "logs", corev1.ClaimBound, true),
+	}
+	destClient := fakeclientset.NewSimpleClientset(objs...)
+	sourceClient := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	pvcs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, "src-ns", ns)
+	require.NoError(t, err)
+	assert.Len(t, pvcs, 2)
+}
+
+func TestValidateStandbyPVCsForCutover_UnboundPVC(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStandbyPVC("data-standby", ns, "data", corev1.ClaimPending, true),
+	}
+	destClient := fakeclientset.NewSimpleClientset(objs...)
+	sourceClient := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	// Should still return PVCs (warnings are logged, not errors).
+	pvcs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, "src-ns", ns)
+	require.NoError(t, err)
+	assert.Len(t, pvcs, 1)
+	assert.Equal(t, corev1.ClaimPending, pvcs[0].Phase)
+}
+
+func TestValidateStandbyPVCsForCutover_NeverRestored(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStandbyPVC("data-standby", ns, "data", corev1.ClaimBound, false),
+	}
+	destClient := fakeclientset.NewSimpleClientset(objs...)
+	sourceClient := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	// Should still return PVCs (warnings are logged, not errors).
+	pvcs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, "src-ns", ns)
+	require.NoError(t, err)
+	assert.Len(t, pvcs, 1)
+	assert.Nil(t, pvcs[0].LastRestoreTime)
+}
+
+func TestValidateStandbyPVCsForCutover_NoStandbyPVCs(t *testing.T) {
+	destClient := fakeclientset.NewSimpleClientset()
+	sourceClient := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	pvcs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, "src-ns", "dr-ns")
+	assert.Error(t, err)
+	assert.Nil(t, pvcs)
+	assert.Contains(t, err.Error(), "no standby PVCs found")
+}
+
+func TestUpdateAndRevertRoundTrip(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newDeploymentWithPVC("web", ns, "data"),
+		newStatefulSetWithPVC("db", ns, "dbdata"),
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+		{Name: "dbdata-standby", SourcePVCName: "dbdata"},
+	}
+
+	// Update to standby.
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// Revert back to original.
+	count, err = revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// Verify originals restored.
+	dep, err := client.AppsV1().Deployments(ns).Get(ctx, "web", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "data", dep.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+
+	sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, "db", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "dbdata", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
 }
