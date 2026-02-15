@@ -1,0 +1,50 @@
+---
+# S3 credentials for the backup repository
+# In the test environment, this points to MinIO running in the controller cluster
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-s3-credentials
+  namespace: dr-syncer
+type: Opaque
+stringData:
+  accessKeyID: "minioadmin"
+  secretAccessKey: "minioadmin"
+---
+# Kopia encryption password for the backup repository
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-kopia-password
+  namespace: dr-syncer
+type: Opaque
+stringData:
+  password: "e2e-test-kopia-password-2026"
+---
+# BackupRepository CR pointing to the test MinIO instance
+apiVersion: dr-syncer.io/v1alpha1
+kind: BackupRepository
+metadata:
+  name: e2e-backup-repo
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "25"
+    dr-syncer.io/test-name: "backup-based-pvc-sync"
+    dr-syncer.io/test: "true"
+spec:
+  s3Config:
+    endpoint: "minio.minio-system.svc.cluster.local:9000"
+    bucket: "dr-syncer-e2e-test"
+    region: "us-east-1"
+    pathPrefix: "case25/"
+    credentialsSecretRef:
+      name: e2e-s3-credentials
+      namespace: dr-syncer
+  kopiaConfig:
+    encryptionSecretRef:
+      name: e2e-kopia-password
+      namespace: dr-syncer
+    compressionAlgorithm: "zstd"
+  maintenanceSchedule: "0 2 * * *"
+  retentionPolicy:
+    keepLatest: 5

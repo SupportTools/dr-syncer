@@ -1,0 +1,110 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-sync-test-case25
+  labels:
+    dr-syncer.io/test-case: "25"
+    dr-syncer.io/test-name: "backup-based-pvc-sync"
+    dr-syncer.io/test: "true"
+---
+# Test PVC with data to be backed up
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-pvc-backup
+  namespace: dr-sync-test-case25
+  labels:
+    app: backup-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: local-path
+---
+# Pod that writes test data to the PVC
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data-writer
+  namespace: dr-sync-test-case25
+  labels:
+    app: backup-test
+    role: data-writer
+spec:
+  containers:
+  - name: writer
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        echo "Backup E2E test data created at $(date -Iseconds)" > /data/test-file.txt
+        echo "Kopia backup sync verification" > /data/backup-verify.txt
+        mkdir -p /data/subdir
+        echo "Nested directory data" > /data/subdir/nested.txt
+        for i in $(seq 1 10); do
+          echo "Line $i: test-data-$(date +%s%N)" >> /data/bulk-data.txt
+        done
+        echo "Data write complete"
+        sleep 3600
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-pvc-backup
+---
+# Deployment that references the PVC (will be synced and scaled to zero)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-test-app
+  namespace: dr-sync-test-case25
+  labels:
+    app: backup-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-test
+      role: app
+  template:
+    metadata:
+      labels:
+        app: backup-test
+        role: app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/nginx/html/data
+          readOnly: true
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: test-pvc-backup
+---
+# ConfigMap for testing that non-PVC resources also sync
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-test-config
+  namespace: dr-sync-test-case25
+  labels:
+    app: backup-test
+data:
+  setting: "backup-enabled"
+  test-case: "25"

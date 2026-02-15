@@ -1,0 +1,44 @@
+apiVersion: dr-syncer.io/v1alpha1
+kind: NamespaceMapping
+metadata:
+  name: test25-backup-pvc-sync
+  namespace: dr-syncer
+  labels:
+    dr-syncer.io/test-case: "25"
+    dr-syncer.io/test-name: "backup-based-pvc-sync"
+    dr-syncer.io/test: "true"
+spec:
+  replicationMode: Scheduled
+  schedule: "*/5 * * * *"
+  clusterMappingRef:
+    name: prod-to-dr
+    namespace: dr-syncer
+  sourceNamespace: dr-sync-test-case25
+  destinationNamespace: dr-sync-test-case25
+  resourceTypes:
+    - "*"
+  scaleToZero: true
+  immutableResourceConfig:
+    defaultHandling: Recreate
+    drainTimeout: 5m
+    forceDeleteTimeout: 2m
+  pvcConfig:
+    syncPersistentVolumes: false
+    preserveVolumeAttributes: true
+    syncData: true
+    storageClassMappings:
+      - from: local-path
+        to: local-path
+    dataSyncConfig:
+      concurrentSyncs: 2
+      timeout: "30m"
+      backupConfig:
+        enabled: true
+        backupRepositoryRef:
+          name: e2e-backup-repo
+          namespace: dr-syncer
+        dataAccessStrategy: Live
+        parallelism: 4
+        compressionAlgorithm: zstd
+        standbyPVCConfig:
+          enabled: true
