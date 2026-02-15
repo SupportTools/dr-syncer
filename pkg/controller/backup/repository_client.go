@@ -134,6 +134,13 @@ func (k *KopiaRepositoryClient) CheckHealth(ctx context.Context, s3Config drv1al
 		}
 	}
 
+	// Record repository metrics (same package, no import cycle)
+	repoName := s3Config.Bucket
+	if s3Config.PathPrefix != "" {
+		repoName = s3Config.Bucket + "/" + s3Config.PathPrefix
+	}
+	RecordRepositoryStats(repoName, stats.RepositorySize, stats.SnapshotCount)
+
 	return stats, nil
 }
 
