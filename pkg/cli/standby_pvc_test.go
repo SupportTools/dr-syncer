@@ -554,3 +554,226 @@ func TestUpdateAndRevertRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "dbdata", sts.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
 }
+
+// --- getWorkloadsUsingPVCs tests ---
+
+func TestGetWorkloadsUsingPVCs_FiltersCorrectly(t *testing.T) {
+	ns := "test-ns"
+	objs := []runtime.Object{
+		// Deployment with a PVC volume — should be returned.
+		newDeploymentWithPVC("web", ns, "data"),
+		// Deployment without PVC — should NOT be returned.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: ns},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "worker"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "worker"}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+						Volumes: []corev1.Volume{
+							{
+								Name: "config",
+								VolumeSource: corev1.VolumeSource{
+									ConfigMap: &corev1.ConfigMapVolumeSource{
+										LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		// StatefulSet with a PVC volume — should be returned.
+		newStatefulSetWithPVC("db", ns, "dbdata"),
+		// StatefulSet without PVC — should NOT be returned.
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: ns},
+			Spec: appsv1.StatefulSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "cache"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "cache"}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "app", Image: "redis"}},
+					},
+				},
+			},
+		},
+	}
+	client := fakeclientset.NewSimpleClientset(objs...)
+	ctx := context.Background()
+
+	deps, stsList, err := getWorkloadsUsingPVCs(ctx, client, ns)
+	require.NoError(t, err)
+	assert.Len(t, deps, 1)
+	assert.Equal(t, "web", deps[0].Name)
+	assert.Len(t, stsList, 1)
+	assert.Equal(t, "db", stsList[0].Name)
+}
+
+func TestGetWorkloadsUsingPVCs_EmptyNamespace(t *testing.T) {
+	client := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	deps, stsList, err := getWorkloadsUsingPVCs(ctx, client, "empty-ns")
+	require.NoError(t, err)
+	assert.Empty(t, deps)
+	assert.Empty(t, stsList)
+}
+
+// --- Multi-volume workload tests ---
+
+func TestUpdateWorkloadPVCReferences_MultipleVolumes(t *testing.T) {
+	ns := "dr-ns"
+	// Deployment with multiple PVC volumes — only matching ones should be rewritten.
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "multi", Namespace: ns},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "multi"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "multi"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+					Volumes: []corev1.Volume{
+						{
+							Name: "data-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "data",
+								},
+							},
+						},
+						{
+							Name: "config-vol",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"},
+								},
+							},
+						},
+						{
+							Name: "logs-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "logs",
+								},
+							},
+						},
+						{
+							Name: "unmatched-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "unrelated-pvc",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fakeclientset.NewSimpleClientset(dep)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+		{Name: "logs-standby", SourcePVCName: "logs"},
+	}
+
+	count, err := updateWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count) // One deployment updated.
+
+	got, err := client.AppsV1().Deployments(ns).Get(ctx, "multi", metav1.GetOptions{})
+	require.NoError(t, err)
+
+	volumes := got.Spec.Template.Spec.Volumes
+	assert.Equal(t, "data-standby", volumes[0].PersistentVolumeClaim.ClaimName)
+	assert.Nil(t, volumes[1].PersistentVolumeClaim) // ConfigMap volume unchanged.
+	assert.Equal(t, "logs-standby", volumes[2].PersistentVolumeClaim.ClaimName)
+	assert.Equal(t, "unrelated-pvc", volumes[3].PersistentVolumeClaim.ClaimName) // Unmatched stays.
+}
+
+func TestRevertWorkloadPVCReferences_PartialMatch(t *testing.T) {
+	ns := "dr-ns"
+	// Deployment with a mix of standby and non-standby PVC volumes.
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: ns},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "partial"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "partial"}},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "app", Image: "busybox"}},
+					Volumes: []corev1.Volume{
+						{
+							Name: "data-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "data-standby",
+								},
+							},
+						},
+						{
+							Name: "other-vol",
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: "other-pvc",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fakeclientset.NewSimpleClientset(dep)
+	ctx := context.Background()
+
+	standbyPVCs := []StandbyPVCInfo{
+		{Name: "data-standby", SourcePVCName: "data"},
+	}
+
+	count, err := revertWorkloadPVCReferences(ctx, client, ns, standbyPVCs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	got, err := client.AppsV1().Deployments(ns).Get(ctx, "partial", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "data", got.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName)
+	assert.Equal(t, "other-pvc", got.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName)
+}
+
+func TestValidateStandbyPVCsForCutover_MixedReadiness(t *testing.T) {
+	ns := "dr-ns"
+	objs := []runtime.Object{
+		newStandbyPVC("data-standby", ns, "data", corev1.ClaimBound, true),
+		newStandbyPVC("logs-standby", ns, "logs", corev1.ClaimPending, false),
+		newStandbyPVC("cache-standby", ns, "cache", corev1.ClaimBound, false),
+	}
+	destClient := fakeclientset.NewSimpleClientset(objs...)
+	sourceClient := fakeclientset.NewSimpleClientset()
+	ctx := context.Background()
+
+	pvcs, err := validateStandbyPVCsForCutover(ctx, sourceClient, destClient, "src-ns", ns)
+	require.NoError(t, err)
+	assert.Len(t, pvcs, 3)
+
+	// Verify the mixed states are preserved.
+	pvcMap := make(map[string]StandbyPVCInfo)
+	for _, p := range pvcs {
+		pvcMap[p.Name] = p
+	}
+
+	assert.Equal(t, corev1.ClaimBound, pvcMap["data-standby"].Phase)
+	assert.NotNil(t, pvcMap["data-standby"].LastRestoreTime)
+
+	assert.Equal(t, corev1.ClaimPending, pvcMap["logs-standby"].Phase)
+	assert.Nil(t, pvcMap["logs-standby"].LastRestoreTime)
+
+	assert.Equal(t, corev1.ClaimBound, pvcMap["cache-standby"].Phase)
+	assert.Nil(t, pvcMap["cache-standby"].LastRestoreTime)
+}
