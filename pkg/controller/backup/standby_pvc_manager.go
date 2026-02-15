@@ -147,6 +147,7 @@ func (m *StandbyPVCManagerImpl) EnsureStandbyPVC(
 		return nil, false, fmt.Errorf("create standby PVC %s/%s: %w", destNamespace, standbyName, err)
 	}
 
+	RecordStandbyPVCCreated(destNamespace)
 	log.Info("Standby PVC created")
 	return &drv1alpha1.PVCReference{
 		Namespace: destNamespace,
@@ -217,6 +218,7 @@ func (m *StandbyPVCManagerImpl) CleanupStandbyPVCs(ctx context.Context, destName
 			deleteErrors = append(deleteErrors, fmt.Errorf("delete standby PVC %s: %w", pvc.Name, err))
 			continue
 		}
+		RecordStandbyPVCDeleted(destNamespace)
 		log.WithField("pvc", pvc.Name).Info("Standby PVC deleted")
 	}
 

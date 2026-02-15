@@ -58,6 +58,11 @@ func (bw *BackupWorkflow) Execute(ctx context.Context, operation *drv1alpha1.Vol
 		"type":      operation.Spec.OperationType,
 	})
 
+	opType := string(operation.Spec.OperationType)
+	dataAccess := string(operation.Spec.DataAccessStrategy)
+	startTime := time.Now()
+	RecordBackupStart(opType)
+
 	// Mark operation as started.
 	now := metav1.Now()
 	if err := bw.updateStatus(ctx, operation, func(status *drv1alpha1.VolumeBackupOperationStatus) {
@@ -65,19 +70,30 @@ func (bw *BackupWorkflow) Execute(ctx context.Context, operation *drv1alpha1.Vol
 		status.StartTime = &now
 		status.Message = "Operation starting"
 	}); err != nil {
+		RecordBackupFailure(opType, dataAccess, time.Since(startTime).Seconds())
 		return bw.failOperation(ctx, operation, fmt.Errorf("update start status: %w", err))
 	}
 
+	var execErr error
 	switch operation.Spec.OperationType {
 	case drv1alpha1.OperationTypeBackup:
 		log.Info("Starting backup workflow")
-		return bw.executeBackup(ctx, operation, repo, podConfig)
+		execErr = bw.executeBackup(ctx, operation, repo, podConfig)
 	case drv1alpha1.OperationTypeRestore:
 		log.Info("Starting restore workflow")
-		return bw.executeRestore(ctx, operation, repo, podConfig)
+		execErr = bw.executeRestore(ctx, operation, repo, podConfig)
 	default:
+		RecordBackupFailure(opType, dataAccess, time.Since(startTime).Seconds())
 		return bw.failOperation(ctx, operation, fmt.Errorf("unknown operation type: %s", operation.Spec.OperationType))
 	}
+
+	duration := time.Since(startTime).Seconds()
+	if execErr != nil {
+		RecordBackupFailure(opType, dataAccess, duration)
+	} else {
+		RecordBackupComplete(opType, dataAccess, duration, 0)
+	}
+	return execErr
 }
 
 // executeBackup runs the backup workflow, selecting between snapshot and live paths

@@ -124,6 +124,7 @@ func (vbs *VolumeBackupSyncer) SyncPVCsWithBackup(
 			}).Error("PVC backup sync failed")
 		} else {
 			successCount++
+			RecordLastSuccessfulBackup(pvc.Namespace, pvc.Name)
 			log.WithFields(logrus.Fields{
 				"pvc":         pvc.Name,
 				"snapshot_id": result.SnapshotID,
