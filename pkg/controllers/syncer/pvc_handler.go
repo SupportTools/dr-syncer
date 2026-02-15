@@ -223,7 +223,6 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 
 			// Find nodes where PVCs are mounted - this will now succeed because we've mounted them
 			log.Info(fmt.Sprintf("Finding node for source PVC %s/%s", srcNamespace, sourcePVC.Name))
-			fmt.Println("## FindPVCNode - Source PVC")
 
 			// Create a modified context with the correct configuration for source cluster
 			srcCtx := context.WithValue(ctx, pvcClusterKey, "source")
@@ -234,7 +233,6 @@ func syncPersistentVolumeClaimsWithMounting(ctx context.Context, syncer *Resourc
 			}
 
 			log.Info(fmt.Sprintf("Finding node for destination PVC %s/%s", dstNamespace, destPVC.Name))
-			fmt.Println("## FindPVCNode - Destination PVC")
 
 			// Create a modified context with the correct configuration for destination cluster
 			destCtx := context.WithValue(ctx, pvcClusterKey, "destination")
