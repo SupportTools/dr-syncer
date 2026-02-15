@@ -289,14 +289,7 @@ func syncPersistentVolumeClaims(ctx context.Context, syncer *ResourceSyncer, sou
 		log.Info("PVC config is nil")
 	}
 
-	// Sync PVC data if enabled - ensure SyncData is properly read
-	if pvcConfig != nil && len(syncedPVCs) > 0 {
-		// Force SyncData to true for testing
-		pvcConfig.SyncData = true
-		log.Info(fmt.Sprintf("Forcing PVC data sync to enabled (SyncData=true) for testing"))
-	}
-
-	// Check again with updated config
+	// Sync PVC data if enabled
 	if pvcConfig != nil && pvcConfig.SyncData && len(syncedPVCs) > 0 {
 		log.Info(fmt.Sprintf("PVC data sync is enabled, syncing data for %d PVCs", len(syncedPVCs)))
 
