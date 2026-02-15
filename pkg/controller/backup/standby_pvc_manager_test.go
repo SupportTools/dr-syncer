@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -895,6 +896,10 @@ func TestEnsureStandbyPVC_ExistingSameSize(t *testing.T) {
 
 	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
 
+	// Snapshot metric counters before operation.
+	successBefore := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "success"))
+	failureBefore := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "failure"))
+
 	ctx := context.Background()
 	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
 	spec := sourcePVCSpec("fast", corev1.ReadWriteOnce) // 10Gi — same as existing
@@ -911,6 +916,16 @@ func TestEnsureStandbyPVC_ExistingSameSize(t *testing.T) {
 	}
 	if patchCalled {
 		t.Error("expected no patch when sizes match")
+	}
+
+	// Verify neither resize counter was touched.
+	successAfter := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "success"))
+	failureAfter := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "failure"))
+	if successAfter != successBefore {
+		t.Errorf("expected success counter unchanged, got delta %v", successAfter-successBefore)
+	}
+	if failureAfter != failureBefore {
+		t.Errorf("expected failure counter unchanged, got delta %v", failureAfter-failureBefore)
 	}
 }
 
@@ -937,6 +952,9 @@ func TestEnsureStandbyPVC_ExistingSmallerExpands(t *testing.T) {
 	destClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingPVC).Build()
 
 	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
+
+	// Snapshot success counter before expansion.
+	successBefore := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "success"))
 
 	ctx := context.Background()
 	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
@@ -970,6 +988,12 @@ func TestEnsureStandbyPVC_ExistingSmallerExpands(t *testing.T) {
 	if storageReq.Cmp(resource.MustParse("20Gi")) != 0 {
 		t.Errorf("expected storage request 20Gi after expansion, got %s", storageReq.String())
 	}
+
+	// Verify success counter incremented by 1.
+	successAfter := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "success"))
+	if delta := successAfter - successBefore; delta != 1 {
+		t.Errorf("expected success counter to increment by 1, got delta %v", delta)
+	}
 }
 
 func TestEnsureStandbyPVC_ExpansionErrorReturnsExisting(t *testing.T) {
@@ -1002,6 +1026,9 @@ func TestEnsureStandbyPVC_ExpansionErrorReturnsExisting(t *testing.T) {
 
 	mgr := NewStandbyPVCManager(destClient, nil, nil, "test-mapping")
 
+	// Snapshot failure counter before expansion attempt.
+	failureBefore := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "failure"))
+
 	ctx := context.Background()
 	sourcePVC := drv1alpha1.PVCReference{Namespace: "source-ns", Name: "data-pvc"}
 	spec := sourcePVCSpec("fast", corev1.ReadWriteOnce) // 10Gi > 5Gi existing
@@ -1016,6 +1043,12 @@ func TestEnsureStandbyPVC_ExpansionErrorReturnsExisting(t *testing.T) {
 	}
 	if ref.Name != "data-pvc-standby" {
 		t.Fatalf("expected name 'data-pvc-standby', got %q", ref.Name)
+	}
+
+	// Verify failure counter incremented by 1.
+	failureAfter := testutil.ToFloat64(BackupStandbyPVCResizeTotal.WithLabelValues("dr-ns", "failure"))
+	if delta := failureAfter - failureBefore; delta != 1 {
+		t.Errorf("expected failure counter to increment by 1, got delta %v", delta)
 	}
 }
 
