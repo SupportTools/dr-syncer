@@ -12,8 +12,31 @@ on:
       - main
 
 jobs:
+  # ── SECURITY: this job MUST stay on a GitHub-hosted runner. ──────────────────────────────
+  # This is a PUBLIC repository and this job is reachable by `pull_request` from ANY fork
+  # (see the trigger above). It was previously `runs-on: self-hosted-linux` with no job-level
+  # guard, which meant `make test` -> `go test ./...` executed attacker-authored test code on
+  # our self-hosted ARC runner — a runner with privileged dind, `sudo`, a shared /cache
+  # hostPath holding GOCACHE/GOMODCACHE (so poisoning it runs attacker code in later,
+  # unrelated builds across two GitHub orgs), node-level Harbor pull credentials, and network
+  # reach to Vault, Harbor, Athens and the Kubernetes API.
+  #
+  # Moving to a hosted runner rather than adding the sibling jobs'
+  # `if: github.event_name != 'pull_request'` guard is DELIBERATE: that guard would close the
+  # hole by disabling PR testing entirely, which is a real loss for a public repo that accepts
+  # outside contributions. Hosted keeps full PR coverage AND costs nothing — GitHub-hosted
+  # standard runners have unlimited free minutes on public repositories.
+  #
+  # Safe to run hosted: verified 2026-08-14 that go.mod has ZERO private-org requires and ZERO
+  # replace directives, so `go mod download` resolves entirely from proxy.golang.org and needs
+  # no Athens/LAN access. `setup-kubectl` only installs the binary; nothing here talks to a
+  # cluster. If a private dependency is ever added, do NOT move this back to self-hosted —
+  # split the private part into a separate, fork-guarded job instead.
+  #
+  # Build / Publish / Release below stay on self-hosted: they are guarded to non-PR events and
+  # genuinely need Harbor. Refs: cluster-services-517.
   Test:
-    runs-on: self-hosted-linux
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
