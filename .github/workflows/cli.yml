@@ -24,7 +24,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.24'
-          cache: true
+          # The on-prem runner's GOCACHE/GOMODCACHE are a shared warm hostPath; setup-go's
+          # own cache just tars it in a 6+ min post-step. The hostPath IS the cache.
+          cache: false
 
       - name: Run Go fmt and vet
         run: |
@@ -72,7 +74,9 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.24'
-          cache: true
+          # The on-prem runner's GOCACHE/GOMODCACHE are a shared warm hostPath; setup-go's
+          # own cache just tars it in a 6+ min post-step. The hostPath IS the cache.
+          cache: false
 
       - name: Set VERSION env
         run: echo "VERSION=$(git describe --tags --always --dirty)" >> $GITHUB_ENV
@@ -96,6 +100,8 @@ jobs:
       - name: Compress binary
         run: |
           if [ "${{ matrix.goos }}" = "windows" ]; then
+            # zip is not baked into the on-prem runner image (GitHub-hosted preinstalls it).
+            command -v zip >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq zip; }
             cd dist && zip dr-syncer-cli-${{ matrix.goos }}-${{ matrix.goarch }}.zip dr-syncer-cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
           else
             cd dist && tar -czvf dr-syncer-cli-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz dr-syncer-cli-${{ matrix.goos }}-${{ matrix.goarch }}
