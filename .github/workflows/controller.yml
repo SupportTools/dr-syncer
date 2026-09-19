@@ -29,6 +29,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          # GOCACHE/GOMODCACHE already live on the runner's persistent shared /cache; setup-go's cache step only re-archives it
+          cache: false
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -140,6 +142,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          # GOCACHE/GOMODCACHE already live on the runner's persistent shared /cache; setup-go's cache step only re-archives it
+          cache: false
 
       - name: Install dependencies
         run: |

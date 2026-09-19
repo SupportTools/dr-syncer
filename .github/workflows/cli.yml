@@ -24,8 +24,7 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.24'
-          # The on-prem runner's GOCACHE/GOMODCACHE are a shared warm hostPath; setup-go's
-          # own cache just tars it in a 6+ min post-step. The hostPath IS the cache.
+          # GOCACHE/GOMODCACHE already live on the runner's persistent shared /cache; setup-go's cache step only re-archives it
           cache: false
 
       - name: Run Go fmt and vet
@@ -74,8 +73,7 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.24'
-          # The on-prem runner's GOCACHE/GOMODCACHE are a shared warm hostPath; setup-go's
-          # own cache just tars it in a 6+ min post-step. The hostPath IS the cache.
+          # GOCACHE/GOMODCACHE already live on the runner's persistent shared /cache; setup-go's cache step only re-archives it
           cache: false
 
       - name: Set VERSION env
