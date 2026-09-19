@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-linux
     timeout-minutes: 60
 
     steps:
