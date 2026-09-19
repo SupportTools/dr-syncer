@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-linux
     timeout-minutes: 60
 
     steps:
@@ -57,7 +57,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-          cache: true
+          # GOCACHE/GOMODCACHE already live on the runner's persistent shared /cache; setup-go's cache step only re-archives it
+          cache: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
