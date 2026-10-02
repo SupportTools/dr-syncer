@@ -250,12 +250,21 @@ jobs:
           helm lint charts/dr-syncer/
           helm package charts/dr-syncer --destination helm/repo
 
+      - name: Mint helm-chart repo token (GitHub App supporttools-chart-publisher)
+        id: chart-app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.CHART_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CHART_APP_PRIVATE_KEY }}
+          owner: SupportTools
+          repositories: helm-chart,helm-chart-private
+
       - name: Checkout appropriate helm-chart repository
         uses: actions/checkout@v4
         with:
           repository: ${{ env.HELM_REPO }}
           path: helm-chart
-          token: ${{ secrets.BOT_TOKEN }}
+          token: ${{ steps.chart-app-token.outputs.token }}
 
       - name: Configure Git
         run: |
