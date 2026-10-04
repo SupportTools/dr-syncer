@@ -63,16 +63,34 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install k3d
+      # k3d is not baked into the runner image, so it is fetched here as a pinned
+      # release binary verified against the release's published sha256. Never
+      # pipe k3d's install.sh from the main branch (taskforge-2676).
+      # kubectl and helm are baked into the runner image; no installer actions.
+      - name: Install k3d (pinned, checksum-verified)
+        env:
+          K3D_VERSION: v5.9.0
+          K3D_SHA256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
         run: |
-          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-          k3d version
+          set -euo pipefail
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "::error::k3d pin is linux-amd64 only; runner is $(uname -m)"
+            exit 1
+          fi
+          bin_dir="${RUNNER_TEMP}/k3d-bin"
+          mkdir -p "$bin_dir"
+          # jobtime-download-ok: k3d is not in the runner image; pinned release + sha256 verified
+          curl -fsSL --retry 3 -o "$bin_dir/k3d" \
+            "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          echo "${K3D_SHA256}  $bin_dir/k3d" | sha256sum -c -
+          chmod +x "$bin_dir/k3d"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+          "$bin_dir/k3d" version
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4.2.0
+      - name: Verify baked kubectl and helm
+        run: |
+          kubectl version --client
+          helm version
 
       - name: Make scripts executable
         run: |
