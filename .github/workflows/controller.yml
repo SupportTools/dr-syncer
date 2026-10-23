@@ -231,6 +231,8 @@ jobs:
           fi
           echo "CHART_VERSION=${CHART_VERSION}" >> $GITHUB_ENV
           echo "HELM_REPO=${HELM_REPO}" >> $GITHUB_ENV
+          # Bare repo name for the App token's `repositories:` scope (it takes names, not owner/name).
+          echo "HELM_REPO_NAME=${HELM_REPO#*/}" >> $GITHUB_ENV
           echo "HELM_URL=${HELM_URL}" >> $GITHUB_ENV
 
       - name: Package Helm chart
@@ -258,7 +260,10 @@ jobs:
           client-id: ${{ vars.CHART_APP_CLIENT_ID }}
           private-key: ${{ secrets.CHART_APP_PRIVATE_KEY }}
           owner: SupportTools
-          repositories: helm-chart,helm-chart-private
+          # Scope the token to the repo this run actually pushes to: helm-chart for tags,
+          # helm-chart-dev for main. A fixed helm-chart,helm-chart-private list let checkout of the
+          # public helm-chart-dev succeed (public read) and then 403'd the push.
+          repositories: ${{ env.HELM_REPO_NAME }}
 
       - name: Checkout appropriate helm-chart repository
         uses: actions/checkout@v4
