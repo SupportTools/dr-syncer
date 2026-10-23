@@ -652,7 +652,7 @@ During failback, the process reverses: workload volumes are rewritten back to or
 | S3 cost | Yes | None |
 | Operational complexity | Higher | Lower |
 
-For detailed architecture documentation, see [docs/DESIGN.md](../DESIGN.md).
+For detailed architecture documentation, see [docs/DESIGN.md](https://github.com/SupportTools/dr-syncer/blob/main/docs/DESIGN.md).
 
 ## CSI Snapshot Integration
 
