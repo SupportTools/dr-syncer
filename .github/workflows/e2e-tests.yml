@@ -62,6 +62,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # BuildKit from the Harbor Docker Hub proxy, pinned by index digest (cluster-services-1487)
+          driver-opts: image=harbor.support.tools/dockerhub/moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
 
       # k3d is not baked into the runner image, so it is fetched here as a pinned
       # release binary verified against the release's published sha256. Never
